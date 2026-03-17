@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
                         {"cid", cid},
                         {"origin", "synaptic_controller"},
                         {"intent", "inference_result"},
+                        {"adapter", adapter},
                         {"text", response}
                     };
                     

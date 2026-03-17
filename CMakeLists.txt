@@ -57,6 +57,9 @@ target_link_libraries(critic_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(visual_lobe src/lobes/VisualLobe/VisualLobe.cpp)
 target_link_libraries(visual_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 
+add_executable(auditory_lobe src/lobes/AuditoryLobe/AuditoryLobe.cpp)
+target_link_libraries(auditory_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(visualizer src/lobes/Visualizer/VisualizerLobe.cpp)
 target_link_libraries(visualizer PRIVATE zmq nlohmann_json::nlohmann_json pthread)
 
@@ -75,3 +78,18 @@ target_link_libraries(diagnostic_tool PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(monologue_test tests/monologue_test.cpp)
 target_link_libraries(monologue_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(dream_sandbox_test tests/dream_sandbox_test.cpp)
+target_link_libraries(dream_sandbox_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(full_cognitive_test tests/full_cognitive_test.cpp)
+target_link_libraries(full_cognitive_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(curiosity_test tests/curiosity_test.cpp)
+target_link_libraries(curiosity_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(neuro_surgery_test tests/neuro_surgery_test.cpp)
+target_link_libraries(neuro_surgery_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(sensory_test tests/sensory_test.cpp)
+target_link_libraries(sensory_test PRIVATE zmq nlohmann_json::nlohmann_json)

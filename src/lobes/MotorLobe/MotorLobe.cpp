@@ -43,6 +43,13 @@ public:
                             std::filesystem::create_directories(dream_path);
                             out = execute("cd " + dream_path + " && " + cmd, exit_code);
                             std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << std::endl;
+                        } else if (mode == "neuro_surgery") {
+                            std::cout << "[MOTOR] WARNING: NEURO-SURGERY INITIATED. MODIFYING OWN SOURCE CODE." << std::endl;
+                            // Neuro-surgery command expects 'cmd' to be a valid bash sequence that writes to src/lobes and compiles.
+                            out = execute(cmd + " && cd build && cmake .. && make -j$(nproc) 2>&1", exit_code);
+                            if (exit_code == 0) {
+                                out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
+                            }
                         } else {
                             out = execute(cmd, exit_code);
                         }

@@ -1,17 +1,9 @@
-#include <thread>
-/**
- * @file AuditoryLobe.cpp
- * @brief Afferent Acoustic Sensory Engine for NeuroSwarm.
- * 
- * Transcribes real-time audio into semantic text using whisper.cpp integration.
- * Engineered for low CPU overhead and high transcription fidelity.
- */
-
 #include <zmq.hpp>
-#include <string>
-#include <iostream>
-#include <vector>
 #include <nlohmann/json.hpp>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <chrono>
 
 using json = nlohmann::json;
 
@@ -19,62 +11,70 @@ namespace neuroswarm {
 
 class AuditoryLobe {
 public:
-    AuditoryLobe(const std::string& bus_addr = "tcp://localhost:5555") 
-        : ctx(1), bus(ctx, zmq::socket_type::dealer) {
+    AuditoryLobe(const std::string& thalamus_ip = "localhost") 
+        : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
         
-        bus.set(zmq::sockopt::routing_id, "auditory_lobe");
-        bus.connect(bus_addr);
-        std::cout << "[AUDITORY LOBE] Acoustic Sensory online. Connected to Nervous Bus." << std::endl;
+        pub.connect("tcp://" + thalamus_ip + ":5555");
+        sub.connect("tcp://" + thalamus_ip + ":5556");
+        sub.set(zmq::sockopt::subscribe, ""); 
+
+        std::cout << "[AUDITORY] Cochlear processor online. Awaiting soundwaves." << std::endl;
     }
 
-    /**
-     * @brief Continuous listening loop (The Cochlea).
-     */
-    void start_listening() {
-        std::cout << "[AUDITORY LOBE] Listening for vocal stimuli..." << std::endl;
-        
+    void start() {
         while (true) {
-            // Logic Flow:
-            // 1. Capture 16kHz Mono audio stream
-            // 2. Perform Voice Activity Detection (VAD)
-            // 3. Transcribe via whisper.cpp
-            
-            // Mocking a successful transcription event:
-            std::string transcription = "Fix the build error in main.cpp.";
-            
-            if (!transcription.empty()) {
-                json engram = {
-                    {"cid", "acoustic_" + std::to_string(std::time(nullptr))},
-                    {"origin", "auditory_cortex"},
-                    {"intent", "raw_linguistic_input"},
-                    {"text", transcription},
-                    {"confidence", 0.98}
-                };
-                
-                broadcast(engram);
-                
-                // Sleep to simulate processing time/silence
-                std::this_thread::sleep_for(std::chrono::seconds(10));
+            zmq::message_t msg;
+            if (sub.recv(msg, zmq::recv_flags::none)) {
+                std::string raw(static_cast<char*>(msg.data()), msg.size());
+                try {
+                    if (raw.empty() || raw[0] != '{') continue;
+                    auto j = json::parse(raw);
+                    
+                    if (j.value("intent", "") == "sensory_audio_input") {
+                        std::string audio_path = j.value("audio_path", "");
+                        std::string cid = j.value("cid", "audio_" + std::to_string(std::time(nullptr)));
+                        
+                        std::cout << "[AUDITORY] Processing soundwave from: " << audio_path << std::endl;
+                        
+                        // Here, the system would interface with Whisper.cpp
+                        // For architectural completeness, we simulate the transcription result.
+                        // In a real scenario, this blocks while whisper decodes.
+                        
+                        std::string transcription = "Simulated transcription: User is asking to check system status.";
+
+                        json req = {
+                            {"cid", cid},
+                            {"origin", "auditory_lobe"},
+                            {"intent", "user_input"},
+                            {"text", transcription}
+                        };
+                        dispatch(req);
+                    }
+                } catch (...) {}
             }
         }
     }
 
 private:
     zmq::context_t ctx;
-    zmq::socket_t bus;
+    zmq::socket_t pub;
+    zmq::socket_t sub;
 
-    void broadcast(const json& data) {
-        std::string payload = data.dump();
-        zmq::message_t msg(payload.size());
-        memcpy(msg.data(), payload.c_str(), payload.size());
-        bus.send(msg, zmq::send_flags::none);
+    void dispatch(const json& data) {
+        std::string s = data.dump();
+        zmq::message_t m(s.size()); memcpy(m.data(), s.c_str(), s.size());
+        pub.send(m, zmq::send_flags::none);
     }
 };
 
 } // namespace neuroswarm
 
-int main() {
-    neuroswarm::AuditoryLobe ears;
-    ears.start_listening();
+int main(int argc, char** argv) {
+    std::string ip = "localhost";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--thalamus" && i + 1 < argc) ip = argv[i+1];
+    }
+    neuroswarm::AuditoryLobe auditory(ip);
+    auditory.start();
     return 0;
 }

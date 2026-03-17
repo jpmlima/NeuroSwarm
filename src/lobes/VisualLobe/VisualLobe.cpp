@@ -22,23 +22,24 @@ namespace neuroswarm {
 
 class VisualLobe {
 public:
-    VisualLobe(const std::string& bus_addr = "tcp://localhost:5555", 
+    VisualLobe(const std::string& thalamus_ip = "localhost", 
                const std::string& target_path = ".") 
-        : ctx(1), synapse(ctx, zmq::socket_type::dealer), root_path(target_path) {
+        : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub), root_path(target_path) {
         
-        synapse.set(zmq::sockopt::routing_id, "visual_lobe");
-        synapse.connect(bus_addr);
+        pub.connect("tcp://" + thalamus_ip + ":5555");
+        sub.connect("tcp://" + thalamus_ip + ":5556");
+        sub.set(zmq::sockopt::subscribe, "");
         
         std::cout << "[VISUAL LOBE] Sensory system online. Watching: " << fs::absolute(root_path) << std::endl;
-
-        // Register identity
-        json handshake = {{"origin", "visual_lobe"}, {"intent", "handshake"}};
-        dispatch(handshake);
     }
 
     void start() {
         std::cout << "[VISUAL LOBE] Initializing Cortical Visual Stream..." << std::endl;
         
+        // Start ZMQ listener for dynamic visual requests
+        std::thread listener(&VisualLobe::listen_zmq, this);
+        listener.detach();
+
         while (true) {
             auto current_scene = scan_workspace();
             auto changes = find_saliency_changes(current_scene);
@@ -55,7 +56,8 @@ public:
 
 private:
     zmq::context_t ctx;
-    zmq::socket_t synapse;
+    zmq::socket_t pub;
+    zmq::socket_t sub;
     fs::path root_path;
     
     struct FileState {
@@ -64,6 +66,33 @@ private:
         size_t size;
     };
     std::vector<FileState> last_known_scene;
+
+    void listen_zmq() {
+        while (true) {
+            zmq::message_t msg;
+            if (sub.recv(msg, zmq::recv_flags::none)) {
+                std::string raw(static_cast<char*>(msg.data()), msg.size());
+                try {
+                    auto j = json::parse(raw);
+                    if (j.value("intent", "") == "sensory_visual_input") {
+                        std::string image_path = j.value("image_path", "");
+                        std::cout << "[VISUAL LOBE] Processing visual stimulus from: " << image_path << std::endl;
+                        
+                        // Simulated LLava analysis
+                        std::string description = "Simulated visual analysis: Image contains a diagram of a neural network.";
+                        
+                        json req = {
+                            {"cid", j.value("cid", "global")},
+                            {"origin", "visual_lobe"},
+                            {"intent", "user_input"},
+                            {"text", description}
+                        };
+                        dispatch(req);
+                    }
+                } catch (...) {}
+            }
+        }
+    }
 
     std::vector<FileState> scan_workspace() {
         std::vector<FileState> scene;
@@ -129,14 +158,18 @@ private:
         std::string payload = data.dump();
         zmq::message_t msg(payload.size());
         memcpy(msg.data(), payload.c_str(), payload.size());
-        synapse.send(msg, zmq::send_flags::none);
+        pub.send(msg, zmq::send_flags::none);
     }
 };
 
 } // namespace neuroswarm
 
-int main() {
-    neuroswarm::VisualLobe visual;
+int main(int argc, char** argv) {
+    std::string ip = "localhost";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--thalamus" && i + 1 < argc) ip = argv[i+1];
+    }
+    neuroswarm::VisualLobe visual(ip);
     visual.start();
     return 0;
 }

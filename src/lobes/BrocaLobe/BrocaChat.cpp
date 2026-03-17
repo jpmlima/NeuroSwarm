@@ -67,9 +67,8 @@ int main() {
         json req = {
             {"cid", cid},
             {"origin", "broca_lobe"},
-            {"intent", "inference_request"},
-            {"adapter", "default"}, 
-            {"text", chat_prompt}
+            {"intent", "user_input"},
+            {"text", input}
         };
 
         std::string s_req = req.dump();
@@ -86,7 +85,8 @@ int main() {
                 std::string raw(static_cast<char*>(msg.data()), msg.size());
                 try {
                     auto j = json::parse(raw);
-                    if (j.value("cid", "") == cid && (j.value("origin", "") == "synaptic_controller" || j.value("origin", "") == "frontal_executive")) {
+                    // Wait for task_complete or final response from Executive
+                    if (j.value("cid", "") == cid && (j.value("intent", "") == "task_complete" || j.value("intent", "") == "inference_result" && j.value("origin", "") == "frontal_executive")) {
                         std::cout << "\n[BRAIN]: " << j.value("text", "") << std::endl;
                         answered = true;
                     }
