@@ -28,36 +28,72 @@ Lobes are now location-agnostic.
 
 ---
 
-## III. System Innovation: Distributed LoRA Multiplexing
+## III. System Anatomy: The Functional & Distributed Matrix
+
+NeuroSwarm operates as a **Decentralized Cortical Matrix**. Lobes communicate via the Thalamus, allowing for a self-evolving system that can be spread across multiple physical nodes.
 
 ```mermaid
 graph TD
-    subgraph "Machine A (GPU Server)"
-        TH{Thalamus: Global Router}
-        SC[Synaptic Controller: VRAM Hub]
+    subgraph "External Stimuli"
+        User((User Input))
+        Env((Environment))
     end
 
-    subgraph "Machine B (Local Workstation)"
+    subgraph "Central Nervous Bus (Thalamus)"
+        TH{THALAMUS: Global Router}
+    end
+
+    subgraph "Cognitive Core (Prefrontal Cortex)"
         FE[Frontal Executive: Planning]
-        MT[Motor Cortex: OS Action]
+        WN[Wernicke: Semantic NLU]
+        BR[Broca: Articulation]
     end
 
-    subgraph "Machine C (Edge Device)"
+    subgraph "Synaptic Hub (VRAM Engine)"
+        SC[Synaptic Controller: Inference]
+        MM[ModelManager: LoRA Multiplexing]
+    end
+
+    subgraph "Memory & Learning (Limbic System)"
         HP[Hippocampus: Vector Memory]
+        REM[REM Engine: Active Learning]
     end
 
-    FE -- ZMQ/TCP --> TH
-    MT -- ZMQ/TCP --> TH
-    HP -- ZMQ/TCP --> TH
+    subgraph "Autonomic System"
+        HM[Homeostasis: Pulse & Stress]
+        MC[Meta-Cognition: Reflection]
+    end
+
+    subgraph "Execution (Motor Lobe)"
+        MT[Motor Cortex: OS Actions]
+    end
+
+    %% Flow
+    User --> WN
+    WN --> TH
+    TH <--> FE
+    FE <--> MT
     TH <--> SC
-    
+    SC <--> MM
+    FE <--> HP
+    HP -- Semantic Clusters --> REM
+    REM -- Synaptic Update --> SC
+    HM -- Stress Level --> FE
+    HM -- Vitals --> MC
+    MC -- Mood --> BR
+    MT --> Env
+
+    %% Styling
     style TH fill:#000,stroke:#00ffcc,stroke-width:4px,color:#fff
-    style SC fill:#1a1a1a,stroke:#ff3300,color:#fff
+    style FE fill:#2d2d2d,stroke:#ff3300,color:#fff
+    style HM fill:#003366,stroke:#3399ff,color:#fff
+    style MC fill:#ffcc00,stroke:#fff,color:#000
+    style REM fill:#660066,stroke:#cc33ff,color:#fff
+    style SC fill:#1a1a1a,stroke:#00ff00,color:#fff
 ```
 
----
-
-## IV. Operational Benchmarks (v1.6.0)
+## IV. Core Innovation: Semantic & Distributed Processing
+...
 
 | Metric | Specification |
 | :--- | :--- |
