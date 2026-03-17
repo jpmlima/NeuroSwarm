@@ -7,7 +7,8 @@ find_package(nlohmann_json REQUIRED)
 
 include_directories(include 
     external/llama.cpp/include 
-    external/llama.cpp/ggml/include)
+    external/llama.cpp/ggml/include
+    external/httplib)
 
 link_directories("/home/xenomai/Documents/NeuroSwarm/external/llama.cpp/build/bin")
 
@@ -52,6 +53,9 @@ target_link_libraries(wernicke_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(visual_lobe src/lobes/VisualLobe/VisualLobe.cpp)
 target_link_libraries(visual_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(visualizer src/lobes/Visualizer/VisualizerLobe.cpp)
+target_link_libraries(visualizer PRIVATE zmq nlohmann_json::nlohmann_json pthread)
 
 add_executable(rem_engine src/inference/REMEngine.cpp)
 target_link_libraries(rem_engine PRIVATE zmq nlohmann_json::nlohmann_json)

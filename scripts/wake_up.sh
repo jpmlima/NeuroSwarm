@@ -36,6 +36,7 @@ echo "[SYSTEM] Activating Functional Lobes..."
 $BUILD_PATH/amygdala > "$LOG_DIR/amygdala.log" 2>&1 &
 $BUILD_PATH/motor_lobe > "$LOG_DIR/motor.log" 2>&1 &
 $BUILD_PATH/hippocampus > "$LOG_DIR/hippocampus.log" 2>&1 &
+$BUILD_PATH/visualizer > "$LOG_DIR/visualizer.log" 2>&1 &
 sleep 2
 
 # 4. Frontal Executive
