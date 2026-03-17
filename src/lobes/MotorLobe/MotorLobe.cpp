@@ -32,16 +32,29 @@ public:
                     
                     if (j.value("intent", "") == "execution_request") {
                         std::string cmd = j.value("command", "");
+                        std::string mode = j.value("mode", "reality"); // "reality" or "dream"
+                        std::string cid = j.value("cid", "unknown");
+                        
                         int exit_code = 0;
-                        std::string out = execute(cmd, exit_code);
+                        std::string out;
+
+                        if (mode == "dream") {
+                            std::string dream_path = "./data/dreams/" + cid;
+                            std::filesystem::create_directories(dream_path);
+                            out = execute("cd " + dream_path + " && " + cmd, exit_code);
+                            std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << std::endl;
+                        } else {
+                            out = execute(cmd, exit_code);
+                        }
                         
                         json resp = {
-                            {"cid", j.value("cid", "unknown")},
+                            {"cid", cid},
                             {"origin", "motor_cortex"},
                             {"intent", "execution_result"},
                             {"proprioception", out},
                             {"exit_code", exit_code},
-                            {"status", (exit_code == 0 ? "success" : "failure")}
+                            {"status", (exit_code == 0 ? "success" : "failure")},
+                            {"mode", mode}
                         };
                         dispatch(resp);
                     }
