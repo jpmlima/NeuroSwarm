@@ -2,7 +2,6 @@
 
 <div align="center">
   <h3>An Asynchronous Orchestration Framework for Autonomous Cognitive Emulation</h3>
-  <p>Technical Specification v1.5.0 | Persistent C++ Implementation</p>
 </div>
 
 ---
@@ -114,4 +113,3 @@ cmake .. && make -j$(nproc)
 ```
 
 ---
-*NeuroSwarm: Advancing the frontier of non-reactive, self-sustaining digital intelligence.*
