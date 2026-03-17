@@ -72,3 +72,6 @@ target_link_libraries(inference_test PRIVATE cppzmq nlohmann_json::nlohmann_json
 
 add_executable(diagnostic_tool tests/diagnostic_tool.cpp)
 target_link_libraries(diagnostic_tool PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(monologue_test tests/monologue_test.cpp)
+target_link_libraries(monologue_test PRIVATE zmq nlohmann_json::nlohmann_json)
