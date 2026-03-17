@@ -97,8 +97,9 @@ v1.7.0 adds the **Visualizer Lobe**, a dedicated EEG-like interface that capture
 | **Observability** | Real-time Web Dashboard (8080) |
 | **Node Support** | Distributed (TCP/IP) |
 | **Communication** | ZeroMQ v4.3.x (Asynchronous) |
+## V. Deployment Protocol
 
-## V. Awakening Sequence
+### Awakening Sequence
 ```bash
 # Compile and Start the Matrix
 ./scripts/neuroswarm_daemon.sh
@@ -110,5 +111,10 @@ v1.7.0 adds the **Visualizer Lobe**, a dedicated EEG-like interface that capture
 ./build/broca_chat
 ```
 
+### Hibernation (Shutdown)
+To gracefully terminate all neural processes and put the system to sleep:
+```bash
+./scripts/sleep.sh
+```
 ---
 *NeuroSwarm: Advancing the frontier of distributed digital intelligence.*
