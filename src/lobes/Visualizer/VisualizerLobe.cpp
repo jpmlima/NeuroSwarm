@@ -7,6 +7,7 @@
 #include <vector>
 #include <mutex>
 #include <deque>
+#include <ctime>
 
 using json = nlohmann::json;
 
@@ -24,11 +25,9 @@ public:
     }
 
     void start() {
-        // Start ZMQ listener in a separate thread
         std::thread zmq_thread(&VisualizerLobe::listen_zmq, this);
         zmq_thread.detach();
 
-        // Start Web Server
         httplib::Server svr;
 
         svr.Get("/", [this](const httplib::Request&, httplib::Response& res) {
@@ -58,8 +57,6 @@ private:
                 try {
                     auto j = json::parse(static_cast<char*>(msg.data()), static_cast<char*>(msg.data()) + msg.size());
                     std::lock_guard<std::mutex> lock(event_mutex);
-                    
-                    // Add timestamp for the UI
                     j["ui_ts"] = std::time(nullptr);
                     event_buffer.push_front(j);
                     if (event_buffer.size() > max_events) event_buffer.pop_back();
@@ -69,72 +66,185 @@ private:
     }
 
     std::string get_dashboard_html() {
-        return R"(
+        return R"V0G0(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>NeuroSwarm EEG - Live Neural Activity</title>
+    <meta charset="UTF-8">
+    <title>NeuroSwarm // Cortex Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        body { background: #0a0a0a; color: #00ffcc; font-family: 'Courier New', monospace; margin: 20px; }
-        h1 { border-bottom: 2px solid #00ffcc; padding-bottom: 10px; }
-        .node-container { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 30px; }
-        .node { padding: 10px; border: 1px solid #333; border-radius: 5px; background: #1a1a1a; min-width: 120px; text-align: center; transition: all 0.2s; }
-        .active { background: #00ffcc; color: #000; box-shadow: 0 0 15px #00ffcc; }
-        #log { height: 400px; overflow-y: auto; border: 1px solid #333; padding: 10px; background: #050505; font-size: 12px; }
-        .event { border-bottom: 1px solid #222; padding: 5px 0; }
-        .origin { color: #ff3300; font-weight: bold; }
-        .intent { color: #cc33ff; }
+        :root {
+            --bg: #0a0a0a;
+            --panel: #111111;
+            --accent: #00e5ff;
+            --text-main: #e0e0e0;
+            --text-dim: #666666;
+            --border: #222222;
+        }
+        body { 
+            margin: 0; background: var(--bg); color: var(--text-main); 
+            font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+            font-weight: 300; letter-spacing: -0.02em;
+            display: grid; grid-template-columns: 350px 1fr; height: 100vh;
+        }
+        #sidebar {
+            background: var(--panel); border-right: 1px solid var(--border);
+            padding: 40px; display: flex; flex-direction: column; gap: 30px;
+            z-index: 10;
+        }
+        header h1 { font-size: 14px; font-weight: 600; text-transform: uppercase; margin: 0; color: var(--accent); }
+        header p { font-size: 12px; color: var(--text-dim); margin: 5px 0 0 0; }
+        
+        .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .metric-box { border-top: 1px solid var(--border); padding-top: 10px; }
+        .metric-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); }
+        .metric-value { font-size: 24px; font-weight: 200; font-variant-numeric: tabular-nums; }
+
+        #event-stream {
+            flex-grow: 1; overflow-y: hidden; font-family: "SF Mono", "Menlo", monospace;
+            font-size: 11px; color: var(--text-dim); line-height: 1.6;
+        }
+        .event-line { border-bottom: 1px solid #181818; padding: 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .event-line b { color: var(--text-main); font-weight: 500; }
+
+        #viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
+        canvas { outline: none; }
+        
+        #lobe-indicator {
+            position: absolute; top: 40px; right: 40px; text-align: right;
+            font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;
+        }
     </style>
 </head>
 <body>
-    <h1>NEUROSWARM // CEREBRAL EEG</h1>
-    <div class="node-container" id="nodes"></div>
-    <div id="log"></div>
+    <div id="sidebar">
+        <header>
+            <h1>NeuroSwarm CNS</h1>
+            <p>Biomimetic Orchestration Framework</p>
+        </header>
+
+        <div class="metric-grid">
+            <div class="metric-box">
+                <div class="metric-label">System Stress</div>
+                <div id="stress-val" class="metric-value">0.00</div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Efficiency</div>
+                <div id="success-val" class="metric-value">1.00</div>
+            </div>
+        </div>
+
+        <div id="event-stream">
+            <div class="metric-label" style="margin-bottom: 10px;">Synaptic Stream</div>
+            <div id="log-content"></div>
+        </div>
+    </div>
+
+    <div id="viewport">
+        <div id="lobe-indicator">State: <span id="active-name" style="color: var(--accent)">Optimal</span></div>
+    </div>
 
     <script>
-        const nodesDiv = document.getElementById('nodes');
-        const logDiv = document.getElementById('log');
-        const activeNodes = new Map();
+        let scene, camera, renderer, points;
+        const lobeMarkers = new Map();
+        const coords = {
+            'thalamus': {x: 0, y: 0, z: 0},
+            'frontal_executive': {x: 0, y: 4, z: 6},
+            'motor_cortex': {x: 0, y: 7, z: 0},
+            'hippocampus': {x: 0, y: -2, z: -4},
+            'synaptic_controller': {x: -4, y: 1, z: 0},
+            'wernicke_lobe': {x: 4, y: 1, z: 4},
+            'broca_lobe': {x: 4, y: 1, z: 6}
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, (window.innerWidth-350)/window.innerHeight, 0.1, 1000);
+            camera.position.set(15, 10, 20);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth - 350, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('viewport').appendChild(renderer.domElement);
+
+            const geometry = new THREE.BufferGeometry();
+            const verts = [];
+            for (let i = 0; i < 3000; i++) {
+                const x = (Math.random() - 0.5) * 18;
+                const y = (Math.random() - 0.5) * 14;
+                const z = (Math.random() - 0.5) * 14;
+                if ((x*x)/81 + (y*y)/49 + (z*z)/49 < 1) verts.push(x, y, z);
+            }
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+            points = new THREE.Points(geometry, new THREE.PointsMaterial({ 
+                color: 0x333333, size: 0.05, transparent: true, opacity: 0.5 
+            }));
+            scene.add(points);
+
+            Object.keys(coords).forEach(name => {
+                const c = coords[name];
+                const nodeGeo = new THREE.IcosahedronGeometry(0.2, 1);
+                const nodeMat = new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true });
+                const mesh = new THREE.Mesh(nodeGeo, nodeMat);
+                mesh.position.set(c.x, c.y, c.z);
+                scene.add(mesh);
+                lobeMarkers.set(name, mesh);
+            });
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            points.rotation.y += 0.001;
+            renderer.render(scene, camera);
+        }
 
         async function update() {
             try {
                 const res = await fetch('/events');
                 const events = await res.json();
+                if (events.length === 0) return;
+
+                const latest = events[0];
+                const log = document.getElementById('log-content');
                 
-                logDiv.innerHTML = '';
-                const detectedOrigins = new Set();
+                const line = document.createElement('div');
+                line.className = 'event-line';
+                line.innerHTML = `<b>${latest.origin}</b> &rarr; ${latest.intent}`;
+                log.prepend(line);
+                if (log.childNodes.length > 12) log.removeChild(log.lastChild);
 
-                events.forEach(e => {
-                    detectedOrigins.add(e.origin);
-                    const div = document.createElement('div');
-                    div.className = 'event';
-                    div.innerHTML = `<span class="origin">[${e.origin}]</span> <span class="intent">${e.intent}</span>: ${JSON.stringify(e).substring(0, 150)}...`;
-                    logDiv.appendChild(div);
-                });
+                if (lobeMarkers.has(latest.origin)) {
+                    const m = lobeMarkers.get(latest.origin);
+                    m.scale.set(4, 4, 4);
+                    m.material.color.set(0x00e5ff);
+                    setTimeout(() => {
+                        m.scale.set(1, 1, 1);
+                        m.material.color.set(0x444444);
+                    }, 200);
+                }
 
-                // Update Node UI
-                detectedOrigins.forEach(origin => {
-                    if (!activeNodes.has(origin)) {
-                        const n = document.createElement('div');
-                        n.className = 'node';
-                        n.id = 'node-' + origin;
-                        n.innerText = origin.toUpperCase();
-                        nodesDiv.appendChild(n);
-                        activeNodes.set(origin, n);
-                    }
-                    const el = activeNodes.get(origin);
-                    el.classList.add('active');
-                    setTimeout(() => el.classList.remove('active'), 500);
-                });
-
+                if (latest.intent === "homeostatic_pulse") {
+                    document.getElementById('success-val').innerText = latest.success_rate.toFixed(2);
+                    document.getElementById('stress-val').innerText = (1.0 - latest.success_rate).toFixed(2);
+                }
             } catch(e) {}
         }
 
-        setInterval(update, 1000);
+        init();
+        setInterval(update, 800);
+        window.onresize = () => {
+            camera.aspect = (window.innerWidth-350) / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth-350, window.innerHeight);
+        };
     </script>
 </body>
 </html>
-        )";
+)V0G0";
     }
 };
 
