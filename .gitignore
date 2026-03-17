@@ -1,0 +1,33 @@
+# Compilation
+build/
+bin/
+*.o
+*.a
+*.so
+
+# Models (Too large for GitHub)
+models/*.gguf
+models/*.bin
+
+# Data & Memory
+data/engrams/*.jsonl
+data/engrams/*_consolidated.jsonl
+data/train_data.txt
+.matrix/
+
+# Logs
+logs/*.log
+logs/*.md
+!docs/
+
+# External
+external/llama.cpp/build/
+external/llama.cpp/models/
+
+# System
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.tmp
+test_lora.gguf

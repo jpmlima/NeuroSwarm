@@ -1,0 +1,1 @@
+scripts/wake_up.sh
