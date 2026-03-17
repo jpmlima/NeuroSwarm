@@ -5,11 +5,11 @@ int main() {
     zmq::context_t ctx(1);
     
     zmq::socket_t frontend(ctx, zmq::socket_type::sub); 
-    frontend.bind("tcp://*:5555");
+    frontend.bind("tcp://0.0.0.0:5555");
     frontend.set(zmq::sockopt::subscribe, "");
 
     zmq::socket_t backend(ctx, zmq::socket_type::pub);  
-    backend.bind("tcp://*:5556");
+    backend.bind("tcp://0.0.0.0:5556");
     
     std::cout << "[THALAMUS] Neural Bus active." << std::endl;
     

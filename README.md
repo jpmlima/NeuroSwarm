@@ -2,114 +2,78 @@
 
 <div align="center">
   <h3>An Asynchronous Orchestration Framework for Autonomous Cognitive Emulation</h3>
+  <p>Technical Specification v1.6.0 | Semantic & Distributed Implementation</p>
 </div>
 
 ---
 
 ## I. Abstract
-**NeuroSwarm** is a distributed system designed to emulate the functional partitioning, homeostatic regulation, and endogenous activity of the human brain. Unlike traditional Large Language Models (LLMs) which operate as reactive, monolithic inference engines, NeuroSwarm implements a **Decentralized Cortical Matrix**. 
+**NeuroSwarm** is a distributed system designed to emulate the functional partitioning, homeostatic regulation, and endogenous activity of the human brain. v1.6.0 introduces **Semantic Memory** and **Distributed Node Clusters**, allowing specialized lobes to operate across multiple physical machines while maintaining a unified cognitive state.
 
-By mapping specific cognitive functions to independent "lobes" (C++ processes) and synchronizing them via a high-speed neural bus, the framework achieves emergent autonomy. The system's intelligence is derived not from parameter count alone, but from the **Iterative Resonance**, **Active Learning**, and **Meta-Cognitive Reflection** between its specialized sub-components.
+## II. The Distributed Hierarchy
 
-## II. The Cortical Hierarchy
+### 1. The Neural Bus (Thalamus v2)
+The Thalamus now operates as a **Global Dispatcher**. It binds to `0.0.0.0`, enabling lobes on different hardware (e.g., Raspberry Pi, Remote GPU Servers) to connect to the central nervous system via the `--thalamus <IP>` protocol.
 
-The NeuroSwarm architecture is strictly partitioned into functional regions, each emulating a biological counterpart:
+### 2. Semantic Memory (Vector Hippocampus)
+Memory retrieval has evolved from keyword-matching to **Neural Vector Search**.
+*   **Embeddings:** The `ModelManager` generates high-dimensional semantic vectors for every engram.
+*   **Cosine Similarity:** The Hippocampus performs mathematical comparisons to find memories that are conceptually related to the current goal, even if the wording differs.
 
-### 1. The Autonomic System (Brainstem & Homeostasis)
-The "Heartbeat" and "Vitals" of the system.
-*   **CerebralMatrix:** Manages the lifecycle and regenerative restart of all neural processes.
-*   **Homeostasis:** Monitors resource pressure and **Task Success Rates**. It regulates the system's "Stress Level," triggering adrenaline-style reasoning or autonomous sleep cycles.
-
-### 2. The Meta-Cognitive Layer (The "Cogito" Phase)
-The system's self-reflective observer. It monitors homeostatic stress and evolution cycles, generating a **Thought Stream Diary** (`logs/THOUGHTS.md`). It provides real-time "emotional" feedback (Stress Level) to the communication interface.
-
-### 3. The Frontal Executive & DMN
-The seat of volition. It manages high-level goals through a structured **Chain-of-Thought** protocol.
-*   **Active Mode:** Strategic planning, task delegation, and stress-aware reasoning.
-*   **Default Mode Network (DMN):** In the absence of stimuli, the Executive enters **Endogenous Rumination** for internal auditing.
-
-### 4. Semantic Processing (Wernicke & Broca)
-*   **Wernicke Lobe:** Semantic interpreter decoding raw input into structured "intent-objects."
-*   **Broca Lobe:** Articulatory engine. In v1.5.0, it integrates **Internal State Visualization**, displaying the system's stress level in the interactive prompt.
-
-### 5. Memory & Evolution (Hippocampus & REM Engine)
-*   **Hippocampus:** Manages **Engram Traces** (long-term persistence) and RAG indexing.
-*   **REM Engine:** The **Active Learning** core. During idle periods, it extracts successful execution patterns and performs autonomous **LoRA Fine-tuning**.
+### 3. Functional Lobes (The Distributed Swarm)
+Lobes are now location-agnostic. 
+*   **Synaptic Controller:** Can be hosted on a high-VRAM GPU server.
+*   **Motor Lobe:** Can run locally on the user's machine to execute OS commands.
+*   **Frontal Executive:** Acts as the decentralized orchestrator.
 
 ---
 
-## III. Core Innovation: Self-Evolution & Reflection
-
-NeuroSwarm is a **self-optimizing organism**. It learns from its successes and observes its own operational stress.
+## III. System Innovation: Distributed LoRA Multiplexing
 
 ```mermaid
 graph TD
-    subgraph "External Environment"
-        Stimulus((External Stimuli))
+    subgraph "Machine A (GPU Server)"
+        TH{Thalamus: Global Router}
+        SC[Synaptic Controller: VRAM Hub]
     end
 
-    subgraph "Cerebral Matrix (CNS)"
-        TH{Thalamus: Signal Router}
-        HM[Homeostasis: Autonomic Regulation]
-        MC[Meta-Cognition: Self-Observation]
-        
-        subgraph "Cognitive Core"
-            FE[Frontal Executive: Planning]
-            WN[Wernicke: Interpretation]
-        end
-        
-        subgraph "Support & Evolution"
-            HP[Hippocampus: Memory]
-            REM[REM Engine: Active Learning]
-        end
-        
-        subgraph "Execution & Output"
-            MT[Motor Cortex: OS Action]
-            BR[Broca: Communication]
-        end
+    subgraph "Machine B (Local Workstation)"
+        FE[Frontal Executive: Planning]
+        MT[Motor Cortex: OS Action]
     end
 
-    HM -- Stress Alert --> FE
-    HM -- Pulse --> MC
-    MC -- State Awareness --> BR
-    Stimulus --> WN
-    WN --> TH
-    TH <--> FE
-    FE <--> MT
-    FE <--> HP
-    HP -- Success Engrams --> REM
-    REM -- Synaptic Update --> FE
-    MT --> Result((Environmental Change))
+    subgraph "Machine C (Edge Device)"
+        HP[Hippocampus: Vector Memory]
+    end
+
+    FE -- ZMQ/TCP --> TH
+    MT -- ZMQ/TCP --> TH
+    HP -- ZMQ/TCP --> TH
+    TH <--> SC
     
     style TH fill:#000,stroke:#00ffcc,stroke-width:4px,color:#fff
-    style FE fill:#2d2d2d,stroke:#ff3300,color:#fff
-    style HM fill:#003366,stroke:#3399ff,color:#fff
-    style MC fill:#ffcc00,stroke:#fff,color:#000
-    style REM fill:#660066,stroke:#cc33ff,color:#fff
+    style SC fill:#1a1a1a,stroke:#ff3300,color:#fff
 ```
 
 ---
 
-## IV. Operational Benchmarks (GTX 1080 Ti)
+## IV. Operational Benchmarks (v1.6.0)
 
-| Functional Metric | Specification |
+| Metric | Specification |
 | :--- | :--- |
-| **Neural Signal Latency** | < 0.5ms (Inter-process) |
-| **Learning Rate** | Autonomous SFT (10 epochs/cycle) |
-| **Meta-Cognitive Pulse** | 5min Reflection Interval |
-| **Autonomic Triggers** | 1s Pulse / 60s Idle Threshold |
+| **Search Mode** | Semantic (Neural Embedding) |
+| **Node Support** | Distributed (TCP/IP) |
+| **Embedding Engine** | Llama.cpp (llama_get_embeddings) |
+| **Communication** | ZeroMQ v4.3.x (Asynchronous) |
 
-## V. Deployment Protocol
-
-### Awakening Sequence
+## V. Awakening Sequence (Distributed)
 ```bash
-# Build and Run
-mkdir build && cd build
-cmake .. && make -j$(nproc)
-./scripts/neuroswarm_daemon.sh
+# Start Thalamus on Central Machine (IP: 192.168.1.10)
+./build/thalamus
 
-# Interact with the Meta-Aware Brain
-./build/broca_chat
+# Connect a Lobe from another machine
+./build/motor_lobe --thalamus 192.168.1.10
 ```
 
 ---
+*NeuroSwarm: Advancing the frontier of distributed digital intelligence.*

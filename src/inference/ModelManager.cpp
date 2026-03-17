@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cstring>
 #include <filesystem>
+#include <cmath>
 
 namespace fs = std::filesystem;
 
@@ -117,6 +118,51 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     llama_sampler_free(smpl);
     llama_free(ctx);
     return response;
+}
+
+std::vector<float> ModelManager::get_embeddings(const std::string& text) {
+    if (!gray_matter) return {};
+
+    auto* model = (llama_model*)gray_matter;
+    const auto* vocab = llama_model_get_vocab(model);
+
+    // Tokenize
+    const int n_tokens = -llama_tokenize(vocab, text.c_str(), text.size(), NULL, 0, false, true);
+    std::vector<llama_token> tokens(n_tokens);
+    llama_tokenize(vocab, text.c_str(), text.size(), tokens.data(), tokens.size(), false, true);
+
+    // Context with embeddings enabled
+    llama_context_params cparams = llama_context_default_params();
+    cparams.embeddings = true;
+    cparams.n_ctx = n_tokens;
+    auto* ctx = llama_init_from_model(model, cparams);
+
+    llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
+    if (llama_decode(ctx, batch) != 0) {
+        llama_free(ctx);
+        return {};
+    }
+
+    const float* embd = llama_get_embeddings(ctx);
+    if (!embd) {
+        // Modern API might use llama_get_embeddings_ith(ctx, -1) for pooling
+        embd = llama_get_embeddings_ith(ctx, -1);
+    }
+
+    int n_embd = llama_model_n_embd(model);
+    std::vector<float> res(n_embd);
+    if (embd) {
+        memcpy(res.data(), embd, n_embd * sizeof(float));
+        
+        // Normalize for cosine similarity
+        float norm = 0.0f;
+        for (float v : res) norm += v * v;
+        norm = sqrt(norm);
+        if (norm > 0) for (float& v : res) v /= norm;
+    }
+
+    llama_free(ctx);
+    return res;
 }
 
 } // namespace neuroswarm

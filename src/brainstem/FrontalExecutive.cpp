@@ -12,19 +12,18 @@ namespace neuroswarm {
 
 class FrontalExecutive {
 public:
-    FrontalExecutive(const std::string& pub_addr = "tcp://localhost:5555", 
-                     const std::string& sub_addr = "tcp://localhost:5556") 
+    FrontalExecutive(const std::string& thalamus_ip = "localhost") 
         : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
 
-        pub.connect(pub_addr);
-        sub.connect(sub_addr);
+        pub.connect("tcp://" + thalamus_ip + ":5555");
+        sub.connect("tcp://" + thalamus_ip + ":5556");
         sub.set(zmq::sockopt::subscribe, "");
 
         // Set receive timeout for DMN (Default Mode Network) activation
         int timeout_ms = 30000; // 30 seconds of silence triggers rumination
         sub.set(zmq::sockopt::rcvtimeo, timeout_ms);
 
-        std::cout << "[EXECUTIVE] Resonance Engine Online. DMN Active (30s threshold)." << std::endl;
+        std::cout << "[EXECUTIVE] Connected to Thalamus at " << thalamus_ip << std::endl;
     }
 
     void run_cognitive_cycle() {
@@ -223,8 +222,12 @@ private:
 
 } // namespace neuroswarm
 
-int main() {
-    neuroswarm::FrontalExecutive executive;
+int main(int argc, char** argv) {
+    std::string ip = "localhost";
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--thalamus" && i + 1 < argc) ip = argv[i+1];
+    }
+    neuroswarm::FrontalExecutive executive(ip);
     executive.run_cognitive_cycle();
     return 0;
 }

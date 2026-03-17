@@ -11,8 +11,11 @@ public:
     ModelManager(const std::string& base_model_path);
     ~ModelManager();
 
-    // Now accepts an optional adapter name (e.g., "bash_expert")
+    // Existing fire method
     std::string fire(const std::string& adapter_name, const std::string& prompt);
+
+    // New semantic embedding method
+    std::vector<float> get_embeddings(const std::string& text);
 
 private:
     void* gray_matter = nullptr;
