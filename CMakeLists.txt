@@ -51,6 +51,9 @@ target_link_libraries(broca_chat PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(wernicke_lobe src/lobes/WernickeLobe/WernickeLobe.cpp)
 target_link_libraries(wernicke_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 
+add_executable(critic_lobe src/lobes/CingulateLobe/CriticLobe.cpp)
+target_link_libraries(critic_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(visual_lobe src/lobes/VisualLobe/VisualLobe.cpp)
 target_link_libraries(visual_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 

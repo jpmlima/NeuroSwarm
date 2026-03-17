@@ -69,7 +69,14 @@ public:
                     }
                 }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
-                    decide_next_step(j);
+                    if (j.value("adapter", "") == "critic") {
+                        handle_critic_feedback(j);
+                    } else {
+                        decide_next_step(j);
+                    }
+                }
+                else if (origin == "critic_lobe" && intent == "inference_request") {
+                    // Transparently allow critic to query synaptic controller
                 }
             } catch (...) {}
         }
@@ -86,9 +93,42 @@ private:
         std::vector<std::string> plan;
         int retries = 0;
         bool active = false;
+        std::string last_raw_thought; // Store for action phase
     };
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
+
+    void handle_critic_feedback(const json& data) {
+        std::string cid = data.value("cid", "unknown");
+        if (active_goals.find(cid) == active_goals.end()) return;
+
+        std::string feedback = data.value("text", "");
+        if (feedback.find("APPROVED") != std::string::npos) {
+            std::cout << "[EXECUTIVE] Consensus reached. Acting on plan." << std::endl;
+            commit_to_action(cid);
+        } else {
+            std::cout << "[EXECUTIVE] Critic rejection: " << feedback << std::endl;
+            request_thought(cid, "CRITIC FEEDBACK: " + feedback + "\nPlease refine the strategy.");
+        }
+    }
+
+    void commit_to_action(const std::string& cid) {
+        auto& state = active_goals[cid];
+        try {
+            size_t start = state.last_raw_thought.find("{");
+            size_t end = state.last_raw_thought.rfind("}");
+            json plan_json = json::parse(state.last_raw_thought.substr(start, end - start + 1));
+            
+            std::string cmd = plan_json.value("command", "");
+            if (!cmd.empty()) {
+                json motor_req = {
+                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                    {"command", cmd}
+                };
+                dispatch_to_all(motor_req);
+            }
+        } catch (...) {}
+    }
 
     void start_new_goal(const json& data) {
         std::string cid = data.value("cid", "global_" + std::to_string(std::time(nullptr)));
@@ -153,10 +193,15 @@ private:
 
                 std::cout << "[EXECUTIVE] Thought: " << thought << std::endl;
                 active_goals[cid].history += "\nTHOUGHT: " + thought;
+                active_goals[cid].last_raw_thought = response; // Save for consensus
 
-                if (!cmd.empty()) {
-                    dispatch_command(cid, cmd);
-                }
+                // PUBLISH FOR INTERNAL MONOLOGUE
+                json monologue_req = {
+                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "internal_thought"},
+                    {"text", response}
+                };
+                dispatch_to_all(monologue_req);
+                std::cout << "[EXECUTIVE] Internal thought published. Awaiting Critic consensus." << std::endl;
 
                 if (status == "COMPLETED") {
                     std::cout << "[EXECUTIVE] Goal Accomplished: " << cid << std::endl;
