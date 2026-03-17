@@ -93,8 +93,8 @@ int main() {
                 } catch (...) {}
             }
 
-            if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(60)) {
-                std::cout << "[SYSTEM]: Inference timeout." << std::endl;
+            if (std::chrono::steady_clock::now() - start_time > std::chrono::seconds(120)) {
+                std::cout << "[SYSTEM]: Inference timeout (The Brain is thinking too deeply)." << std::endl;
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

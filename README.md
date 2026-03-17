@@ -1,79 +1,82 @@
 # NeuroSwarm: Principles of Digital Functional Neuro-Anatomy
 
 <div align="center">
+  <img src="https://img.shields.io/badge/Version-2.0.0-blue?style=for-the-badge" alt="v2.0.0">
+  <img src="https://img.shields.io/badge/Architecture-Distributed_Cortical_Matrix-green?style=for-the-badge" alt="Architecture">
+  <img src="https://img.shields.io/badge/Language-C%2B%2B17-orange?style=for-the-badge" alt="C++17">
+  <br>
   <h3>An Asynchronous Orchestration Framework for Autonomous Cognitive Emulation</h3>
-  <p>Technical Specification v2.0.0 | "The AGI Release" - Autonomy, Surgery & Sensory Expansion</p>
 </div>
 
 ---
 
-## I. Abstract
-**NeuroSwarm** is a distributed system designed to emulate the functional partitioning, homeostatic regulation, and endogenous activity of the human brain. Version 2.0.0 represents the leap from reactive automation to **Emergent Autonomy**, introducing intrinsic motivation (Epistemic Drive), code-level self-modification (Neuro-Surgery), and sensory embodiment.
+## I. Abstract: The Society of Mind
+**NeuroSwarm** is a biomimetic framework that rejects the paradigm of monolithic AI. Instead of relying on a single "god-model," it implements Marvin Minsky's **Society of Mind** theory: intelligence is not a single process, but the emergent result of many "small idiot agents" (specialized SLMs) collaborating through feedback loops.
 
-> **The Society of Mind (Marvin Minsky):** "A brain is not an intelligent 'thing', it is a set of 'small idiot agents' that, by collaborating, create emergent intelligence."
+> "A brain is not an intelligent 'thing', it is a set of 'small idiot agents' that, by collaborating, create emergent intelligence." — *Marvin Minsky*
 
 ## II. The Cognitive Hierarchy (v2.0.0)
 
-### 1. The Epistemic Drive (Curiosity Engine)
-When the system is idle, the Frontal Executive's Default Mode Network (DMN) activates. Instead of waiting for user input, it formulates its own learning objectives, generating Python or Bash scripts to explore new APIs or logic, and verifying them in the Dream Sandbox.
+### 1. Epistemic Drive (Intention & Curiosity)
+The system is no longer purely reactive. When idle, the **Default Mode Network (DMN)** triggers self-assigned learning goals. The system explores its environment and codebases autonomously to "satisfy" its curiosity drive.
 
-### 2. Neuro-Surgery (Self-Modification)
-NeuroSwarm possesses the capability to alter its own biological makeup. Using the `neuro_surgery` mode, the Executive can write new C++ Lobes, inject them into the CMake build system, and trigger a live recompilation of the matrix.
+### 2. Inner Monologue & Consensus
+Every plan goes through an adversarial validation cycle:
+*   **The Proposer (Frontal Executive):** Synthesizes goals into actions.
+*   **The Validator (Critic Lobe):** Analyzes the plan for security risks, logical fallacies, and efficiency.
+*   **Consensus:** Action only occurs when the Critic grants `APPROVED` status.
 
-### 3. Sensory Embodiment
-*   **Visual Lobe:** Ingests visual stimuli (images/screenshots) and converts them into semantic engrams.
-*   **Auditory Lobe:** Processes soundwaves (voice commands) for hands-free cognitive interaction.
+### 3. World Simulation (Dream Sandbox)
+NeuroSwarm performs **Counterfactual Reasoning**. It simulates its actions in an isolated filesystem (`data/dreams/`) before "collapsing the dream" into physical reality. This ensures 100% safety and predictability in system-level operations.
 
-### 4. Inner Monologue & World Simulation
-Plans are debated with the **Critic Lobe** (Cingulate Cortex) for logic validation, then executed in a **Dream Sandbox** (Counterfactual Reasoning) to verify safety before the "Reality Collapse" applies them to the host OS.
+### 4. Neuro-Surgery (Live Self-Modification)
+The system can alter its own source code. The Executive can write new C++ Lobes, inject them into the CMake build system, and trigger a live recompilation of the Matrix without downtime.
 
 ---
 
-## III. System Anatomy: The Functional & Distributed Matrix
+## III. System Anatomy (Neural Bus Topology)
+
+The following diagram illustrates the flow of a single stimulus through the matrix:
 
 ```mermaid
 graph TD
-    subgraph "Sensory Input"
-        Audio((Voice/Audio))
-        Vision((Images/Screen))
-        Text((Terminal Input))
+    subgraph "Sensory Inputs"
+        SI[User Terminal / Voice / Image]
     end
 
-    subgraph "Central Nervous Bus"
+    subgraph "Autonomic Nervous System"
         TH{THALAMUS: Global Router}
+        HM[Homeostasis: Vitals & Stress]
+        MC[Meta-Cognition: Reflection/Diary]
     end
 
     subgraph "Cognitive Core (Inner Monologue)"
-        FE[Frontal Executive: Planning & Curiosity]
-        CL[Critic Lobe: Validation]
         WN[Wernicke: Semantic NLU]
+        FE[Frontal Executive: Orchestration]
+        CL[Critic Lobe: Adversarial Logic]
     end
 
-    subgraph "Sensory Lobes"
-        AL[Auditory Lobe]
-        VL[Visual Lobe]
+    subgraph "Limbic & Memory System"
+        HP[Hippocampus: Vector RAG]
+        REM[REM Engine: LoRA Fine-tuning]
     end
 
     subgraph "Execution & Simulation"
-        MT[Motor Cortex: OS Actions & Neuro-Surgery]
-        DS[Dream State: Sandbox]
+        DS[Dream Sandbox: Simulation]
+        MT[Motor Cortex: OS Actions & Surgery]
     end
 
     %% Flow
-    Audio --> AL
-    Vision --> VL
-    Text --> WN
-    AL --> TH
-    VL --> TH
+    SI --> WN
     WN --> TH
-    
     TH <--> FE
-    FE -- Monologue --> CL
-    CL -- Consensus --> FE
-    
-    FE -- Simulate --> DS
-    DS -- Feedback --> FE
-    FE -- Execute / Self-Modify --> MT
+    FE -- Internal Thought --> CL
+    CL -- Validation/Feedback --> FE
+    FE -- Dream Command --> DS
+    DS -- Simulation Result --> FE
+    FE -- Reality Collapse --> MT
+    HM -- Stress Alert --> FE
+    HP -- context --> FE
     
     style TH fill:#000,stroke:#00ffcc,stroke-width:4px,color:#fff
     style FE fill:#2d2d2d,stroke:#ff3300,color:#fff
@@ -84,29 +87,29 @@ graph TD
 
 ---
 
-## IV. Operational Benchmarks (v2.0.0)
+## IV. Technical Specification
 
-| Metric | Specification |
-| :--- | :--- |
-| **Cognition** | Curious (Epistemic Drive) |
-| **Adaptation** | Auto-Compiling (Neuro-Surgery) |
-| **Simulation** | Isolated Dream Sandbox |
-| **Consensus** | Adversarial Monologue |
+| Subsystem | Technology | Function |
+| :--- | :--- | :--- |
+| **Neural Bus** | ZeroMQ (PUB/SUB) | Nanosecond inter-lobe routing. |
+| **Inference** | llama.cpp (CPU/Vulkan) | LoRA Multiplexing of 1.5B - 8B models. |
+| **Memory** | Neural Vector Search | Semantic retrieval via cosine similarity. |
+| **Observability** | 3D Neural Mesh (Three.js) | Real-time EEG visual monitoring (8080). |
+| **Safety** | Isolated Dream Sandbox | Pre-execution verification of bash/python. |
 
-## V. Awakening Sequence
+## V. Deployment & Awakening
+
 ```bash
-# Start the entire biological simulation
+# 1. Compile the Matrix
+mkdir build && cd build
+cmake .. && make -j$(nproc)
+
+# 2. Activate the Daemon
 ./scripts/neuroswarm_daemon.sh
 
-# Watch the brain function in real-time
-# Open http://localhost:8080
-
-# The system will think, learn, and modify itself.
-# To interact directly:
+# 3. Enter the Mind
 ./build/broca_chat
-
-# To induce sleep
-./scripts/sleep.sh
 ```
+
 ---
-*NeuroSwarm: Advancing the frontier of autonomous digital intelligence.*
+*True AGI is not found in the size of the model, but in the complexity of the connections.*

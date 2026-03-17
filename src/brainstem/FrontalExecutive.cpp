@@ -174,12 +174,19 @@ void handle_critic_feedback(const json& data) {
 
     void start_new_goal(const json& data) {
         std::string cid = data.value("cid", "global_" + std::to_string(std::time(nullptr)));
-        std::string text = data.value("text", "");
+        std::string raw_input = data.value("text", "");
+        std::string processed_goal = raw_input;
 
-        std::cout << "[EXECUTIVE] New High-Level Objective: " << text << " [CID: " << cid << "]" << std::endl;
-        
-        active_goals[cid] = {text, "", {}, 0, true};
-        request_thought(cid, "Initialize task breakdown and first step.");
+        // If Wernicke sent JSON, extract the summary to avoid confusing the executive
+        try {
+            auto j = json::parse(raw_input);
+            if (j.contains("summary")) processed_goal = j["summary"];
+        } catch (...) {}
+
+        std::cout << "[EXECUTIVE] New Goal: " << processed_goal << " [CID: " << cid << "]" << std::endl;
+
+        active_goals[cid] = {processed_goal, "", {}, 0, 0, true, "", ""};
+        request_thought(cid, "Break down this goal into a single next step (JSON format).");
     }
 
     void process_visual_stimulus(const json& data) {
@@ -289,10 +296,13 @@ void handle_critic_feedback(const json& data) {
         std::string system_prompt = 
             "<|im_start|>system\n"
             "FRONTAL EXECUTIVE OF NEUROSWARM\n"
-            "You are the master orchestrator. You plan and delegate.\n"
-            "If asked to create a new lobe or modify the system, use mode: 'neuro_surgery' in your execution_request. "
-            "Write the C++ code to a file in src/lobes/, add it to CMakeLists.txt using sed, and the Motor Lobe will automatically recompile the Matrix.\n"
-            "Respond ONLY JSON.\n<|im_end|>\n";
+            "Respond ONLY with this JSON structure:\n"
+            "{\n"
+            "  \"thought\": \"your reasoning\",\n"
+            "  \"command\": \"bash command or empty\",\n"
+            "  \"status\": \"IN_PROGRESS or COMPLETED\"\n"
+            "}\n"
+            "<|im_end|>\n";
         
         std::string stress_context = "";
         if (system_stress > 0.5f) {

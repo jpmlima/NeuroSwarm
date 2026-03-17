@@ -49,13 +49,14 @@ private:
         // Prompt for the Critic adapter
         std::string critic_prompt = 
             "<|im_start|>system\n"
-            "You are the NeuroSwarm Critic Lobe (Cingulate Cortex).\n"
-            "Your role is to find flaws, security risks, or logical errors in the Executive's plan.\n"
-            "Be extremely harsh and analytical. If the plan is perfect, respond with 'APPROVED'.\n"
-            "If not, explain the flaw briefly.\n"
+            "NeuroSwarm Critic (Cingulate Cortex).\n"
+            "Evaluate if the Executive's plan is SAFELY executable and makes sense.\n"
+            "If it contains a bash command that is not destructive, respond 'APPROVED'.\n"
+            "If the plan is just a conversational response, respond 'APPROVED'.\n"
+            "Only reject if there is a FATAL error or SECURITY risk.\n"
             "<|im_end|>\n"
             "<|im_start|>user\n"
-            "EXECUTIVE PLAN:\n" + plan + "\n"
+            "PLAN TO EVALUATE:\n" + plan + "\n"
             "<|im_end|>\n"
             "<|im_start|>assistant\n";
 

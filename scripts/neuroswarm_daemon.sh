@@ -8,6 +8,12 @@ LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_ROOT"
 
+# Robust cleanup: Kill by exact names to avoid killing current shell/test runner
+PROCESSES="thalamus synaptic_controller frontal_executive amygdala hippocampus motor_lobe rem_engine visualizer homeostasis metacognition wernicke_lobe critic_lobe auditory_lobe visual_lobe"
+for p in $PROCESSES; do
+    pkill -9 -x "$p" || true
+done
+
 echo "[DAEMON] Starting Neural Bus (Thalamus)..."
 nohup $BUILD_PATH/thalamus > "$LOG_DIR/thalamus.log" 2>&1 &
 sleep 2
