@@ -42,12 +42,12 @@
       "title": "Hardware Telemetry"
     },
     {
-      "attempts": 1,
-      "completed_at": null,
+      "attempts": 2,
+      "completed_at": "2026-03-18T02:30:46Z",
       "description": "Create data/capabilities.md with a markdown list of commands the system has successfully executed, extracted from data/engrams/global_stream.jsonl",
       "id": "NS-005",
-      "learned": "",
-      "passes": false,
+      "learned": "grep 'success:' data/engrams/global_stream.js | awk '{print $0}' > extracted_commands.txt",
+      "passes": true,
       "priority": 5,
       "title": "Self-Documentation"
     }
