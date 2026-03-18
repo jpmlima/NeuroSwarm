@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <array>
+#include <csignal>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -43,9 +44,9 @@ public:
 
                         if (mode == "dream") {
                             std::string dream_path = "./data/dreams/" + cid;
-                            std::filesystem::create_directories(dream_path);
+                            std::filesystem::create_directories(dream_path + "/data");
                             out = execute("cd " + dream_path + " && " + cmd, exit_code);
-                            std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << std::endl;
+                            std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << " exit=" << exit_code << std::endl;
                         } else if (mode == "neuro_surgery") {
                             std::cout << "[MOTOR] WARNING: NEURO-SURGERY INITIATED. MODIFYING OWN SOURCE CODE." << std::endl;
                             // Neuro-surgery command expects 'cmd' to be a valid bash sequence that writes to src/lobes and compiles.
@@ -130,4 +131,10 @@ private:
     }
 };
 }
-int main() { neuroswarm::MotorLobe().start(); return 0; }
+int main() {
+    // CerebralMatrix sets SIGCHLD to SIG_IGN to auto-reap zombies.
+    // popen/pclose need SIGCHLD=SIG_DFL to waitpid() correctly.
+    signal(SIGCHLD, SIG_DFL);
+    neuroswarm::MotorLobe().start();
+    return 0;
+}

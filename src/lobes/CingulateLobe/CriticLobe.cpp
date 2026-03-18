@@ -81,15 +81,15 @@ private:
         // Tier 2: Rule check passed — forward to SynapticController for LLM validation
         std::cout << "[CRITIC] Rule check passed. Escalating to LLM evaluation." << std::endl;
         std::string critic_prompt =
-            "<|im_start|>system\n"
+            "<|system|>\n"
             "NeuroSwarm Critic (Cingulate Cortex). Evaluate the proposed plan.\n"
             "- If the plan contains a safe bash command or is a conversational reply, respond: APPROVED\n"
             "- Only reject if there is a clear security risk or logical impossibility.\n"
             "- Be concise: one word 'APPROVED' or one sentence of critique.\n"
-            "<|im_end|>\n"
-            "<|im_start|>user\n" + plan + "\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n";
+            "<|end|>\n"
+            "<|user|>\n" + plan + "\n"
+            "<|end|>\n"
+            "<|assistant|>\n";
 
         json llm_req = {
             {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "inference_request"},

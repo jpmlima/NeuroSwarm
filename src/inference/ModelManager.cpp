@@ -31,9 +31,9 @@ ModelManager::ModelManager(const std::string& base_model_path,
     }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx    = 4096;
-    cparams.n_batch  = 32;
-    cparams.n_ubatch = 32;
+    cparams.n_ctx    = 2048;  // 2048 suficiente para os prompts do FE, menos KV cache = mais rápido
+    cparams.n_batch  = 512;   // era 32 — este era o maior gargalo de performance
+    cparams.n_ubatch = 512;
     ctx_ptr = llama_init_from_model((llama_model*)gray_matter, cparams);
 
     // Load dedicated embedding model if a separate path was given
@@ -98,16 +98,13 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     tokens.resize(n_tokens);
 
     // SAFETY: Truncate if prompt is too big for KV cache (reserve space for generation)
-    if (tokens.size() > 3500) {
-        tokens.erase(tokens.begin(), tokens.end() - 3500);
+    if (tokens.size() > 1700) {  // n_ctx=2048, reservar 300 para geração
+        tokens.erase(tokens.begin(), tokens.end() - 1700);
     }
 
-    llama_batch batch;
-    for (size_t i = 0; i < tokens.size(); i += 32) { 
-        size_t n_eval = std::min((size_t)32, tokens.size() - i);
-        batch = llama_batch_get_one(&tokens[i], n_eval);
-        if (llama_decode(ctx, batch) != 0) return "ERROR: Decode failed.";
-    }
+    // Processar o prompt inteiro de uma vez (n_batch=512 aguenta)
+    llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t)tokens.size());
+    if (llama_decode(ctx, batch) != 0) return "ERROR: Decode failed.";
 
     auto* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
@@ -121,7 +118,7 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(1234));
 
     std::string response = "";
-    for (int i = 0; i < 1024; i++) {
+    for (int i = 0; i < 300; i++) {  // GBNF limita a JSON curto, 300 tokens é mais que suficiente
         llama_token id = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, id)) break;
 

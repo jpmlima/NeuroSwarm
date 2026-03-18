@@ -2,6 +2,7 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
 #include <iostream>
+#include <fstream>
 #include <string>
 
 using json = nlohmann::json;
@@ -15,8 +16,17 @@ int main(int argc, char** argv) {
     }
 
     try {
+        // Phi-4-mini se existir, senão fallback para Qwen
+        auto pick_model = [](const std::string& preferred, const std::string& fallback) {
+            return std::ifstream(preferred).good() ? preferred : fallback;
+        };
+        std::string gen_model = pick_model(
+            "/home/xenomai/Documents/NeuroSwarm/models/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+        );
+        std::cout << "[BRAIN] Loading generative model: " << gen_model << std::endl;
         neuroswarm::ModelManager brain(
-            "/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            gen_model,
             "/home/xenomai/Documents/NeuroSwarm/models/nomic-embed-text-v1.5.Q8_0.gguf"
         );
         

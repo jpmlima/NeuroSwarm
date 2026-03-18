@@ -9,6 +9,9 @@
 #include <ctime>
 #include <thread>
 #include <chrono>
+#include <cstdio>
+#include <climits>
+#include <regex>
 
 using json = nlohmann::json;
 
@@ -36,7 +39,7 @@ public:
                 if (active_goals.empty()) {
                     auto now = std::chrono::steady_clock::now();
                     if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 30) {
-                        ruminate();
+                        pick_next_task();
                         last_activity = std::chrono::steady_clock::now();
                     }
                 } else {
@@ -142,6 +145,8 @@ private:
         bool memory_searched = false;
         std::string memory_context = "";
         std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+        // Ralph loop fields
+        std::string task_id = ""; // non-empty if this goal came from tasks.json
     };
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
@@ -176,25 +181,52 @@ private:
         }
     }
 
-    void commit_to_dream(const std::string& cid) {
-        auto& state = active_goals[cid];
+    // Extract "command" and "mode" from a potentially truncated JSON response
+    std::pair<std::string, std::string> extract_command(const std::string& raw) {
+        // Try full JSON parse first
         try {
-            size_t start = state.last_raw_thought.find("{");
-            size_t end = state.last_raw_thought.rfind("}");
-            json plan_json = json::parse(state.last_raw_thought.substr(start, end - start + 1));
-            
-            std::string cmd = plan_json.value("command", "");
-            if (!cmd.empty()) {
-                state.last_cmd = cmd;
-                state.last_mode = plan_json.value("mode", "reality");
-                
-                json dream_req = {
-                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                    {"command", state.last_cmd}, {"mode", "dream"}
-                };
-                dispatch_to_all(dream_req);
+            size_t start = raw.find("{");
+            size_t end   = raw.rfind("}");
+            if (start != std::string::npos && end != std::string::npos && end > start) {
+                auto j = json::parse(raw.substr(start, end - start + 1));
+                return {j.value("command", ""), j.value("mode", "reality")};
             }
         } catch (...) {}
+
+        // Fallback: regex-based extraction for truncated JSON
+        std::string cmd, mode = "reality";
+        std::smatch m;
+
+        // Match "command": "..." — handles escaped quotes inside
+        std::regex cmd_re("\"command\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        if (std::regex_search(raw, m, cmd_re)) cmd = m[1].str();
+
+        std::regex mode_re("\"mode\"\\s*:\\s*\"([^\"]*)\"");
+        if (std::regex_search(raw, m, mode_re)) mode = m[1].str();
+
+        return {cmd, mode};
+    }
+
+    void commit_to_dream(const std::string& cid) {
+        auto& state = active_goals[cid];
+
+        auto [cmd, mode] = extract_command(state.last_raw_thought);
+        std::cout << "[EXECUTIVE] Dream command extracted: [" << cmd << "] mode=[" << mode << "]" << std::endl;
+
+        if (cmd.empty()) {
+            std::cout << "[EXECUTIVE] Dream abort: no command found (thought size=" << state.last_raw_thought.size() << ")." << std::endl;
+            request_thought(cid, "Respond ONLY with a compact JSON: {\"thought\":\"brief\",\"command\":\"bash_cmd\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}. No long explanations.");
+            return;
+        }
+
+        state.last_cmd  = cmd;
+        state.last_mode = mode;
+
+        json dream_req = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+            {"command", cmd}, {"mode", "dream"}
+        };
+        dispatch_to_all(dream_req);
     }
 
     void commit_to_reality(const std::string& cid) {
@@ -279,6 +311,9 @@ private:
                 if (state.last_mode == "neuro_surgery") {
                     std::cout << "[EXECUTIVE] Neuro-Surgery verified. Evolution complete." << std::endl;
                 }
+                if (!state.task_id.empty()) {
+                    mark_task_complete(cid);
+                }
                 active_goals.erase(cid);
             }
         } else {
@@ -287,7 +322,14 @@ private:
             } else {
                 std::cout << "[EXECUTIVE] Reality Check: FAILURE. Refining strategy." << std::endl;
             }
-            request_thought(cid, "PREVIOUS ACTION FAILED: " + output + "\nPlease refine the strategy.");
+            state.history += "\n[ATTEMPT FAILED] cmd='" + state.last_cmd + "' error='" + output.substr(0, 300) + "'";
+            state.retries++;
+            if (state.retries >= 8) {
+                std::cout << "[EXECUTIVE] Too many retries for CID " << cid << ". Abandoning goal." << std::endl;
+                active_goals.erase(cid);
+                return;
+            }
+            request_thought(cid, "PREVIOUS ACTION FAILED (attempt " + std::to_string(state.retries) + "/8): " + output.substr(0, 300) + "\nTry a different approach.");
         }
     }
 
@@ -297,6 +339,8 @@ private:
 
         auto& state = active_goals[cid];
         state.last_raw_thought = data.value("text", "");
+        std::cout << "[EXECUTIVE] Thought received for CID " << cid << " size=" << state.last_raw_thought.size() << " first10=[" << state.last_raw_thought.substr(0, 10) << "]" << std::endl;
+        state.history += "\n[THOUGHT] " + state.last_raw_thought.substr(0, 200);
 
         // Send to CriticLobe for two-tier validation (rule-based + LLM)
         json critic_req = {
@@ -306,17 +350,132 @@ private:
         dispatch_to_all(critic_req);
     }
 
-    void ruminate() {
-        std::string cid = "epistemic_" + std::to_string(std::time(nullptr));
-        std::string goal = "Self-Assigned Task: Analyze src/brainstem/Thalamus.cpp and suggest a performance optimization using neuro_surgery.";
-        
+    // Ralph loop — pick the highest-priority pending task from tasks.json
+    void pick_next_task() {
+        std::ifstream f("./tasks.json");
+        if (!f.is_open()) {
+            // Fall back to epistemic rumination if no task file exists
+            std::string cid = "epistemic_" + std::to_string(std::time(nullptr));
+            std::string goal = "Self-Assigned Task: Analyze src/brainstem/Thalamus.cpp and suggest a performance optimization using neuro_surgery.";
+            GoalState state;
+            state.goal = goal;
+            state.active = true;
+            active_goals[cid] = state;
+            std::cout << "[EXECUTIVE] Epistemic Drive Triggered (no tasks.json found)." << std::endl;
+            request_thought(cid, "GOAL: " + goal + "\nInitiate task breakdown for this self-assigned learning goal.");
+            return;
+        }
+
+        json tasks_doc;
+        try {
+            f >> tasks_doc;
+        } catch (...) {
+            std::cout << "[EXECUTIVE] tasks.json is malformed. Skipping Ralph loop." << std::endl;
+            return;
+        }
+
+        auto& tasks = tasks_doc["tasks"];
+        int best_idx = -1;
+        int best_priority = INT_MAX;
+
+        for (int i = 0; i < (int)tasks.size(); i++) {
+            bool passes = tasks[i].value("passes", false);
+            if (passes) continue;
+            int pri = tasks[i].value("priority", 99);
+            if (pri < best_priority) {
+                best_priority = pri;
+                best_idx = i;
+            }
+        }
+
+        if (best_idx == -1) {
+            std::cout << "[EXECUTIVE] All tasks complete. NeuroSwarm has achieved its goals." << std::endl;
+            return;
+        }
+
+        auto& task = tasks[best_idx];
+        std::string task_id   = task.value("id", "UNKNOWN");
+        std::string title     = task.value("title", "");
+        std::string desc      = task.value("description", "");
+        task["attempts"]      = task.value("attempts", 0) + 1;
+
+        // Persist incremented attempt count
+        std::ofstream out("./tasks.json");
+        out << tasks_doc.dump(2);
+        out.close();
+
+        std::string cid = "ralph_" + task_id + "_" + std::to_string(std::time(nullptr));
         GoalState state;
-        state.goal = goal;
-        state.active = true;
+        state.goal    = desc;
+        state.active  = true;
+        state.task_id = task_id;
         active_goals[cid] = state;
 
-        std::cout << "[EXECUTIVE] Epistemic Drive Triggered: Seeking new knowledge and self-improvement..." << std::endl;
-        request_thought(cid, "GOAL: " + goal + "\nHISTORY: " + state.history + "\nInitiate task breakdown for this self-assigned learning goal.");
+        std::cout << "[EXECUTIVE] Ralph Loop — starting task [" << task_id << "]: " << title << std::endl;
+
+        // Query Hippocampus first (same flow as user goals)
+        json mem_req = {
+            {"cid", cid}, {"origin", "frontal_executive"},
+            {"intent", "search_memory"}, {"query", desc}
+        };
+        dispatch_to_all(mem_req);
+    }
+
+    // Ralph loop — called when a task's execution succeeds and the goal is complete
+    void mark_task_complete(const std::string& cid) {
+        auto it = active_goals.find(cid);
+        if (it == active_goals.end()) return;
+        const std::string& task_id = it->second.task_id;
+        if (task_id.empty()) return;
+
+        // Update tasks.json: passes=true, completed_at, learned
+        std::ifstream fin("./tasks.json");
+        if (!fin.is_open()) return;
+        json tasks_doc;
+        try { fin >> tasks_doc; } catch (...) { return; }
+        fin.close();
+
+        std::time_t now = std::time(nullptr);
+        char ts[64];
+        std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", std::gmtime(&now));
+
+        for (auto& t : tasks_doc["tasks"]) {
+            if (t.value("id", "") == task_id) {
+                t["passes"]       = true;
+                t["completed_at"] = std::string(ts);
+                t["learned"]      = it->second.last_cmd;
+                break;
+            }
+        }
+
+        std::ofstream fout("./tasks.json");
+        fout << tasks_doc.dump(2);
+        fout.close();
+
+        // Append to progress.txt
+        std::ofstream prog("./progress.txt", std::ios::app);
+        prog << "[" << ts << "] COMPLETED " << task_id << " | cmd: " << it->second.last_cmd << "\n";
+        prog.close();
+
+        // Git commit
+        std::string commit_msg = "ralph: completed " + task_id;
+        for (auto& t : tasks_doc["tasks"]) {
+            if (t.value("id", "") == task_id) {
+                commit_msg += " - " + t.value("title", "");
+                break;
+            }
+        }
+        std::string cmd = "git -C . add tasks.json progress.txt && git -C . commit -m \"" + commit_msg + "\" 2>&1";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (pipe) {
+            char buf[256];
+            std::string git_out;
+            while (fgets(buf, sizeof(buf), pipe)) git_out += buf;
+            pclose(pipe);
+            std::cout << "[EXECUTIVE] Ralph commit: " << git_out;
+        }
+
+        std::cout << "[EXECUTIVE] Ralph Loop — task " << task_id << " PASSED and committed." << std::endl;
     }
 
     void request_thought(const std::string& cid, const std::string& extra_prompt = "") {
@@ -326,10 +485,10 @@ private:
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", "executive"},
-            {"grammar", "\nroot   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\x00-\\x1F] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ([0-9] | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [+-]? [0-9]+)?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
-            {"text", "<|im_start|>system\nFRONTAL EXECUTIVE OF NEUROSWARM\nCRITICAL: The 'command' field must contain a REAL BASH command.\nMODES: Use 'mode': 'reality' for normal commands, and 'mode': 'neuro_surgery' ONLY when modifying and recompiling NeuroSwarm source code (src/*.cpp).\nExample for Neuro-Surgery: {\"thought\": \"optimizing thalamus\", \"command\": \"sed -i 's/old/new/g' src/brainstem/Thalamus.cpp\", \"mode\": \"neuro_surgery\", \"status\": \"COMPLETED\"}\nNEVER use placeholders like 'bash' or 'python' alone.\nRespond ONLY with the JSON structure.\n"
+            {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
+            {"text", "<|system|>\nFRONTAL EXECUTIVE OF NEUROSWARM\nCRITICAL: The 'command' field must contain a REAL BASH command.\nMODES: Use 'mode': 'reality' for normal commands, and 'mode': 'neuro_surgery' ONLY when modifying and recompiling NeuroSwarm source code (src/*.cpp).\nExample for Neuro-Surgery: {\"thought\": \"optimizing thalamus\", \"command\": \"sed -i 's/old/new/g' src/brainstem/Thalamus.cpp\", \"mode\": \"neuro_surgery\", \"status\": \"COMPLETED\"}\nNEVER use placeholders like 'bash' or 'python' alone.\nRespond ONLY with the JSON structure.\n"
              + (system_knowledge.empty() ? "" : "\n" + system_knowledge + "\n")
-             + "<|im_end|>\n<|im_start|>user\nGOAL: " + state.goal + state.memory_context + "\nHISTORY: " + state.history + "\n" + extra_prompt + "<|im_end|>\n<|im_start|>assistant\n"}
+             + "<|end|>\n<|user|>\nGOAL: " + state.goal + state.memory_context + "\nHISTORY: " + state.history + "\n" + extra_prompt + "<|end|>\n<|assistant|>\n"}
         };
         dispatch_to_all(req);
     }
