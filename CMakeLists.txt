@@ -67,9 +67,12 @@ add_executable(rem_engine src/inference/REMEngine.cpp)
 target_link_libraries(rem_engine PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
-target_link_libraries(CerebralMatrix PRIVATE pthread)
+target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
 
 # 5. Tests & Diagnostics
+add_executable(genesis_test tests/genesis_test.cpp)
+target_link_libraries(genesis_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(inference_test tests/inference_test.cpp src/inference/ModelManager.cpp)
 target_link_libraries(inference_test PRIVATE cppzmq nlohmann_json::nlohmann_json ${SYSTEM_LIBS})
 

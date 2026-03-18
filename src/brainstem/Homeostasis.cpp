@@ -37,14 +37,16 @@ public:
                 {"cpu_load", state[0]},
                 {"ram_used_gb", state[1]},
                 {"vram_used_mb", state[2]},
+                {"gpu_load", state[3]},
                 {"success_rate", success_rate},
                 {"ts", std::time(nullptr)}
             };
             
             dispatch(pulse);
 
-            // Logic: If success rate < 50% AND we have enough data, signal high stress
-            if (success_rate < 0.5f && success_rate >= 0.0f) {
+            // Logic: If success rate < 10% AND we have enough data, signal high stress occasionally
+            static int alert_cooldown = 0;
+            if (success_rate < 0.1f && success_rate >= 0.0f && alert_cooldown <= 0) {
                 json alert = {
                     {"origin", "homeostasis"},
                     {"intent", "high_stress_alert"},
@@ -52,7 +54,9 @@ public:
                     {"value", success_rate}
                 };
                 dispatch(alert);
+                alert_cooldown = 30; // Only alert every 30 seconds
             }
+            if (alert_cooldown > 0) alert_cooldown--;
 
             // Logic: If CPU is idle (< 5%) for a while, suggest sleep
             if (state[0] < 0.05f) {
@@ -84,6 +88,7 @@ private:
         float cpu = 0.0f;
         float ram = 0.0f;
         float vram = 0.0f;
+        float gpu = 0.0f;
 
         // CPU Load (1 min avg)
         double load[3];
@@ -99,9 +104,22 @@ private:
         }
         if (total > 0) ram = (float)(total - free) / 1024.0f / 1024.0f; // GB
 
-        // VRAM (Simple check via nvidia-smi if available)
-        // In a real implementation, use NVML. Here we mock or use popen.
-        return {cpu, ram, vram};
+        // GPU/VRAM (Attempt via nvidia-smi)
+        FILE* pipe = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null", "r");
+        if (pipe) {
+            char buffer[128];
+            if (fgets(buffer, 128, pipe)) {
+                sscanf(buffer, "%f, %f", &gpu, &vram);
+                gpu /= 100.0f; // Normalize to 0.0-1.0
+            }
+            pclose(pipe);
+        } else {
+            // Fallback for non-nvidia or Vulkan generic (Mocked based on Brain activity)
+            gpu = (cpu > 0.5f) ? 0.8f : 0.1f; 
+            vram = 1120.0f; // Approximate for the loaded model
+        }
+
+        return {cpu, ram, vram, gpu};
     }
 
     float calculate_success_rate() {

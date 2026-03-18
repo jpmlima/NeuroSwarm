@@ -15,8 +15,16 @@ int main(int argc, char** argv) {
     }
 
     try {
-        neuroswarm::ModelManager brain("/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf");
+        neuroswarm::ModelManager brain(
+            "/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            "/home/xenomai/Documents/NeuroSwarm/models/nomic-embed-text-v1.5.Q8_0.gguf"
+        );
         
+        if (!brain.is_alive()) {
+            std::cerr << "FATAL: Brain Model failed to initialize. Exiting." << std::endl;
+            return 1;
+        }
+
         zmq::context_t ctx(1);
         zmq::socket_t sub(ctx, zmq::socket_type::sub);
         sub.connect("tcp://" + thalamus_ip + ":5556");
@@ -39,6 +47,8 @@ int main(int argc, char** argv) {
                 std::string intent = j.value("intent", "");
                 std::string cid = j.value("cid", "unknown");
 
+                if (intent == "critic_validate") continue; // Handled exclusively by CriticLobe
+
                 if (j.value("origin", "") != "synaptic_controller" && intent == "embedding_request") {
                     std::string text = j.value("text", "");
                     auto vec = brain.get_embeddings(text);
@@ -59,8 +69,10 @@ int main(int argc, char** argv) {
                     
                     // Dynamic Adapter Selection: Use specific adapter if provided
                     std::string adapter = j.value("adapter", "default");
+                    std::string grammar = j.value("grammar", "");
                     
-                    std::string response = brain.fire(adapter, prompt);
+                    std::string response = brain.fire(adapter, prompt, grammar);
+                    std::cout << "[BRAIN] Inference completed for CID " << cid << ". Response size: " << response.size() << " chars." << std::endl;
                     
                     json resp = {
                         {"cid", cid},

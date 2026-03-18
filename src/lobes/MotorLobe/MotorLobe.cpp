@@ -26,6 +26,9 @@ public:
             zmq::message_t msg;
             if (sub.recv(msg, zmq::recv_flags::none)) {
                 std::string raw(static_cast<char*>(msg.data()), msg.size());
+                if (raw.find("genesis_request") != std::string::npos) {
+                    std::cout << "[MOTOR] Raw genesis message: " << raw << std::endl;
+                }
                 try {
                     if (raw[0] != '{') continue;
                     auto j = json::parse(raw);
@@ -62,6 +65,38 @@ public:
                             {"exit_code", exit_code},
                             {"status", (exit_code == 0 ? "success" : "failure")},
                             {"mode", mode}
+                        };
+                        dispatch(resp);
+                    } else if (j.value("intent", "") == "genesis_request") {
+                        std::cout << "[MOTOR] Received genesis_request!" << std::endl;
+                        std::string name = j.value("name", "NEW_LOBE");
+                        std::string source = j.value("source_path", "");
+                        std::string output = j.value("output_path", "build/lib" + name + ".so");
+                        
+                        // ABSOLUTE ROBUSTNESS: Include root paths
+                        std::string cmd = "g++ -shared -fPIC -std=c++17 -I./include -I./external/llama.cpp/vendor/ " + source + " -o " + output + " -lzmq";
+                        std::cout << "[MOTOR] Genesis compiling: " << cmd << std::endl;
+                        
+                        int exit_code = 0;
+                        std::string out = execute(cmd, exit_code);
+                        std::cout << "[MOTOR] Genesis compilation exit_code: " << exit_code << ", output: " << out << std::endl;
+                        
+                        if (exit_code == 0) {
+                            json inject = {
+                                {"intent", "inject_lobe"},
+                                {"name", name},
+                                {"path", output}
+                            };
+                            dispatch(inject);
+                            out += "\n[MOTOR] Genesis successful. Injection signal sent to Matrix.";
+                        }
+                        
+                        json resp = {
+                            {"origin", "motor_cortex"},
+                            {"intent", "genesis_result"},
+                            {"proprioception", out},
+                            {"exit_code", exit_code},
+                            {"status", (exit_code == 0 ? "success" : "failure")}
                         };
                         dispatch(resp);
                     }

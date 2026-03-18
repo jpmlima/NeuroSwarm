@@ -54,26 +54,45 @@ private:
     fs::path base_dir;
     std::mutex io_mutex;
 
+    // Pending embedding requests: embed_cid → engram waiting to be indexed
+    struct PendingEmbed { json engram; };
+    std::map<std::string, PendingEmbed> pending_embeds;
+
     void process_neural_event(const json& event) {
         std::string intent = event.value("intent", "");
-        std::string cid = event.value("cid", "global_stream");
+        std::string cid    = event.value("cid", "global_stream");
 
         if (intent == "recall_memory") {
             handle_recall(cid, event);
-        } 
+        }
         else if (intent == "search_memory") {
             handle_search(event);
         }
         else if (intent == "consolidate_memories") {
             handle_consolidation(cid);
         }
-        else {
-            // Standard record of experience
-            record_engram(cid, event);
-            // Also mirror to global stream for cross-pollination
-            if (cid != "global_stream") {
-                record_engram("global_stream", event);
+        // Resolve a pending embedding: store the indexed memory
+        else if (intent == "embedding_result" && pending_embeds.count(cid)) {
+            std::vector<float> emb = event.value("embedding", std::vector<float>{});
+            if (!emb.empty()) {
+                json indexed = pending_embeds[cid].engram;
+                indexed["embedding"] = emb;
+                std::lock_guard<std::mutex> lock(io_mutex);
+                std::ofstream f(base_dir / "memory_index.jsonl", std::ios::app);
+                f << indexed.dump() << "\n";
+                std::cout << "[HIPPOCAMPUS] Memory indexed. Dim=" << emb.size() << std::endl;
             }
+            pending_embeds.erase(cid);
+        }
+        // When a task succeeds, log it AND request its embedding for semantic indexing
+        else if (intent == "execution_result" && event.value("status", "") == "success") {
+            record_engram(cid, event);
+            if (cid != "global_stream") record_engram("global_stream", event);
+            request_memory_embedding(cid, event);
+        }
+        else {
+            record_engram(cid, event);
+            if (cid != "global_stream") record_engram("global_stream", event);
         }
     }
 
@@ -120,83 +139,117 @@ private:
     }
 
     void handle_search(const json& request) {
-        std::lock_guard<std::mutex> lock(io_mutex);
         std::string query = request.value("query", "");
-        std::string cid = request.value("cid", "global");
+        std::string cid   = request.value("cid", "global");
 
-        std::cout << "[HIPPOCAMPUS] Semantic Search: '" << query << "'" << std::endl;
+        std::cout << "[HIPPOCAMPUS] Semantic search: '" << query << "'" << std::endl;
 
-        // 1. Request embedding for query
+        // 1. Request embedding for the query
+        std::string search_cid = "hip_search_" + cid;
         json emb_req = {
-            {"cid", cid + "_search"},
-            {"origin", "hippocampus"},
-            {"intent", "embedding_request"},
-            {"text", query}
+            {"cid", search_cid}, {"origin", "hippocampus"},
+            {"intent", "embedding_request"}, {"text", query}
         };
         dispatch(emb_req);
 
-        // 2. Wait for result (Synchronous block for simplicity in search)
+        // 2. Wait up to 10s for the embedding result
         std::vector<float> query_vec;
-        auto start = std::chrono::steady_clock::now();
-        while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < deadline) {
             zmq::message_t msg;
             if (sub.recv(msg, zmq::recv_flags::dontwait)) {
-                auto j = json::parse(static_cast<char*>(msg.data()), static_cast<char*>(msg.data()) + msg.size());
-                if (j.value("intent", "") == "embedding_result" && j.value("cid", "") == cid + "_search") {
-                    query_vec = j.value("embedding", std::vector<float>{});
-                    break;
-                }
+                try {
+                    auto j = json::parse(static_cast<char*>(msg.data()),
+                                         static_cast<char*>(msg.data()) + msg.size());
+                    if (j.value("intent", "") == "embedding_result" &&
+                        j.value("cid", "") == search_cid) {
+                        query_vec = j.value("embedding", std::vector<float>{});
+                        break;
+                    }
+                } catch (...) {}
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
 
         if (query_vec.empty()) {
-            // Fallback to keyword search if embedding fails
             keyword_search(query, request);
             return;
         }
 
-        // 3. Scan all engrams and calculate cosine similarity
+        // 3. Scan memory_index.jsonl (only indexed, embedded memories)
         struct Match { json engram; float score; };
         std::vector<Match> results;
-
-        for (const auto& entry : fs::directory_iterator(base_dir)) {
-            if (entry.path().extension() == ".jsonl") {
-                std::ifstream file(entry.path());
+        {
+            std::lock_guard<std::mutex> lock(io_mutex);
+            fs::path index_path = base_dir / "memory_index.jsonl";
+            if (fs::exists(index_path)) {
+                std::ifstream f(index_path);
                 std::string line;
-                while (std::getline(file, line)) {
+                while (std::getline(f, line)) {
                     try {
                         auto j = json::parse(line);
-                        if (j.contains("embedding")) {
-                            std::vector<float> emb = j["embedding"];
-                            float score = 0;
-                            for (size_t i = 0; i < std::min(query_vec.size(), emb.size()); ++i)
-                                score += query_vec[i] * emb[i];
-                            
-                            results.push_back({j, score});
-                        }
+                        std::vector<float> emb = j.value("embedding", std::vector<float>{});
+                        if (emb.empty()) continue;
+
+                        // Dot product of normalised vectors = cosine similarity
+                        float score = 0.0f;
+                        size_t dim = std::min(query_vec.size(), emb.size());
+                        for (size_t i = 0; i < dim; ++i) score += query_vec[i] * emb[i];
+                        results.push_back({j, score});
                     } catch (...) {}
                 }
             }
         }
 
-        std::sort(results.begin(), results.end(), [](const Match& a, const Match& b) {
-            return a.score > b.score;
-        });
+        std::sort(results.begin(), results.end(),
+                  [](const Match& a, const Match& b) { return a.score > b.score; });
 
         std::vector<json> final_matches;
-        for (size_t i = 0; i < std::min(results.size(), (size_t)5); ++i) 
-            final_matches.push_back(results[i].engram);
+        for (size_t i = 0; i < std::min(results.size(), (size_t)5); ++i) {
+            json m = results[i].engram;
+            m.erase("embedding"); // não enviar o vector inteiro pelo bus
+            m["similarity"] = results[i].score;
+            final_matches.push_back(m);
+        }
+
+        std::string mode = final_matches.empty() ? "keyword_fallback" : "semantic";
+        if (final_matches.empty()) {
+            keyword_search(query, request);
+            return;
+        }
 
         json search_result = {
-            {"cid", cid},
-            {"origin", "hippocampus"},
-            {"intent", "search_result"},
-            {"query", query},
-            {"matches", final_matches},
-            {"mode", "semantic"}
+            {"cid", cid}, {"origin", "hippocampus"}, {"intent", "search_result"},
+            {"query", query}, {"matches", final_matches}, {"mode", mode}
         };
         dispatch(search_result);
+    }
+
+    void request_memory_embedding(const std::string& cid, const json& event) {
+        std::string cmd     = event.value("command", "");
+        std::string result  = event.value("proprioception", "").substr(0, 300);
+        std::string mode    = event.value("mode", "reality");
+
+        // Build a descriptive text for the embedding
+        std::string embed_text = "COMMAND: " + cmd + " RESULT: " + result;
+
+        json seed = {
+            {"origin_cid",  cid},
+            {"intent",      "memory_seed"},
+            {"command",     cmd},
+            {"result_summary", result},
+            {"mode",        mode},
+            {"synapse_ts",  std::time(nullptr)}
+        };
+
+        std::string embed_cid = "hip_embed_" + std::to_string(std::time(nullptr)) + "_" + cid;
+        pending_embeds[embed_cid] = {seed};
+
+        json req = {
+            {"cid", embed_cid}, {"origin", "hippocampus"},
+            {"intent", "embedding_request"}, {"text", embed_text}
+        };
+        dispatch(req);
     }
 
     void keyword_search(const std::string& query, const json& request) {

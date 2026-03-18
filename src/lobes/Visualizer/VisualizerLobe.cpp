@@ -48,7 +48,7 @@ private:
     zmq::socket_t sub;
     std::mutex event_mutex;
     std::deque<json> event_buffer;
-    const size_t max_events = 50;
+    const size_t max_events = 300;
 
     void listen_zmq() {
         while (true) {
@@ -71,135 +71,190 @@ private:
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>NeuroSwarm // Cortex Monitor</title>
+    <title>NEUROSWARM // EVOLUTION DASHBOARD</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg: #0a0a0a;
-            --panel: #111111;
-            --accent: #00e5ff;
-            --text-main: #e0e0e0;
-            --text-dim: #666666;
-            --border: #222222;
+            --bg: #030303;
+            --panel: #0a0a0a;
+            --accent: #00f2ff;
+            --accent-dim: rgba(0, 242, 255, 0.1);
+            --danger: #ff0055;
+            --success: #00ffaa;
+            --evolution: #aa00ff;
+            --text-main: #f0f0f0;
+            --text-dim: #555555;
+            --border: #151515;
         }
+        * { box-sizing: border-box; }
         body { 
             margin: 0; background: var(--bg); color: var(--text-main); 
-            font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
-            font-weight: 300; letter-spacing: -0.02em;
-            display: grid; grid-template-columns: 350px 1fr; height: 100vh;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            display: grid; grid-template-columns: 320px 1fr 400px; height: 100vh;
+            overflow: hidden;
         }
-        #sidebar {
+
+        /* Sidebars */
+        .sidebar {
             background: var(--panel); border-right: 1px solid var(--border);
-            padding: 40px; display: flex; flex-direction: column; gap: 30px;
-            z-index: 10;
+            display: flex; flex-direction: column; padding: 15px; gap: 15px;
+            overflow-y: auto;
         }
-        header h1 { font-size: 14px; font-weight: 600; text-transform: uppercase; margin: 0; color: var(--accent); }
-        header p { font-size: 12px; color: var(--text-dim); margin: 5px 0 0 0; }
-        
-        .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .metric-box { border-top: 1px solid var(--border); padding-top: 10px; }
-        .metric-label { font-size: 10px; text-transform: uppercase; color: var(--text-dim); }
-        .metric-value { font-size: 24px; font-weight: 200; font-variant-numeric: tabular-nums; }
+        .sidebar-right { border-right: none; border-left: 1px solid var(--border); }
 
-        #event-stream {
-            flex-grow: 1; overflow-y: hidden; font-family: "SF Mono", "Menlo", monospace;
-            font-size: 11px; color: var(--text-dim); line-height: 1.6;
-        }
-        .event-line { border-bottom: 1px solid #181818; padding: 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .event-line b { color: var(--text-main); font-weight: 500; }
-
-        #viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
-        canvas { outline: none; }
+        /* Panels */
+        .panel { border: 1px solid var(--border); padding: 15px; position: relative; background: rgba(10,10,10,0.8); border-radius: 4px; }
+        .panel-label { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; letter-spacing: 1.5px; opacity: 0.8; }
         
-        #lobe-indicator {
-            position: absolute; top: 40px; right: 40px; text-align: right;
-            font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;
+        /* Evolutionary Metrics */
+        .evo-stat { text-align: center; margin-bottom: 20px; }
+        .evo-value { font-size: 32px; font-weight: 900; color: var(--evolution); text-shadow: 0 0 15px var(--evolution); }
+        .evo-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; }
+
+        /* Homeostatic Details */
+        .homeo-card { display: flex; flex-direction: column; gap: 10px; }
+        .homeo-metric { background: #000; padding: 10px; border-radius: 3px; border-left: 3px solid var(--border); }
+        .homeo-metric.danger { border-left-color: var(--danger); }
+        .homeo-metric.success { border-left-color: var(--success); }
+        .h-label { font-size: 11px; color: #888; display: block; }
+        .h-val { font-size: 16px; font-weight: bold; }
+        .h-desc { font-size: 9px; color: #444; font-style: italic; }
+
+        /* Breakthroughs */
+        #breakthroughs { flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .bt-entry { background: #111; padding: 10px; border-radius: 4px; border: 1px solid #1a1a1a; animation: slideIn 0.3s ease-out; }
+        .bt-tag { font-size: 9px; font-weight: bold; padding: 2px 5px; border-radius: 2px; margin-bottom: 5px; display: inline-block; }
+        .bt-text { font-size: 11px; line-height: 1.4; color: #ccc; }
+        .bt-time { font-size: 9px; color: #444; float: right; }
+
+        @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* Main Viewport */
+        #main-view { position: relative; display: flex; flex-direction: column; }
+        #viewport { flex-grow: 1; }
+        #osd {
+            position: absolute; top: 20px; left: 20px; right: 20px;
+            display: flex; gap: 20px; pointer-events: none;
         }
+        .osd-panel { background: rgba(0,0,0,0.8); border: 1px solid var(--border); padding: 15px; border-radius: 4px; flex: 1; }
+
+        /* Logs */
+        #log-content { font-size: 9px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; height: 150px; border-top: 1px solid #111; padding-top: 10px; }
+        .log-entry { color: #555; }
+        .log-origin { color: var(--accent); font-weight: bold; margin-right: 5px; }
+
+        #thought-console { background: #000; border: 1px solid #111; padding: 10px; height: 350px; overflow-y: auto; font-family: monospace; font-size: 11px; }
     </style>
 </head>
 <body>
-    <div id="sidebar">
-        <header>
-            <h1>NeuroSwarm CNS</h1>
-            <p>Biomimetic Orchestration Framework</p>
-        </header>
-
-        <div class="metric-grid">
-            <div class="metric-box">
-                <div class="metric-label">System Stress</div>
-                <div id="stress-val" class="metric-value">0.00</div>
-            </div>
-            <div class="metric-box">
-                <div class="metric-label">Efficiency</div>
-                <div id="success-val" class="metric-value">1.00</div>
-            </div>
+    <div class="sidebar">
+        <div class="evo-stat">
+            <div id="evo-count" class="evo-value">0</div>
+            <div class="evo-label">Evolutionary Memories</div>
         </div>
 
-        <div id="event-stream">
-            <div class="metric-label" style="margin-bottom: 10px;">Synaptic Stream</div>
+        <div class="panel">
+            <div class="panel-label">Homeostatic Health</div>
+            <div class="homeo-card">
+                <div id="stress-card" class="homeo-metric">
+                    <span class="h-label">Cognitive Friction (Stress)</span>
+                    <span id="stress-val" class="h-val">0.00</span>
+                    <span class="h-desc">High friction causes system paralysis.</span>
+                </div>
+                <div id="success-card" class="homeo-metric">
+                    <span class="h-label">Synaptic Accuracy (Success)</span>
+                    <span id="success-val" class="h-val">1.00</span>
+                    <span class="h-desc">Percentage of goals achieved recently.</span>
+                </div>
+            </div>
+            <div style="height: 100px; margin-top: 15px;"><canvas id="homeoChart"></canvas></div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-label">Neural Workload</div>
+            <div class="metric"><span class="metric-label">Inference Load</span><span id="gpu-val" class="metric-value">0%</span></div>
+            <div style="height: 80px;"><canvas id="gpuChart"></canvas></div>
+            <div class="metric" style="margin-top:10px;"><span class="metric-label">System Pulse</span><span id="cpu-val" class="metric-value">0%</span></div>
+        </div>
+    </div>
+
+    <div id="main-view">
+        <div id="osd">
+            <div class="osd-panel">
+                <div class="panel-label">Current Cognitive Focus</div>
+                <div id="active-goal" style="color: var(--success); font-weight: bold;">Idle...</div>
+            </div>
+            <div class="osd-panel">
+                <div class="panel-label">Active Thought</div>
+                <div id="last-thought" style="color: #888; font-style: italic;">Standby.</div>
+            </div>
+        </div>
+        <div id="viewport"></div>
+    </div>
+
+    <div class="sidebar sidebar-right">
+        <div class="panel" style="flex-grow: 1; display: flex; flex-direction: column;">
+            <div class="panel-label">Major Breakthroughs & Learning</div>
+            <div id="breakthroughs">
+                <div style="color: #333; text-align: center; margin-top: 50px;">Waiting for evolution trace...</div>
+            </div>
+        </div>
+        
+        <div class="panel" style="height: 40%; display: flex; flex-direction: column;">
+            <div class="panel-label">Thought Dialogue</div>
+            <div id="thought-console"></div>
             <div id="log-content"></div>
         </div>
     </div>
 
-    <div id="viewport">
-        <div id="lobe-indicator">State: <span id="active-name" style="color: var(--accent)">Optimal</span></div>
-    </div>
-
     <script>
         let scene, camera, renderer, points;
-        const lobeMarkers = new Map();
-        const coords = {
-            'thalamus': {x: 0, y: 0, z: 0},
-            'frontal_executive': {x: 0, y: 4, z: 6},
-            'motor_cortex': {x: 0, y: 7, z: 0},
-            'hippocampus': {x: 0, y: -2, z: -4},
-            'synaptic_controller': {x: -4, y: 1, z: 0},
-            'wernicke_lobe': {x: 4, y: 1, z: 4},
-            'broca_lobe': {x: 4, y: 1, z: 6}
-        };
+        let totalSuccesses = 0;
+        let totalLearned = 0;
 
-        function init() {
+        const homeoChart = new Chart(document.getElementById('homeoChart'), {
+            type: 'line', data: { labels: [], datasets: [{ label: 'Stress', data: [], borderColor: '#ff0055', tension: 0.4, fill: false }, { label: 'Success', data: [], borderColor: '#00ffaa', tension: 0.4, fill: false }] },
+            options: { responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { min: 0, max: 1 } }, plugins: { legend: { display: false } }, elements: { point: { radius: 0 } } }
+        });
+
+        const gpuChart = new Chart(document.getElementById('gpuChart'), {
+            type: 'line', data: { labels: [], datasets: [{ label: 'GPU', data: [], borderColor: '#aa00ff', tension: 0.4, fill: true, backgroundColor: 'rgba(170, 0, 255, 0.1)' }] },
+            options: { responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { min: 0, max: 1 } }, plugins: { legend: { display: false } }, elements: { point: { radius: 0 } } }
+        });
+
+        function init3D() {
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(45, (window.innerWidth-350)/window.innerHeight, 0.1, 1000);
-            camera.position.set(15, 10, 20);
-            camera.lookAt(0, 0, 0);
-
+            camera = new THREE.PerspectiveCamera(45, (window.innerWidth-720)/window.innerHeight, 0.1, 1000);
+            camera.position.set(15, 12, 20); camera.lookAt(0, 0, 0);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth - 350, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth - 720, window.innerHeight);
             document.getElementById('viewport').appendChild(renderer.domElement);
-
-            const geometry = new THREE.BufferGeometry();
-            const verts = [];
-            for (let i = 0; i < 3000; i++) {
-                const x = (Math.random() - 0.5) * 18;
-                const y = (Math.random() - 0.5) * 14;
-                const z = (Math.random() - 0.5) * 14;
+            const geometry = new THREE.BufferGeometry(); const verts = [];
+            for (let i = 0; i < 5000; i++) {
+                const x = (Math.random() - 0.5) * 18; const y = (Math.random() - 0.5) * 14; const z = (Math.random() - 0.5) * 14;
                 if ((x*x)/81 + (y*y)/49 + (z*z)/49 < 1) verts.push(x, y, z);
             }
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-            points = new THREE.Points(geometry, new THREE.PointsMaterial({ 
-                color: 0x333333, size: 0.05, transparent: true, opacity: 0.5 
-            }));
+            points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0x1a1a1a, size: 0.05 }));
             scene.add(points);
-
-            Object.keys(coords).forEach(name => {
-                const c = coords[name];
-                const nodeGeo = new THREE.IcosahedronGeometry(0.2, 1);
-                const nodeMat = new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true });
-                const mesh = new THREE.Mesh(nodeGeo, nodeMat);
-                mesh.position.set(c.x, c.y, c.z);
-                scene.add(mesh);
-                lobeMarkers.set(name, mesh);
-            });
-
             animate();
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
-            points.rotation.y += 0.001;
-            renderer.render(scene, camera);
+        function animate() { requestAnimationFrame(animate); points.rotation.y += 0.0003; renderer.render(scene, camera); }
+
+        function addBreakthrough(tag, text, type = 'success') {
+            const container = document.getElementById('breakthroughs');
+            if (container.innerText.includes("Waiting")) container.innerHTML = "";
+            const entry = document.createElement('div');
+            entry.className = 'bt-entry';
+            const color = type === 'success' ? '#00ffaa' : '#aa00ff';
+            const now = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="bt-time">${now}</span>
+                               <span class="bt-tag" style="background:${color}22; color:${color}">${tag}</span>
+                               <div class="bt-text">${text}</div>`;
+            container.prepend(entry);
+            if (container.childNodes.length > 15) container.removeChild(container.lastChild);
         }
 
         async function update() {
@@ -208,39 +263,78 @@ private:
                 const events = await res.json();
                 if (events.length === 0) return;
 
-                const latest = events[0];
-                const log = document.getElementById('log-content');
-                
-                const line = document.createElement('div');
-                line.className = 'event-line';
-                line.innerHTML = `<b>${latest.origin}</b> &rarr; ${latest.intent}`;
-                log.prepend(line);
-                if (log.childNodes.length > 12) log.removeChild(log.lastChild);
+                events.reverse().forEach(event => {
+                    if (event.intent === "homeostatic_pulse") {
+                        const success = event.success_rate < 0 ? 0 : event.success_rate;
+                        const stress = 1.0 - success;
+                        document.getElementById('stress-val').innerText = stress.toFixed(2);
+                        document.getElementById('success-val').innerText = success.toFixed(2);
+                        document.getElementById('gpu-val').innerText = (event.gpu_load * 100).toFixed(0) + "%";
+                        document.getElementById('cpu-val').innerText = (event.cpu_load * 100).toFixed(0) + "%";
+                        
+                        document.getElementById('stress-card').className = 'homeo-metric ' + (stress > 0.5 ? 'danger' : '');
+                        document.getElementById('success-card').className = 'homeo-metric ' + (success > 0.8 ? 'success' : '');
 
-                if (lobeMarkers.has(latest.origin)) {
-                    const m = lobeMarkers.get(latest.origin);
-                    m.scale.set(4, 4, 4);
-                    m.material.color.set(0x00e5ff);
-                    setTimeout(() => {
-                        m.scale.set(1, 1, 1);
-                        m.material.color.set(0x444444);
-                    }, 200);
-                }
+                        homeoChart.data.labels.push("");
+                        homeoChart.data.datasets[0].data.push(stress);
+                        homeoChart.data.datasets[1].data.push(success);
+                        if (homeoChart.data.labels.length > 30) { homeoChart.data.labels.shift(); homeoChart.data.datasets[0].data.shift(); homeoChart.data.datasets[1].data.shift(); }
+                        homeoChart.update('none');
 
-                if (latest.intent === "homeostatic_pulse") {
-                    document.getElementById('success-val').innerText = latest.success_rate.toFixed(2);
-                    document.getElementById('stress-val').innerText = (1.0 - latest.success_rate).toFixed(2);
-                }
+                        gpuChart.data.labels.push("");
+                        gpuChart.data.datasets[0].data.push(event.gpu_load);
+                        if (gpuChart.data.labels.length > 30) { gpuChart.data.labels.shift(); gpuChart.data.datasets[0].data.shift(); }
+                        gpuChart.update('none');
+                        return;
+                    }
+
+                    if (event.intent === "execution_result") {
+                        if (event.status === "success") {
+                            totalSuccesses++;
+                            addBreakthrough("GOAL ACHIEVED", event.proprioception || "Task completed successfully.", "success");
+                        }
+                    }
+
+                    if (event.intent === "sleep_cycle_complete") {
+                        totalLearned += event.learned_memories;
+                        document.getElementById('evo-count').innerText = totalLearned;
+                        addBreakthrough("EVOLUTION COMPLETE", `Integrated ${event.learned_memories} new successful memories.`, "evo");
+                    }
+
+                    if (event.origin === "frontal_executive") {
+                        if (event.intent === "inference_request") {
+                             const goalMatch = event.text.match(/GOAL: (.*?)\n/);
+                             if (goalMatch) document.getElementById('active-goal').innerText = goalMatch[1];
+                        }
+                    }
+                    
+                    if (event.origin === "synaptic_controller" && event.intent === "inference_result") {
+                        try {
+                            const thoughtMatch = event.text.match(/"thought": "(.*?)"/);
+                            if (thoughtMatch) document.getElementById('last-thought').innerText = thoughtMatch[1];
+                            
+                            if (event.adapter === "critic") {
+                                const console = document.getElementById('thought-console');
+                                const div = document.createElement('div');
+                                div.style.color = event.text.includes("APPROVED") ? "#00ffaa" : "#888";
+                                div.innerHTML = `<span style="color:#444">></span> ${event.text.substring(0, 200)}...`;
+                                console.prepend(div);
+                            }
+                        } catch(e) {}
+                    }
+
+                    const log = document.getElementById('log-content');
+                    const line = document.createElement('div');
+                    line.className = 'log-entry';
+                    line.innerHTML = `<span class="log-origin">${event.origin}</span> ${event.intent}`;
+                    log.prepend(line);
+                    if (log.childNodes.length > 20) log.removeChild(log.lastChild);
+                });
             } catch(e) {}
         }
 
-        init();
-        setInterval(update, 800);
-        window.onresize = () => {
-            camera.aspect = (window.innerWidth-350) / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth-350, window.innerHeight);
-        };
+        init3D(); setInterval(update, 1000);
+        window.onresize = () => { renderer.setSize(window.innerWidth-720, window.innerHeight); camera.aspect = (window.innerWidth-720)/window.innerHeight; camera.updateProjectionMatrix(); };
     </script>
 </body>
 </html>

@@ -49,8 +49,8 @@ public:
                 last_known_scene = current_scene;
             }
 
-            // Retinal Refresh Rate (10s)
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+            // Retinal Refresh Rate (60s)
+            std::this_thread::sleep_for(std::chrono::seconds(60));
         }
     }
 
@@ -98,9 +98,15 @@ private:
         std::vector<FileState> scene;
         try {
             for (const auto& entry : fs::recursive_directory_iterator(root_path)) {
-                if (entry.path().string().find("/.") != std::string::npos || 
-                    entry.path().string().find("/build") != std::string::npos || 
-                    entry.path().string().find("/external") != std::string::npos) {
+                std::string path_str = entry.path().string();
+                
+                // NOISE FILTER: Ignore own memories and logs
+                if (path_str.find("/.") != std::string::npos || 
+                    path_str.find("/build") != std::string::npos || 
+                    path_str.find("/external") != std::string::npos ||
+                    path_str.find(".log") != std::string::npos ||
+                    path_str.find(".jsonl") != std::string::npos ||
+                    path_str.find(".tmp") != std::string::npos) {
                     continue;
                 }
 
@@ -139,9 +145,18 @@ private:
 
     void generate_visual_stimulus(const std::vector<std::string>& changes) {
         std::string description = "Visual cortical update. Saliency changes detected:\n";
-        for (const auto& c : changes) description += "- " + c + "\n";
+        
+        // Capping to 20 changes to avoid prompt overload
+        size_t limit = std::min((size_t)20, changes.size());
+        for (size_t i = 0; i < limit; ++i) {
+            description += "- " + changes[i] + "\n";
+        }
+        
+        if (changes.size() > 20) {
+            description += "... and " + std::to_string(changes.size() - 20) + " more changes.\n";
+        }
 
-        std::cout << "[VISUAL LOBE] Distributing visual stimulus to Thalamus." << std::endl;
+        std::cout << "[VISUAL LOBE] Distributing visual stimulus to Thalamus (" << limit << " items)." << std::endl;
 
         json stimulus = {
             {"cid", "visual_" + std::to_string(std::time(nullptr))},

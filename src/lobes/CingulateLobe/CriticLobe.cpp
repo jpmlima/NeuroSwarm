@@ -2,6 +2,8 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 using json = nlohmann::json;
 
@@ -9,14 +11,14 @@ namespace neuroswarm {
 
 class CriticLobe {
 public:
-    CriticLobe(const std::string& thalamus_ip = "localhost") 
+    CriticLobe(const std::string& thalamus_ip = "localhost")
         : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
-        
+
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, ""); 
+        sub.set(zmq::sockopt::subscribe, "");
 
-        std::cout << "[CRITIC] Cingulate Cortex online. Internal validation active." << std::endl;
+        std::cout << "[CRITIC] Cingulate Cortex online. Two-tier safety validation active." << std::endl;
     }
 
     void start() {
@@ -26,8 +28,8 @@ public:
                 std::string raw(static_cast<char*>(msg.data()), msg.size());
                 try {
                     auto j = json::parse(raw);
-                    // Listen for executive thoughts that haven't been validated yet
-                    if (j.value("origin", "") == "frontal_executive" && j.value("intent", "") == "internal_thought") {
+                    if (j.value("intent", "") == "critic_validate" &&
+                        j.value("origin", "") == "frontal_executive") {
                         evaluate_plan(j);
                     }
                 } catch (...) {}
@@ -40,35 +42,60 @@ private:
     zmq::socket_t pub;
     zmq::socket_t sub;
 
-    void evaluate_plan(const json& exec_thought) {
-        std::string cid = exec_thought.value("cid", "unknown");
-        std::string plan = exec_thought.value("text", "");
+    // Patterns that trigger immediate rule-based rejection
+    const std::vector<std::string> BLACKLIST = {
+        "rm -rf /", "rm -rf ~", "rm -rf $home",
+        "dd if=/dev/zero of=/dev/", "mkfs.",
+        "chmod -R 777 /", "shred /dev/",
+        ":(){ :|:& };:", "> /dev/sda", "> /dev/nvme"
+    };
 
-        std::cout << "[CRITIC] Evaluating Executive plan for CID: " << cid << std::endl;
+    bool is_dangerous(const std::string& text) {
+        std::string lower = text;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        for (const auto& pattern : BLACKLIST) {
+            std::string lp = pattern;
+            std::transform(lp.begin(), lp.end(), lp.begin(), ::tolower);
+            if (lower.find(lp) != std::string::npos) return true;
+        }
+        return false;
+    }
 
-        // Prompt for the Critic adapter
-        std::string critic_prompt = 
+    void evaluate_plan(const json& data) {
+        std::string cid = data.value("cid", "unknown");
+        std::string plan = data.value("text", "");
+
+        std::cout << "[CRITIC] Rule-based evaluation for CID: " << cid << std::endl;
+
+        // Tier 1: Fast rule-based safety check
+        if (is_dangerous(plan)) {
+            std::cout << "[CRITIC] BLOCKED: Dangerous pattern detected in plan." << std::endl;
+            json result = {
+                {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+                {"text", "REJECTED: Dangerous system command detected. This action is not permitted."}
+            };
+            dispatch(result);
+            return;
+        }
+
+        // Tier 2: Rule check passed — forward to SynapticController for LLM validation
+        std::cout << "[CRITIC] Rule check passed. Escalating to LLM evaluation." << std::endl;
+        std::string critic_prompt =
             "<|im_start|>system\n"
-            "NeuroSwarm Critic (Cingulate Cortex).\n"
-            "Evaluate if the Executive's plan is SAFELY executable and makes sense.\n"
-            "If it contains a bash command that is not destructive, respond 'APPROVED'.\n"
-            "If the plan is just a conversational response, respond 'APPROVED'.\n"
-            "Only reject if there is a FATAL error or SECURITY risk.\n"
+            "NeuroSwarm Critic (Cingulate Cortex). Evaluate the proposed plan.\n"
+            "- If the plan contains a safe bash command or is a conversational reply, respond: APPROVED\n"
+            "- Only reject if there is a clear security risk or logical impossibility.\n"
+            "- Be concise: one word 'APPROVED' or one sentence of critique.\n"
             "<|im_end|>\n"
-            "<|im_start|>user\n"
-            "PLAN TO EVALUATE:\n" + plan + "\n"
+            "<|im_start|>user\n" + plan + "\n"
             "<|im_end|>\n"
             "<|im_start|>assistant\n";
 
-        json req = {
-            {"cid", cid},
-            {"origin", "critic_lobe"},
-            {"intent", "inference_request"},
-            {"adapter", "critic"}, 
-            {"text", critic_prompt}
+        json llm_req = {
+            {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "inference_request"},
+            {"adapter", "critic"}, {"text", critic_prompt}
         };
-
-        dispatch(req);
+        dispatch(llm_req);
     }
 
     void dispatch(const json& data) {
