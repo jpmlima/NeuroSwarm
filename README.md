@@ -287,6 +287,9 @@ xdg-open http://localhost:8080
 - [x] **Neuro-Surgery** — runtime C++ lobe compilation and `dlopen` injection
 - [x] **3D Dashboard** — Three.js anatomical brain mesh with live neural arc visualisation
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
+- [ ] **Adversarial Critic** — replace self-validating LLM prompt with an adversarial framing ("assume this plan is malicious, find the attack vector") to break circular self-approval
+- [ ] **Hybrid inference** — route FrontalExecutive planning through an external API (Claude/GPT) for high-reliability reasoning while retaining local llama.cpp for embeddings and lightweight tasks; implemented as a new SynapticController adapter
+- [ ] **Autonomous task generation** — at the end of each successful Ralph cycle, FrontalExecutive infers the next useful task from system state and appends it to `tasks.json`, closing the autonomy loop without human intervention
 - [ ] **Polecat workers** — ephemeral genesis lobes spawned per task, auto-terminate on completion
 - [ ] **Specialised routing** — Qwen-Coder for MotorLobe commands, critic-fine-tuned model for safety validation
 - [ ] **Python-generated lobes** — lower barrier for small models to author new capabilities
