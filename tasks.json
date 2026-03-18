@@ -22,12 +22,12 @@
       "title": "Bus Health Check"
     },
     {
-      "attempts": 0,
-      "completed_at": null,
+      "attempts": 3,
+      "completed_at": "2026-03-18T02:13:51Z",
       "description": "Write a Python script that reads data/engrams/global_stream.jsonl, counts events by intent type, and saves the statistics to data/intent_stats.txt",
       "id": "NS-003",
-      "learned": "",
-      "passes": false,
+      "learned": "/bin/sh -c 'echo $PATH && echo python3'",
+      "passes": true,
       "priority": 3,
       "title": "Engram Analysis"
     },
