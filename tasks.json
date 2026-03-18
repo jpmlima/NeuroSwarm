@@ -1,0 +1,56 @@
+{
+  "project": "NeuroSwarm Self-Evolution",
+  "tasks": [
+    {
+      "attempts": 9,
+      "completed_at": "2026-03-18T01:24:51Z",
+      "description": "Run: ps aux | grep -E 'thalamus|synaptic|frontal|motor_lobe|hippocampus|rem_engine|critic|homeostasis|cerebral' | grep -v grep > data/process_report.txt && echo done. Save PIDs and process names to data/process_report.txt",
+      "id": "NS-001",
+      "learned": "/bin/sh -c 'echo done && ps aux | grep -E \"thalamus|synaptic|frontal|motor_lobe|hippocampus|rem_engine|critic|homeostasis\" > data/process_report.txt'",
+      "passes": true,
+      "priority": 1,
+      "title": "Self-Inventory"
+    },
+    {
+      "attempts": 0,
+      "completed_at": null,
+      "description": "Check if ports 5555 and 5556 are listening and save a health report to data/bus_health.txt",
+      "id": "NS-002",
+      "learned": "",
+      "passes": false,
+      "priority": 2,
+      "title": "Bus Health Check"
+    },
+    {
+      "attempts": 0,
+      "completed_at": null,
+      "description": "Write a Python script that reads data/engrams/global_stream.jsonl, counts events by intent type, and saves the statistics to data/intent_stats.txt",
+      "id": "NS-003",
+      "learned": "",
+      "passes": false,
+      "priority": 3,
+      "title": "Engram Analysis"
+    },
+    {
+      "attempts": 0,
+      "completed_at": null,
+      "description": "Capture current CPU load, RAM usage, and disk usage and save to data/hardware_report.txt",
+      "id": "NS-004",
+      "learned": "",
+      "passes": false,
+      "priority": 4,
+      "title": "Hardware Telemetry"
+    },
+    {
+      "attempts": 0,
+      "completed_at": null,
+      "description": "Create data/capabilities.md with a markdown list of commands the system has successfully executed, extracted from data/engrams/global_stream.jsonl",
+      "id": "NS-005",
+      "learned": "",
+      "passes": false,
+      "priority": 5,
+      "title": "Self-Documentation"
+    }
+  ],
+  "version": "1.0"
+}
