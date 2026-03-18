@@ -36,7 +36,7 @@ public:
                     
                     if (j.value("intent", "") == "execution_request") {
                         std::string cmd = j.value("command", "");
-                        std::string mode = j.value("mode", "reality"); // "reality" or "dream"
+                        std::string mode = j.value("mode", "reality"); // Execution context: "reality" (live), "dream" (sandboxed), or "neuro_surgery" (self-modification)
                         std::string cid = j.value("cid", "unknown");
                         
                         int exit_code = 0;
@@ -49,7 +49,7 @@ public:
                             std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << " exit=" << exit_code << std::endl;
                         } else if (mode == "neuro_surgery") {
                             std::cout << "[MOTOR] WARNING: NEURO-SURGERY INITIATED. MODIFYING OWN SOURCE CODE." << std::endl;
-                            // Neuro-surgery command expects 'cmd' to be a valid bash sequence that writes to src/lobes and compiles.
+                            // Neuro-surgery mode: expects 'cmd' to be a valid shell sequence that patches source files and triggers a full CMake rebuild.
                             out = execute(cmd + " && cd build && cmake .. && make -j$(nproc) 2>&1", exit_code);
                             if (exit_code == 0) {
                                 out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
@@ -74,7 +74,7 @@ public:
                         std::string source = j.value("source_path", "");
                         std::string output = j.value("output_path", "build/lib" + name + ".so");
                         
-                        // ABSOLUTE ROBUSTNESS: Include root paths
+                        // Compile the new lobe as a position-independent shared object with all required include paths
                         std::string cmd = "g++ -shared -fPIC -std=c++17 -I./include -I./external/llama.cpp/vendor/ " + source + " -o " + output + " -lzmq";
                         std::cout << "[MOTOR] Genesis compiling: " << cmd << std::endl;
                         
@@ -132,8 +132,8 @@ private:
 };
 }
 int main() {
-    // CerebralMatrix sets SIGCHLD to SIG_IGN to auto-reap zombies.
-    // popen/pclose need SIGCHLD=SIG_DFL to waitpid() correctly.
+    // CerebralMatrix sets SIGCHLD to SIG_IGN to auto-reap zombie processes.
+    // popen/pclose require SIGCHLD=SIG_DFL for waitpid() to function correctly.
     signal(SIGCHLD, SIG_DFL);
     neuroswarm::MotorLobe().start();
     return 0;

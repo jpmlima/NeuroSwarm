@@ -42,7 +42,7 @@
       "title": "Hardware Telemetry"
     },
     {
-      "attempts": 0,
+      "attempts": 1,
       "completed_at": null,
       "description": "Create data/capabilities.md with a markdown list of commands the system has successfully executed, extracted from data/engrams/global_stream.jsonl",
       "id": "NS-005",

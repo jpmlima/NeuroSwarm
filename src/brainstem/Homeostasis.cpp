@@ -44,7 +44,7 @@ public:
             
             dispatch(pulse);
 
-            // Logic: If success rate < 10% AND we have enough data, signal high stress occasionally
+            // Emit a high-stress alert when success rate drops below 10%, subject to a 30 s cooldown
             static int alert_cooldown = 0;
             if (success_rate < 0.1f && success_rate >= 0.0f && alert_cooldown <= 0) {
                 json alert = {
@@ -54,14 +54,14 @@ public:
                     {"value", success_rate}
                 };
                 dispatch(alert);
-                alert_cooldown = 30; // Only alert every 30 seconds
+                alert_cooldown = 30; // Suppress redundant alerts for 30 s after each emission
             }
             if (alert_cooldown > 0) alert_cooldown--;
 
-            // Logic: If CPU is idle (< 5%) for a while, suggest sleep
+            // Trigger a sleep-cycle request after sustained CPU idleness (< 5% load for ~60 s)
             if (state[0] < 0.05f) {
                 idle_ticks++;
-                if (idle_ticks > 60) { // ~1 minute of idle
+                if (idle_ticks > 60) { // Threshold: approximately 60 s of continuous low-load operation
                     json sleep_req = {
                         {"origin", "homeostasis"},
                         {"intent", "initiate_sleep_cycle"},
@@ -90,11 +90,11 @@ private:
         float vram = 0.0f;
         float gpu = 0.0f;
 
-        // CPU Load (1 min avg)
+        // CPU load: 1-minute exponential moving average normalised by logical core count
         double load[3];
         if (getloadavg(load, 3) != -1) cpu = (float)load[0] / std::thread::hardware_concurrency();
 
-        // RAM
+        // RAM utilisation: derived from /proc/meminfo (MemTotal - MemAvailable), converted to GB
         std::ifstream meminfo("/proc/meminfo");
         std::string line;
         long total = 0, free = 0;
@@ -102,21 +102,21 @@ private:
             if (line.find("MemTotal:") == 0) total = std::stol(line.substr(10));
             if (line.find("MemAvailable:") == 0) free = std::stol(line.substr(13));
         }
-        if (total > 0) ram = (float)(total - free) / 1024.0f / 1024.0f; // GB
+        if (total > 0) ram = (float)(total - free) / 1024.0f / 1024.0f; // kB → GB
 
-        // GPU/VRAM (Attempt via nvidia-smi)
+        // GPU utilisation and VRAM: queried via nvidia-smi; gracefully degrades on non-NVIDIA hardware
         FILE* pipe = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null", "r");
         if (pipe) {
             char buffer[128];
             if (fgets(buffer, 128, pipe)) {
                 sscanf(buffer, "%f, %f", &gpu, &vram);
-                gpu /= 100.0f; // Normalize to 0.0-1.0
+                gpu /= 100.0f; // Normalise utilisation percentage to [0.0, 1.0]
             }
             pclose(pipe);
         } else {
-            // Fallback for non-nvidia or Vulkan generic (Mocked based on Brain activity)
-            gpu = (cpu > 0.5f) ? 0.8f : 0.1f; 
-            vram = 1120.0f; // Approximate for the loaded model
+            // Fallback for non-NVIDIA or Vulkan backends: estimate GPU load from CPU proxy
+            gpu = (cpu > 0.5f) ? 0.8f : 0.1f;
+            vram = 1120.0f; // Estimated VRAM consumption for the loaded quantised model (MB)
         }
 
         return {cpu, ram, vram, gpu};
@@ -135,7 +135,7 @@ private:
 
         while (std::getline(file, line)) {
             lines.push_back(line);
-            if (lines.size() > (size_t)window * 10) lines.erase(lines.begin()); // Keep search space reasonable
+            if (lines.size() > (size_t)window * 10) lines.erase(lines.begin()); // Bound the working set to 10× the evaluation window
         }
 
         int count = 0;

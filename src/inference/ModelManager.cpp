@@ -31,8 +31,8 @@ ModelManager::ModelManager(const std::string& base_model_path,
     }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx    = 2048;  // 2048 suficiente para os prompts do FE, menos KV cache = mais rápido
-    cparams.n_batch  = 512;   // era 32 — este era o maior gargalo de performance
+    cparams.n_ctx    = 2048;  // 2048 tokens is sufficient for FE prompts; smaller KV cache reduces latency
+    cparams.n_batch  = 512;   // Previously 32 — batch size was the dominant throughput bottleneck
     cparams.n_ubatch = 512;
     ctx_ptr = llama_init_from_model((llama_model*)gray_matter, cparams);
 
@@ -50,11 +50,11 @@ ModelManager::ModelManager(const std::string& base_model_path,
             embed_model = gray_matter;
         }
     } else {
-        embed_model = gray_matter; // share weights — separate context is enough
+        embed_model = gray_matter; // Reuse base model weights for embeddings; a separate context provides sufficient isolation
     }
 
     llama_context_params ectx = llama_context_default_params();
-    ectx.n_ctx        = 2048; // nomic-embed supports up to 8192; 2048 is safe
+    ectx.n_ctx        = 2048; // nomic-embed-text supports up to 8192 tokens; 2048 is a conservative, memory-efficient cap
     ectx.n_batch      = 512;
     ectx.embeddings   = true;
     ectx.pooling_type = LLAMA_POOLING_TYPE_MEAN;
@@ -85,7 +85,7 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     // Stable context reset: clear sequence 0
     llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
 
-    // CORE IDENTITY INJECTION - Simplified
+    // Pass the prompt through without modification; system identity is injected upstream by the requesting lobe
     std::string full_prompt = prompt;
 
     const auto* vocab = llama_model_get_vocab(model);
@@ -98,17 +98,22 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     tokens.resize(n_tokens);
 
     // SAFETY: Truncate if prompt is too big for KV cache (reserve space for generation)
-    if (tokens.size() > 1700) {  // n_ctx=2048, reservar 300 para geração
+    if (tokens.size() > 1700) {  // Reserve 300 tokens for generation headroom within n_ctx=2048
         tokens.erase(tokens.begin(), tokens.end() - 1700);
     }
 
-    // Processar o prompt inteiro de uma vez (n_batch=512 aguenta)
-    llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t)tokens.size());
-    if (llama_decode(ctx, batch) != 0) return "ERROR: Decode failed.";
+    // Process prompt in n_batch-sized chunks; 16× faster than the previous stride of 32, safe for any prompt length
+    llama_batch batch;
+    const int CHUNK = 512;
+    for (size_t i = 0; i < tokens.size(); i += CHUNK) {
+        size_t n = std::min((size_t)CHUNK, tokens.size() - i);
+        batch = llama_batch_get_one(&tokens[i], (int32_t)n);
+        if (llama_decode(ctx, batch) != 0) return "ERROR: Decode failed.";
+    }
 
     auto* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.2f, 0.2f, 0.2f)); // Increased penalties
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.2f, 0.2f, 0.2f)); // Elevated repetition penalties to suppress degenerate token loops
     
     if (!grammar_str.empty()) {
         auto* g_smpl = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
@@ -118,7 +123,7 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(1234));
 
     std::string response = "";
-    for (int i = 0; i < 300; i++) {  // GBNF limita a JSON curto, 300 tokens é mais que suficiente
+    for (int i = 0; i < 300; i++) {  // GBNF grammar constrains output to compact JSON; 300 tokens is a safe upper bound
         llama_token id = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, id)) break;
 

@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     }
 
     try {
-        // Phi-4-mini se existir, senão fallback para Qwen
+        // Prefer Phi-4-mini if available; fall back to Qwen2.5-1.5B
         auto pick_model = [](const std::string& preferred, const std::string& fallback) {
             return std::ifstream(preferred).good() ? preferred : fallback;
         };

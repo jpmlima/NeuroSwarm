@@ -14,21 +14,21 @@ public:
                  const std::string& embed_model_path = "");
     ~ModelManager();
 
-    // Check if the brain is healthy
+    // Returns true if both the generative model weights and inference context are initialised
     bool is_alive() const { return gray_matter != nullptr && ctx_ptr != nullptr; }
 
-    // Existing fire method
+    // Run autoregressive inference with optional GBNF grammar constraint; returns raw token output
     std::string fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str = "");
 
-    // New semantic embedding method
+    // Compute L2-normalised dense embedding for the given text using the dedicated embedding context
     std::vector<float> get_embeddings(const std::string& text);
 
 private:
-    void* gray_matter   = nullptr; // generative model weights
-    void* ctx_ptr       = nullptr; // generative context
-    void* embed_model   = nullptr; // dedicated embedding model (may equal gray_matter)
-    void* embed_ctx     = nullptr; // embedding context
-    bool  own_embed_model = false; // true if embed_model was loaded separately
+    void* gray_matter   = nullptr; // Generative model weights (llama_model*)
+    void* ctx_ptr       = nullptr; // Generative inference context (llama_context*)
+    void* embed_model   = nullptr; // Dedicated embedding model; may alias gray_matter when no separate model is configured
+    void* embed_ctx     = nullptr; // Embedding inference context with mean-pooling enabled
+    bool  own_embed_model = false; // True when embed_model was loaded from a separate file and must be freed independently
     std::map<std::string, void*> loaded_adapters;
 
     void* get_or_load_adapter(const std::string& adapter_name);

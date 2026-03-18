@@ -36,7 +36,7 @@ public:
     void awaken() {
         std::cout << "[MATRIX] Starting all lobes..." << std::endl;
         signal(SIGHUP, SIG_IGN);
-        signal(SIGCHLD, SIG_IGN); // Auto-reap zombies
+        signal(SIGCHLD, SIG_IGN); // Automatically reap zombie child processes; avoids manual waitpid bookkeeping
 
         for (auto& lobe : lobes) {
             pid_t pid = fork();
@@ -48,7 +48,7 @@ public:
             }
         }
 
-        // Keep the main process alive forever
+        // Keep the supervisor process alive; child lobes run independently as detached processes
         while (true) {
             std::this_thread::sleep_for(std::chrono::hours(24));
         }

@@ -16,7 +16,7 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, ""); // Escuta todos os estímulos
+        sub.set(zmq::sockopt::subscribe, ""); // Subscribe to all neural bus events
 
         std::cout << "[WERNICKE] Semantic Interpreter Online." << std::endl;
     }
@@ -33,11 +33,10 @@ public:
                     std::string origin = j.value("origin", "");
                     std::string intent = j.value("intent", "");
 
-                    // Intercepta entrada bruta do utilizador para processamento semântico
+                    // Intercept raw user input for semantic processing
                     if (origin == "broca_lobe" && intent == "inference_request") {
-                        // Se a mensagem já for um pedido de inferência direto, ignoramos por agora
-                        // Mas se for 'user_input' vindo de uma interface bruta, nós processamos.
-                        continue; 
+                        // If the message is already a direct inference request, bypass NLU processing
+                        continue;
                     }
                     
                     if (origin == "broca_lobe" && intent == "user_input") {
@@ -59,7 +58,7 @@ private:
 
         std::cout << "[WERNICKE] Interpreting: '" << text << "'" << std::endl;
 
-        // Prompt especializado para extração de intenção e entidades (NLU)
+        // Specialised NLU prompt for intent classification and entity extraction
         std::string nlu_prompt =
             "<|system|>\n"
             "NeuroSwarm Wernicke Lobe (NLU Core).\n"
@@ -80,7 +79,7 @@ private:
             {"intent", "inference_request"},
             {"adapter", "nlu_specialist"},
             {"text", nlu_prompt},
-            {"is_internal", true} // Marcador para o Synaptic Controller
+            {"is_internal", true} // Flag consumed by the Synaptic Controller to suppress echo routing
         };
 
         dispatch(req);

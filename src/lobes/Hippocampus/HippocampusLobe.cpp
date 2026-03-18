@@ -207,7 +207,7 @@ private:
         std::vector<json> final_matches;
         for (size_t i = 0; i < std::min(results.size(), (size_t)5); ++i) {
             json m = results[i].engram;
-            m.erase("embedding"); // não enviar o vector inteiro pelo bus
+            m.erase("embedding"); // Strip embedding vector before broadcasting — reduces bus payload size
             m["similarity"] = results[i].score;
             final_matches.push_back(m);
         }

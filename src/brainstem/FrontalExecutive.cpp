@@ -270,7 +270,7 @@ private:
             state.memory_context = "\n\nRELEVANT PAST EXPERIENCES (use these to inform your plan):\n";
             int shown = 0;
             for (auto& m : matches) {
-                if (m.value("similarity", 0.0f) < 0.5f) continue; // ignorar matches fracos
+                if (m.value("similarity", 0.0f) < 0.5f) continue; // Discard low-confidence matches below cosine similarity threshold
                 state.memory_context += "- CMD: " + m.value("command", "unknown")
                                       + " | RESULT: " + m.value("result_summary", "").substr(0, 120)
                                       + " | SIM: " + std::to_string(m.value("similarity", 0.0f)).substr(0, 4) + "\n";
@@ -286,7 +286,7 @@ private:
     }
 
     void process_visual_stimulus(const json& data) {
-        // Simple analysis for now, can be expanded to more lobes
+        // Lightweight visual analysis path; additional lobe integration can be layered here
         std::string cid = "visual_" + std::to_string(std::time(nullptr));
         std::string stimulus = data.value("text", "No visual info");
         
@@ -466,6 +466,7 @@ private:
             }
         }
         std::string cmd = "git -C . add tasks.json progress.txt && git -C . commit -m \"" + commit_msg + "\" 2>&1";
+        signal(SIGCHLD, SIG_DFL); // Reset SIGCHLD to SIG_DFL — inherited SIG_IGN from CerebralMatrix causes pclose() to return -1
         FILE* pipe = popen(cmd.c_str(), "r");
         if (pipe) {
             char buf[256];
