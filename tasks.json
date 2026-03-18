@@ -12,7 +12,7 @@
       "title": "Self-Inventory"
     },
     {
-      "attempts": 4,
+      "attempts": 7,
       "completed_at": null,
       "description": "Check if ports 5555 and 5556 are listening and save a health report to data/bus_health.txt",
       "id": "NS-002",
