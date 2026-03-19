@@ -102,9 +102,12 @@
       "title": "Neuro-Surgery — Add Startup Banner"
     },
     {
+      "attempts": 2,
+      "completed_at": "2026-03-19T07:33:48Z",
       "description": "Run: sed -i 's/MAX_POLECAT_WORKERS = 2/MAX_POLECAT_WORKERS = 3/' src/brainstem/FrontalExecutive.cpp && cd build && make -j$(nproc) frontal_executive 2>&1 | tail -3 && echo NEURO_SURGERY_SUCCESS",
       "id": "NS-011",
-      "passes": false,
+      "learned": "/usr/bin/sed -i \"s/MAX_POLECAT_WORKERS = [0-9]/MAX_POLECAT_WORKERS = {1}/\" src/brainstem/FronteExecute.cpp && cd build; make clean;",
+      "passes": true,
       "priority": 6,
       "title": "Neuro-Surgery — Increase Worker Pool"
     },
