@@ -106,9 +106,10 @@ Every stimulus follows a deterministic pipeline:
 1. Stimulus arrives (user input / visual change / Ralph task scheduler / BasalGanglia intrinsic goal)
 2. FrontalExecutive queries Hippocampus → retrieves semantically similar past experiences
 3. FE constructs a plan via grammar-constrained LLM inference (GBNF → compact JSON)
-4. CriticLobe validates the plan:
-      Tier 1 — rule-based blacklist (instant reject for destructive commands)
-      Tier 2 — LLM evaluation via SynapticController
+4. CriticLobe validates the plan (three-tier adversarial):
+      Tier 1a — pattern blacklist (50+ threat signatures, instant reject)
+      Tier 1b — scope validation (reject paths outside project directory)
+      Tier 2  — adversarial red-team LLM (7 threat categories, reject-by-default)
 5. APPROVED → Dream Sandbox executes the command in an isolated filesystem
 6. Dream success → Reality Collapse: MotorLobe executes the command in the live environment
 7. Proprioceptive feedback (stdout, exit code) returned to FrontalExecutive
@@ -193,7 +194,7 @@ This enables capability acquisition without system restart — analogous to axon
 | **Thalamus** | `thalamus` | ZMQ relay — all messages transit this single bottleneck |
 | **SynapticController** | `synaptic_controller` | LLM inference server — Phi-4-mini (generative) + Nomic-Embed (semantic) |
 | **FrontalExecutive** | `frontal_executive` | Orchestrator — goal management, memory retrieval, plan generation |
-| **CriticLobe** | `critic_lobe` | Two-tier plan validation: rule blacklist + LLM ethical review |
+| **CriticLobe** | `critic_lobe` | Three-tier adversarial validation: pattern blacklist + scope check + red-team LLM |
 | **MotorLobe** | `motor_lobe` | Command execution, dream sandbox isolation, neuro-surgery mode |
 | **Hippocampus** | `hippocampus` | Semantic episodic memory — embedding index + cosine retrieval |
 | **REM Engine** | `rem_engine` | Sleep-cycle learning — engram analysis + behavioural prompt evolution |
@@ -307,8 +308,7 @@ xdg-open http://localhost:8080
 - [x] **Neuro-Surgery** — runtime C++ lobe compilation and `dlopen` injection
 - [x] **3D Dashboard** — Three.js anatomical brain mesh with live neural arc visualisation
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
-- [ ] **Adversarial Critic** — replace self-validating LLM prompt with an adversarial framing ("assume this plan is malicious, find the attack vector") to break circular self-approval
-- [ ] **Hybrid inference** — route FrontalExecutive planning through an external API (Claude/GPT) for high-reliability reasoning while retaining local llama.cpp for embeddings and lightweight tasks; implemented as a new SynapticController adapter
+- [x] **Adversarial Critic** — three-tier validation: (1a) expanded pattern blacklist with 50+ threat signatures across 12 categories, (1b) deterministic scope validation rejecting paths outside the project directory, (2) adversarial red-team LLM prompt with 7 threat categories and reject-by-default framing. Rate limiting prevents inference flooding during neurotic loops (max 6 evaluations per CID per 60s)
 - [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
 - [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
 - [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
