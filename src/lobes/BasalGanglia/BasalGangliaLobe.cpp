@@ -126,6 +126,24 @@ private:
     // Suggested commands per domain — concrete templates for small models
     std::map<std::string, std::vector<std::string>> domain_commands;
 
+    // Cross-domain affinity — success in one domain boosts confidence in related ones
+    std::map<std::string, std::vector<std::string>> domain_affinity = {
+        {"file_read",           {"self_inspection", "log_analysis", "memory_analysis"}},
+        {"file_write",          {"script_creation", "source_modification"}},
+        {"file_search",         {"source_modification", "log_analysis", "memory_analysis"}},
+        {"process_inspection",  {"system_monitoring", "network_diagnostics"}},
+        {"network_diagnostics", {"process_inspection", "system_monitoring"}},
+        {"source_modification", {"compilation", "file_write"}},
+        {"compilation",         {"source_modification"}},
+        {"git_operations",      {"source_modification", "file_write"}},
+        {"system_monitoring",   {"process_inspection"}},
+        {"data_analysis",       {"log_analysis", "memory_analysis"}},
+        {"script_creation",     {"file_write", "source_modification"}},
+        {"self_inspection",     {"file_read", "memory_analysis"}},
+        {"memory_analysis",     {"data_analysis", "self_inspection"}},
+        {"log_analysis",        {"data_analysis", "file_read"}}
+    };
+
     // Keyword → domain classification
     struct KeywordRule {
         std::string domain;
@@ -339,6 +357,17 @@ private:
         if (is_novel || is_surprising) {
             emit_dopamine(domain, is_novel ? "novel_capability" : "prediction_surprise",
                          d.prediction_error);
+        }
+
+        // Cross-domain transfer: propagate confidence to related domains
+        if (success && domain_affinity.count(domain)) {
+            for (auto& related : domain_affinity[domain]) {
+                if (self_model.count(related)) {
+                    auto& rd = self_model[related];
+                    // Small boost — 5% toward higher confidence
+                    rd.predicted_success_rate = std::min(1.0f, rd.predicted_success_rate + 0.05f);
+                }
+            }
         }
 
         save_self_model();

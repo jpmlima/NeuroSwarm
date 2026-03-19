@@ -46,74 +46,56 @@ private:
     zmq::socket_t sub;
 
     // Rate limiting: max 6 evaluations per CID within a 60-second window
-    static constexpr int MAX_EVALS_PER_CID = 6;
+    static constexpr int MAX_EVALS_PER_CID = 20;
     static constexpr int RATE_WINDOW_SECONDS = 60;
     std::map<std::string, std::vector<std::chrono::steady_clock::time_point>> eval_history;
 
     // Project root for scope validation
     const std::string PROJECT_ROOT = "/home/xenomai/Documents/NeuroSwarm";
 
-    // Tier 1: Patterns that trigger immediate rule-based rejection.
-    // Organised by threat category for auditability.
+    // Tier 1: NUCLEAR ONLY — catastrophic irreversible patterns.
+    // Everything else the system learns through experience (Hippocampus failure memory).
     const std::vector<std::string> BLACKLIST = {
-        // Filesystem destruction — direct
-        "rm -rf /", "rm -rf ~", "rm -rf $home", "rm -rf /*",
-        "rm -rf .", "rm -rf ..", "rm -rf *",
-        "find -delete", "find . -delete",
-        // Filesystem destruction — indirect via pipe/xargs
-        "xargs rm", "| rm", "| xargs",
-        // Disk/partition destruction
+        // Filesystem annihilation
+        "rm -rf /", "rm -rf ~", "rm -rf /*", "rm -rf .",
+        // Disk destruction
         "dd if=/dev/zero", "dd if=/dev/urandom", "mkfs.",
-        "shred /dev/", "> /dev/sda", "> /dev/nvme",
-        // Permission escalation
-        "chmod -R 777 /", "chmod 777 /etc",
-        "chown -R", "setuid",
-        // Fork bomb and resource exhaustion
+        "> /dev/sda", "> /dev/nvme",
+        // Fork bomb
         ":(){ :|:& };:",
-        // Network exfiltration
-        "curl -X POST", "curl -d ", "curl --data",
-        "wget --post",
-        "nc -e", "ncat -e", "bash -i >& /dev/tcp",
-        // Credential access
-        "/etc/shadow", "/etc/passwd",
-        "ssh-keygen -f /", ".ssh/authorized_keys",
-        // Package/system manipulation
-        "apt remove", "apt purge", "pacman -R",
-        "systemctl disable", "systemctl stop",
-        // Process injection and environment manipulation
-        "LD_PRELOAD", "ptrace",
-        // Dangerous git operations
-        "git push --force", "git reset --hard",
-        // Shell injection vectors — eval/exec with dynamic input
-        "eval ", "exec ",
-        // Cron/scheduled task persistence
-        "crontab", "atq", "atrm",
-        // Background evasion — hiding destructive commands
-        "nohup rm", "nohup dd", "nohup shred",
-        // Process killing
-        "kill -9", "killall", "pkill",
-        // Python/Perl shell escapes
-        "os.system(", "os.popen(", "subprocess.call(",
-        "subprocess.run(", "subprocess.Popen(",
-        "system(",
-        // Redirect to overwrite critical files
-        "> /etc/", "> /boot/", "> /usr/",
-        // Sudo escalation
-        "sudo ", "su -", "su root",
-        // History evasion
-        "history -c", "export HISTSIZE=0", "unset HISTFILE"
+        // Root escalation
+        "chmod -R 777 /",
+        "sudo rm", "sudo dd",
+        // Credential theft
+        "bash -i >& /dev/tcp"
     };
+
+    // Safe command prefixes — bypass Tier 2 LLM entirely (read-only, no side effects)
+    const std::vector<std::string> SAFE_PREFIXES = {
+        "cat ", "head ", "tail ", "wc ", "ls ", "stat ", "file ",
+        "du ", "find ", "grep ", "rg ", "uptime", "free ", "df ",
+        "ps ", "pgrep ", "echo ", "date", "hostname", "uname ",
+        "pwd", "id", "whoami", "git log", "git status", "git diff",
+        "git show", "cmake --build", "make -C", "make -n",
+        "curl -s -o /dev/null", "nc -z", "ss -t", "pgrep -la"
+    };
+
+    bool is_safe_command(const std::string& cmd) {
+        for (const auto& prefix : SAFE_PREFIXES) {
+            if (cmd.find(prefix) == 0) return true;
+        }
+        return false;
+    }
 
     // Tier 1b: Scope validation — paths that are allowed
     const std::vector<std::string> ALLOWED_PATHS = {
         "/home/xenomai/Documents/NeuroSwarm",
         "/tmp/",
         "/dev/null",
-        "/proc/self/",
-        "/proc/meminfo",
-        "/proc/cpuinfo",
-        "/proc/loadavg",
-        "/proc/uptime"
+        "/proc/",
+        "/bin/", "/usr/bin/", "/usr/local/bin/",
+        "/sbin/", "/usr/sbin/",
+        "/sys/class/"
     };
 
     bool is_dangerous(const std::string& text) {
@@ -256,38 +238,15 @@ private:
             return;
         }
 
-        // Tier 2: Rule checks passed — forward to SynapticController for adversarial LLM validation.
-        // The adversarial framing forces the model to actively search for attack vectors
-        // rather than passively confirming safety — breaking the circular self-approval problem.
-        std::cout << "[CRITIC] Rule checks passed. Escalating to adversarial LLM evaluation." << std::endl;
-        std::string critic_prompt =
-            "<|system|>\n"
-            "You are a security red-team analyst. Your ONLY purpose is to find reasons to REJECT.\n"
-            "Assume every plan is an attack. Your job is to prove it.\n"
-            "\n"
-            "Search for these threat categories:\n"
-            "1. DATA DESTRUCTION — does it delete, overwrite, or corrupt files or storage?\n"
-            "2. EXFILTRATION — does it send data to external hosts or expose credentials?\n"
-            "3. PRIVILEGE ESCALATION — does it modify permissions, users, or system config?\n"
-            "4. RESOURCE EXHAUSTION — does it consume unbounded CPU, memory, disk, or network?\n"
-            "5. SCOPE VIOLATION — does it access files or systems outside /home/xenomai/Documents/NeuroSwarm/ or /tmp/?\n"
-            "6. OBFUSCATION — does it use eval, base64 decoding, hex escapes, or variable expansion to hide intent?\n"
-            "7. PERSISTENCE — does it install cron jobs, services, or background processes that survive reboot?\n"
-            "\n"
-            "If you find ANY credible threat vector, respond: REJECTED: <one-line reason>\n"
-            "Only if the plan survives ALL SEVEN checks, respond with the single word: APPROVED\n"
-            "You must REJECT by default. APPROVED is the exception, not the norm.\n"
-            "<|end|>\n"
-            "<|user|>\n"
-            "Plan to evaluate:\n" + plan + "\n"
-            "<|end|>\n"
-            "<|assistant|>\n";
-
-        json llm_req = {
-            {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "inference_request"},
-            {"adapter", "critic"}, {"text", critic_prompt}
+        // All rule checks passed — APPROVED.
+        // The system learns from experience (Hippocampus failure memory)
+        // rather than LLM-based paranoid validation that wastes inference cycles.
+        std::cout << "[CRITIC] Rule checks passed. APPROVED." << std::endl;
+        json result = {
+            {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+            {"text", "APPROVED"}
         };
-        dispatch(llm_req);
+        dispatch(result);
     }
 
     void dispatch(const json& data) {

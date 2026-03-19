@@ -84,8 +84,9 @@ private:
             }
             pending_embeds.erase(cid);
         }
-        // When a task succeeds, log it AND request its embedding for semantic indexing
-        else if (intent == "execution_result" && event.value("status", "") == "success") {
+        // Index ALL execution results (success AND failure) for semantic retrieval.
+        // Failures are tagged so future recall can warn "this was tried and failed".
+        else if (intent == "execution_result") {
             record_engram(cid, event);
             if (cid != "global_stream") record_engram("global_stream", event);
             request_memory_embedding(cid, event);
@@ -209,6 +210,8 @@ private:
             json m = results[i].engram;
             m.erase("embedding"); // Strip embedding vector before broadcasting — reduces bus payload size
             m["similarity"] = results[i].score;
+            // Ensure success tag is present for recall context
+            if (!m.contains("success")) m["success"] = true;
             final_matches.push_back(m);
         }
 
@@ -227,11 +230,12 @@ private:
 
     void request_memory_embedding(const std::string& cid, const json& event) {
         std::string cmd     = event.value("command", "");
-        std::string result  = event.value("proprioception", "").substr(0, 300);
+        std::string result  = event.value("proprioception", event.value("output", "")).substr(0, 300);
         std::string mode    = event.value("mode", "reality");
+        bool success        = (event.value("status", "") == "success");
 
-        // Build a descriptive text for the embedding
-        std::string embed_text = "COMMAND: " + cmd + " RESULT: " + result;
+        // Build a descriptive text for the embedding — include outcome for recall
+        std::string embed_text = (success ? "SUCCESS: " : "FAILURE: ") + cmd + " RESULT: " + result;
 
         json seed = {
             {"origin_cid",  cid},
@@ -239,6 +243,7 @@ private:
             {"command",     cmd},
             {"result_summary", result},
             {"mode",        mode},
+            {"success",     success},
             {"synapse_ts",  std::time(nullptr)}
         };
 

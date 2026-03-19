@@ -178,6 +178,8 @@ private:
     std::string current_uptime;
     std::string current_time_of_day;
     bool is_night = false;
+    int total_successes = 0;
+    static constexpr int REM_TRIGGER_INTERVAL = 5;
 
     // Polecat worker management
     int active_workers = 0;
@@ -405,8 +407,10 @@ private:
             int shown = 0;
             for (auto& m : matches) {
                 if (m.value("similarity", 0.0f) < 0.5f) continue; // Discard low-confidence matches below cosine similarity threshold
-                state.memory_context += "- CMD: " + m.value("command", "unknown")
-                                      + " | RESULT: " + m.value("result_summary", "").substr(0, 120)
+                bool mem_success = m.value("success", true);
+                state.memory_context += (mem_success ? "- OK: " : "- FAILED (avoid): ")
+                                      + m.value("command", "unknown")
+                                      + " | " + m.value("result_summary", "").substr(0, 120)
                                       + " | SIM: " + std::to_string(m.value("similarity", 0.0f)).substr(0, 4) + "\n";
                 if (++shown >= 3) break;
             }
@@ -450,6 +454,14 @@ private:
                 }
                 publish_intrinsic_result(cid, true);
                 active_goals.erase(cid);
+
+                // Continuous REM: trigger learning every N successes
+                total_successes++;
+                if (total_successes % REM_TRIGGER_INTERVAL == 0) {
+                    std::cout << "[EXECUTIVE] Triggering continuous REM after " << total_successes << " successes." << std::endl;
+                    json rem = {{"origin", "frontal_executive"}, {"intent", "initiate_sleep_cycle"}};
+                    dispatch_to_all(rem);
+                }
             }
         } else {
             if (mode == "dream") {
@@ -709,11 +721,11 @@ private:
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", "executive"},
             {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
-            {"text", "<|system|>\nFRONTAL EXECUTIVE OF NEUROSWARM\nCRITICAL: The 'command' field must contain a REAL BASH command.\nMODES: Use 'mode': 'reality' for normal commands, and 'mode': 'neuro_surgery' ONLY when modifying and recompiling NeuroSwarm source code (src/*.cpp).\nExample for Neuro-Surgery: {\"thought\": \"optimizing thalamus\", \"command\": \"sed -i 's/old/new/g' src/brainstem/Thalamus.cpp\", \"mode\": \"neuro_surgery\", \"status\": \"COMPLETED\"}\nNEVER use placeholders like 'bash' or 'python' alone.\nRespond ONLY with the JSON structure.\n"
-             + (system_knowledge.empty() ? "" : "\n" + system_knowledge + "\n")
+            {"text", "<|system|>\nYou are a bash executor. Reply ONLY with JSON: {\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nModes: reality (normal), neuro_surgery (modify+recompile src/*.cpp)\nRules: command MUST be executable bash. No placeholders. No explanations outside JSON.\n"
+             + (system_knowledge.empty() ? "" : system_knowledge + "\n")
              + "<|end|>\n<|user|>\n"
-             + (current_timestamp.empty() ? "" : "TIME: " + current_timestamp + " | " + current_time_of_day + " | uptime: " + current_uptime + "\n")
-             + "GOAL: " + state.goal + state.memory_context + "\nHISTORY: " + state.history + "\n" + extra_prompt + "<|end|>\n<|assistant|>\n"}
+             + (current_timestamp.empty() ? "" : "T:" + current_timestamp + " ")
+             + "GOAL: " + state.goal + state.memory_context + "\n" + (state.history.empty() ? "" : "HISTORY:" + state.history.substr(0, 500) + "\n") + extra_prompt + "<|end|>\n<|assistant|>\n"}
         };
         dispatch_to_all(req);
     }

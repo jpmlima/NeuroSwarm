@@ -50,7 +50,57 @@
       "passes": true,
       "priority": 5,
       "title": "Self-Documentation"
+    },
+    {
+      "attempts": 4,
+      "description": "Run: ps aux | grep -c polecat_worker && ps aux | grep -E 'thalamus|synaptic|frontal|motor|hippocampus|basal_ganglia|critic|chronos|statistics' | grep -v grep | wc -l > data/census.txt && echo done",
+      "id": "NS-006",
+      "passes": false,
+      "priority": 1,
+      "title": "Process Census"
+    },
+    {
+      "description": "Run: wc -l data/engrams/memory_index.jsonl > data/memory_depth.txt && tail -3 data/engrams/memory_index.jsonl >> data/memory_depth.txt && echo done",
+      "id": "NS-007",
+      "passes": false,
+      "priority": 2,
+      "title": "Memory Depth Check"
+    },
+    {
+      "description": "Run: cat data/self_model.json | head -40 > data/self_audit.txt && echo done",
+      "id": "NS-008",
+      "passes": false,
+      "priority": 3,
+      "title": "Self-Model Audit"
+    },
+    {
+      "description": "Run: wc -l src/brainstem/*.cpp src/lobes/*/*.cpp src/workers/*.cpp > data/source_stats.txt && echo done",
+      "id": "NS-009",
+      "passes": false,
+      "priority": 4,
+      "title": "Source Line Count"
+    },
+    {
+      "description": "Run: sed -i 's/\\[EXECUTIVE\\] Connected to Thalamus/[EXECUTIVE] NeuroSwarm v2.2.0 cognitive core online. Connected to Thalamus/' src/brainstem/FrontalExecutive.cpp && cd build && cmake .. > /dev/null 2>&1 && make -j$(nproc) frontal_executive 2>&1 | tail -3 && echo NEURO_SURGERY_SUCCESS",
+      "id": "NS-010",
+      "passes": false,
+      "priority": 5,
+      "title": "Neuro-Surgery — Add Startup Banner"
+    },
+    {
+      "description": "Run: sed -i 's/MAX_POLECAT_WORKERS = 2/MAX_POLECAT_WORKERS = 3/' src/brainstem/FrontalExecutive.cpp && cd build && make -j$(nproc) frontal_executive 2>&1 | tail -3 && echo NEURO_SURGERY_SUCCESS",
+      "id": "NS-011",
+      "passes": false,
+      "priority": 6,
+      "title": "Neuro-Surgery — Increase Worker Pool"
+    },
+    {
+      "description": "Run: sed -i '/NeuroSwarm v2.2.0/a\\        std::cout << \"[EXECUTIVE] Build: \" << __DATE__ << \" \" << __TIME__ << std::endl;' src/brainstem/FrontalExecutive.cpp && cd build && make -j$(nproc) frontal_executive 2>&1 | tail -3 && echo NEURO_SURGERY_SUCCESS",
+      "id": "NS-012",
+      "passes": false,
+      "priority": 7,
+      "title": "Neuro-Surgery — Add Git Hash to Startup"
     }
   ],
-  "version": "1.0"
+  "version": "2.0"
 }
