@@ -223,6 +223,20 @@ private:
             append_jsonl("intrinsic_goals.jsonl", entry);
         }
 
+        // Polecat worker events
+        if (origin == "polecat_worker" && (intent == "polecat_ready" || intent == "polecat_done")) {
+            json entry = {
+                {"timestamp", now_iso()},
+                {"event", intent},
+                {"worker_id", j.value("worker_id", "")},
+                {"cid", cid},
+                {"success", j.value("success", true)},
+                {"task_id", j.value("task_id", "")},
+                {"domain", j.value("domain", "")}
+            };
+            append_jsonl("polecat_events.jsonl", entry);
+        }
+
         // Dopamine signals from BasalGanglia
         if (origin == "basal_ganglia" && intent == "dopamine_signal") {
             json entry = {

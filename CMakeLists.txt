@@ -75,6 +75,10 @@ target_link_libraries(statistics_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(basal_ganglia src/lobes/BasalGanglia/BasalGangliaLobe.cpp)
 target_link_libraries(basal_ganglia PRIVATE zmq nlohmann_json::nlohmann_json)
 
+# 5. Polecat Workers (Ephemeral)
+add_executable(polecat_worker src/workers/PolecatWorker.cpp)
+target_link_libraries(polecat_worker PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
 target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
 

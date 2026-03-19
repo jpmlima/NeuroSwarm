@@ -32,7 +32,7 @@ public:
                 try {
                     auto j = json::parse(raw);
                     if (j.value("intent", "") == "critic_validate" &&
-                        j.value("origin", "") == "frontal_executive") {
+                        (j.value("origin", "") == "frontal_executive" || j.value("origin", "") == "polecat_worker")) {
                         evaluate_plan(j);
                     }
                 } catch (...) {}

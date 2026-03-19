@@ -65,6 +65,10 @@ graph TD
         MT[Motor Lobe — OS Execution\nNeuro-Surgery — Runtime Self-Modification]
     end
 
+    subgraph "Worker Pool"
+        PW[Polecat Workers — Ephemeral\nfork+exec per goal, max 2]
+    end
+
     subgraph "Motivation System"
         BG[BasalGanglia — Intrinsic Motivation\nSelf-Model + Fitness Function]
     end
@@ -89,6 +93,8 @@ graph TD
     HP <--> FE
     REM --> FE
     BG --> FE
+    FE -->|spawn| PW
+    PW --> TH
     HM --> BG
     HM --> FE
     MC --> TH
@@ -208,6 +214,7 @@ This enables capability acquisition without system restart — analogous to axon
 | **ChronosLobe** | `chronos_lobe` | Temporal awareness — broadcasts time_pulse with ISO timestamp, uptime, circadian phase |
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — records per-cycle metrics to `data/metrics/` in JSONL |
 | **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, goal generation |
+| **PolecatWorker** | `polecat_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
 | **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, handles runtime injection |
 
 ---
@@ -245,6 +252,9 @@ Core intents:
 | `intrinsic_goal_result` | FE → BG | Completion/failure report for self-model update |
 | `dopamine_signal` | BG → | Novel capability discovery or prediction error surprise |
 | `self_model_updated` | BG → | Domain state changed in `data/self_model.json` |
+| `polecat_ready` | PW → FE | Worker announces readiness after fork+exec |
+| `polecat_assign` | FE → PW | Goal assignment dispatched to specific worker |
+| `polecat_done` | PW → FE | Worker completed/failed goal, reports result |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
@@ -312,9 +322,8 @@ xdg-open http://localhost:8080
 - [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
 - [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
 - [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
-- [ ] **Polecat workers** — ephemeral genesis lobes spawned per task, auto-terminate on completion
+- [x] **Polecat workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
 - [ ] **Specialised routing** — Qwen-Coder for MotorLobe commands, critic-fine-tuned model for safety validation
-- [ ] **Python-generated lobes** — lower barrier for small models to author new capabilities
 - [ ] **REM fine-tuning** — LoRA fine-tune on accumulated successful execution traces
 
 ---

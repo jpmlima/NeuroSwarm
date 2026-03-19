@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <climits>
 #include <regex>
+#include <unistd.h>
+#include <signal.h>
 
 using json = nlohmann::json;
 
@@ -114,6 +116,12 @@ public:
                 else if (origin == "basal_ganglia" && intent == "intrinsic_goal") {
                     handle_intrinsic_goal(j);
                 }
+                else if (origin == "polecat_worker" && intent == "polecat_ready") {
+                    handle_polecat_ready(j);
+                }
+                else if (origin == "polecat_worker" && intent == "polecat_done") {
+                    handle_polecat_done(j);
+                }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
                     std::string adapter = j.value("adapter", "");
                     if (adapter == "critic") {
@@ -170,6 +178,97 @@ private:
     std::string current_uptime;
     std::string current_time_of_day;
     bool is_night = false;
+
+    // Polecat worker management
+    int active_workers = 0;
+    static constexpr int MAX_POLECAT_WORKERS = 2;
+    std::map<std::string, json> pending_polecat_assignments; // worker_id → assignment payload
+    std::map<std::string, std::string> worker_cid_map;       // worker_id → CID
+    int polecat_counter = 0;
+
+    void spawn_polecat(const std::string& cid, const GoalState& state) {
+        std::string worker_id = "pw_" + std::to_string(++polecat_counter) + "_" + std::to_string(std::time(nullptr));
+
+        // Prepare assignment payload — will be sent when the worker announces readiness
+        json assignment = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "polecat_assign"},
+            {"worker_id", worker_id},
+            {"text", state.goal},
+            {"task_id", state.task_id},
+            {"domain", state.domain},
+            {"fitness_score", state.fitness_score},
+            {"is_intrinsic", state.is_intrinsic}
+        };
+        pending_polecat_assignments[worker_id] = assignment;
+        worker_cid_map[worker_id] = cid;
+
+        // Fork + exec the polecat_worker binary
+        pid_t pid = fork();
+        if (pid == 0) {
+            // Child process — exec polecat_worker
+            signal(SIGCHLD, SIG_DFL);
+            std::string bin = "./build/polecat_worker";
+            execl(bin.c_str(), "polecat_worker", worker_id.c_str(), nullptr);
+            // If exec fails, exit immediately
+            _exit(1);
+        } else if (pid > 0) {
+            active_workers++;
+            std::cout << "[EXECUTIVE] Spawned Polecat worker " << worker_id
+                      << " (pid=" << pid << ") for CID " << cid << std::endl;
+        } else {
+            std::cerr << "[EXECUTIVE] Failed to fork Polecat worker." << std::endl;
+            // Fall back to inline execution
+            pending_polecat_assignments.erase(worker_id);
+            worker_cid_map.erase(worker_id);
+        }
+    }
+
+    void handle_polecat_ready(const json& data) {
+        std::string worker_id = data.value("worker_id", "");
+        auto it = pending_polecat_assignments.find(worker_id);
+        if (it == pending_polecat_assignments.end()) return;
+
+        std::cout << "[EXECUTIVE] Polecat " << worker_id << " ready. Dispatching assignment." << std::endl;
+        dispatch_to_all(it->second);
+        pending_polecat_assignments.erase(it);
+    }
+
+    void handle_polecat_done(const json& data) {
+        std::string worker_id = data.value("worker_id", "");
+        bool success = data.value("success", false);
+        std::string task_id = data.value("task_id", "");
+        std::string cid = data.value("cid", "");
+
+        active_workers = std::max(0, active_workers - 1);
+        worker_cid_map.erase(worker_id);
+
+        std::cout << "[EXECUTIVE] Polecat " << worker_id << " finished: "
+                  << (success ? "SUCCESS" : "FAILURE") << std::endl;
+
+        // If this was a Ralph task, mark it complete
+        if (success && !task_id.empty()) {
+            // Create a temporary GoalState to use mark_task_complete
+            GoalState tmp;
+            tmp.task_id = task_id;
+            tmp.last_cmd = data.value("command", "");
+            active_goals[cid] = tmp;
+            mark_task_complete(cid);
+            active_goals.erase(cid);
+        }
+
+        // If intrinsic, report back to BasalGanglia
+        if (data.value("is_intrinsic", false)) {
+            json result = {
+                {"cid", cid}, {"origin", "frontal_executive"},
+                {"intent", "intrinsic_goal_result"},
+                {"domain", data.value("domain", "")},
+                {"fitness_score", data.value("fitness_score", 0.0f)},
+                {"success", success},
+                {"command", data.value("command", "")}
+            };
+            dispatch_to_all(result);
+        }
+    }
 
     void handle_critic_feedback(const json& data) {
         std::string cid = data.value("cid", "unknown");
@@ -264,9 +363,20 @@ private:
         GoalState state;
         state.goal   = goal;
         state.active = true;
-        active_goals[cid] = state;
 
-        std::cout << "[EXECUTIVE] New Goal Registered: " << goal << " [CID: " << cid << "]" << std::endl;
+        // User stimuli always handled inline (high priority, needs immediate response)
+        bool is_user_stimulus = (data.value("origin", "") == "broca_terminal" ||
+                                 data.value("origin", "") == "user_terminal");
+
+        // Delegate to Polecat worker if capacity allows and not a user stimulus
+        if (!is_user_stimulus && active_workers < MAX_POLECAT_WORKERS) {
+            std::cout << "[EXECUTIVE] Delegating goal to Polecat worker: " << goal.substr(0, 80) << " [CID: " << cid << "]" << std::endl;
+            spawn_polecat(cid, state);
+            return;
+        }
+
+        active_goals[cid] = state;
+        std::cout << "[EXECUTIVE] New Goal Registered (inline): " << goal << " [CID: " << cid << "]" << std::endl;
 
         // Query Hippocampus for similar past experiences before thinking
         json mem_req = {
@@ -415,9 +525,16 @@ private:
                     state.goal    = desc;
                     state.active  = true;
                     state.task_id = task_id;
-                    active_goals[cid] = state;
 
                     std::cout << "[EXECUTIVE] Ralph Loop — starting task [" << task_id << "]: " << title << std::endl;
+
+                    // Delegate to Polecat worker if capacity allows
+                    if (active_workers < MAX_POLECAT_WORKERS) {
+                        spawn_polecat(cid, state);
+                        return;
+                    }
+
+                    active_goals[cid] = state;
 
                     json mem_req = {
                         {"cid", cid}, {"origin", "frontal_executive"},
@@ -482,10 +599,17 @@ private:
         state.is_intrinsic = true;
         state.domain = domain;
         state.fitness_score = fitness;
-        active_goals[cid] = state;
 
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
+
+        // Delegate to Polecat worker if capacity allows
+        if (active_workers < MAX_POLECAT_WORKERS) {
+            spawn_polecat(cid, state);
+            return;
+        }
+
+        active_goals[cid] = state;
 
         // Query Hippocampus for context, same flow as all goals
         json mem_req = {
