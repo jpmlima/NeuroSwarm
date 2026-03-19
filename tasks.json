@@ -72,9 +72,12 @@
       "title": "Memory Depth Check"
     },
     {
+      "attempts": 1,
+      "completed_at": "2026-03-19T07:17:50Z",
       "description": "Run: cat data/self_model.json | head -40 > data/self_audit.txt && echo done",
       "id": "NS-008",
-      "passes": false,
+      "learned": "(cat data/self_model.json | head -40) >data/self_audit.txt && echo done",
+      "passes": true,
       "priority": 3,
       "title": "Self-Model Audit"
     },

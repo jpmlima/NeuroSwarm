@@ -5,3 +5,4 @@
 [2026-03-18T02:30:46Z] COMPLETED NS-005 | cmd: grep 'success:' data/engrams/global_stream.js | awk '{print $0}' > extracted_commands.txt
 [2026-03-19T07:08:18Z] COMPLETED NS-006 | cmd: /bin/bash -c "ps aux | grep polecat_worker && ps au --grep 'thalamus|synaptic' v || echo done"
 [2026-03-19T07:16:53Z] COMPLETED NS-007 | cmd: /bin/bash -c "wc -l data/engrams/memory_index.json > data/memory_depth.txt && tail -3 data/engrams/memory_index.json >> data/memory_depth.txt; echo 'done'"
+[2026-03-19T07:17:50Z] COMPLETED NS-008 | cmd: (cat data/self_model.json | head -40) >data/self_audit.txt && echo done
