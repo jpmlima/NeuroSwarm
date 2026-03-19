@@ -3,3 +3,4 @@
 [2026-03-18T02:13:51Z] COMPLETED NS-003 | cmd: /bin/sh -c 'echo $PATH && echo python3'
 [2026-03-18T02:15:55Z] COMPLETED NS-004 | cmd: /bin/sh -c \"echo $(date): CPU load: `uptime | awk '{print $10}'`; free; echo $$ > data/hardware_report.txt\"
 [2026-03-18T02:30:46Z] COMPLETED NS-005 | cmd: grep 'success:' data/engrams/global_stream.js | awk '{print $0}' > extracted_commands.txt
+[2026-03-19T07:08:18Z] COMPLETED NS-006 | cmd: /bin/bash -c "ps aux | grep polecat_worker && ps au --grep 'thalamus|synaptic' v || echo done"
