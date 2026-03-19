@@ -21,6 +21,7 @@ public:
         const std::string base = "/home/xenomai/Documents/NeuroSwarm/build/";
         lobes.push_back({"THALAMUS", base + "thalamus"});
         lobes.push_back({"SYNAPTIC", base + "synaptic_controller"});
+        lobes.push_back({"HIPPOCAMPUS", base + "hippocampus"});
         lobes.push_back({"MOTOR", base + "motor_lobe"});
         lobes.push_back({"EXECUTIVE", base + "frontal_executive"});
         lobes.push_back({"AMYGDALA", base + "amygdala"});

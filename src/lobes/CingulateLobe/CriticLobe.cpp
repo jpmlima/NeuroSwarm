@@ -87,7 +87,7 @@ private:
         // Shell injection vectors — eval/exec with dynamic input
         "eval ", "exec ",
         // Cron/scheduled task persistence
-        "crontab", "at ", "atq", "atrm",
+        "crontab", "atq", "atrm",
         // Background evasion — hiding destructive commands
         "nohup rm", "nohup dd", "nohup shred",
         // Process killing
@@ -95,7 +95,7 @@ private:
         // Python/Perl shell escapes
         "os.system(", "os.popen(", "subprocess.call(",
         "subprocess.run(", "subprocess.Popen(",
-        "system(", "`",
+        "system(",
         // Redirect to overwrite critical files
         "> /etc/", "> /boot/", "> /usr/",
         // Sudo escalation
@@ -122,7 +122,10 @@ private:
         for (const auto& pattern : BLACKLIST) {
             std::string lp = pattern;
             std::transform(lp.begin(), lp.end(), lp.begin(), ::tolower);
-            if (lower.find(lp) != std::string::npos) return true;
+            if (lower.find(lp) != std::string::npos) {
+                std::cout << "[CRITIC] Matched blacklist pattern: '" << pattern << "'" << std::endl;
+                return true;
+            }
         }
         return false;
     }

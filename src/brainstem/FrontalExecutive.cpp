@@ -70,7 +70,7 @@ public:
                 std::string origin = j.value("origin", "");
                 std::string intent = j.value("intent", "");
 
-                if (origin != "homeostasis" && intent != "homeostatic_pulse" && origin != "visualizer") {
+                if (origin != "homeostasis" && intent != "homeostatic_pulse" && origin != "visualizer" && origin != "chronos" && origin != "statistics") {
                     last_activity = std::chrono::steady_clock::now();
                 }
 
@@ -183,15 +183,18 @@ private:
     int active_workers = 0;
     static constexpr int MAX_POLECAT_WORKERS = 2;
     std::map<std::string, json> pending_polecat_assignments; // worker_id → assignment payload
-    std::map<std::string, std::string> worker_cid_map;       // worker_id → CID
+    std::map<std::string, std::string> worker_cid_map;       // worker_id → CID (presence = worker alive)
     int polecat_counter = 0;
 
     void spawn_polecat(const std::string& cid, const GoalState& state) {
         std::string worker_id = "pw_" + std::to_string(++polecat_counter) + "_" + std::to_string(std::time(nullptr));
 
+        // Each worker gets its own unique CID to avoid cross-talk
+        std::string worker_cid = cid + "_" + std::to_string(polecat_counter);
+
         // Prepare assignment payload — will be sent when the worker announces readiness
         json assignment = {
-            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "polecat_assign"},
+            {"cid", worker_cid}, {"origin", "frontal_executive"}, {"intent", "polecat_assign"},
             {"worker_id", worker_id},
             {"text", state.goal},
             {"task_id", state.task_id},
@@ -200,7 +203,7 @@ private:
             {"is_intrinsic", state.is_intrinsic}
         };
         pending_polecat_assignments[worker_id] = assignment;
-        worker_cid_map[worker_id] = cid;
+        worker_cid_map[worker_id] = worker_cid;
 
         // Fork + exec the polecat_worker binary
         pid_t pid = fork();
@@ -214,10 +217,9 @@ private:
         } else if (pid > 0) {
             active_workers++;
             std::cout << "[EXECUTIVE] Spawned Polecat worker " << worker_id
-                      << " (pid=" << pid << ") for CID " << cid << std::endl;
+                      << " (pid=" << pid << ") for CID " << worker_cid << std::endl;
         } else {
             std::cerr << "[EXECUTIVE] Failed to fork Polecat worker." << std::endl;
-            // Fall back to inline execution
             pending_polecat_assignments.erase(worker_id);
             worker_cid_map.erase(worker_id);
         }
@@ -235,6 +237,10 @@ private:
 
     void handle_polecat_done(const json& data) {
         std::string worker_id = data.value("worker_id", "");
+
+        // Dedup guard — ignore if worker already finished (PUB/SUB can deliver duplicates)
+        if (worker_cid_map.find(worker_id) == worker_cid_map.end()) return;
+
         bool success = data.value("success", false);
         std::string task_id = data.value("task_id", "");
         std::string cid = data.value("cid", "");
@@ -247,7 +253,6 @@ private:
 
         // If this was a Ralph task, mark it complete
         if (success && !task_id.empty()) {
-            // Create a temporary GoalState to use mark_task_complete
             GoalState tmp;
             tmp.task_id = task_id;
             tmp.last_cmd = data.value("command", "");
@@ -575,6 +580,8 @@ private:
 
     // Handle intrinsic goal from BasalGanglia — creates a GoalState from the motivation signal
     void handle_intrinsic_goal(const json& data) {
+        // Dedup guard — only accept first intrinsic_goal per request cycle
+        if (!waiting_for_intrinsic_goal) return;
         waiting_for_intrinsic_goal = false;
 
         std::string cid = data.value("cid", "intrinsic_" + std::to_string(std::time(nullptr)));

@@ -39,6 +39,9 @@ public:
         sub.connect("tcp://" + thalamus_ip + ":5556");
         sub.set(zmq::sockopt::subscribe, "");
 
+        // Allow ZMQ subscription to propagate before sending messages
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
         load_system_knowledge();
 
         std::cout << "[POLECAT:" << worker_id << "] Ephemeral worker online." << std::endl;
