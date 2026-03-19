@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -40,7 +41,7 @@ public:
           metrics_dir("./data/metrics/") {
 
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe_all(sub);
 
         // Ensure metrics directory exists
         mkdir("./data", 0755);
@@ -51,13 +52,9 @@ public:
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (!sub.recv(msg, zmq::recv_flags::none)) continue;
-
-            std::string raw(static_cast<char*>(msg.data()), msg.size());
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
             try {
-                if (raw.empty() || raw[0] != '{') continue;
-                auto j = json::parse(raw);
                 process_event(j);
             } catch (...) {}
         }

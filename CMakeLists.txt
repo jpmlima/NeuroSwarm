@@ -5,8 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(cppzmq REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
-include_directories(include 
-    external/llama.cpp/include 
+include_directories(include
+    src
+    external/llama.cpp/include
     external/llama.cpp/ggml/include
     external/httplib)
 

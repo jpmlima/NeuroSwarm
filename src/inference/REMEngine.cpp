@@ -11,6 +11,7 @@
 
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -37,7 +38,7 @@ public:
 
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe(sub, {"initiate_sleep_cycle"});
 
         fs::create_directories("./data");
         std::cout << "[REM] Sleep & Self-Improvement Engine online." << std::endl;
@@ -45,15 +46,10 @@ public:
 
     void start_circadian_loop() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                try {
-                    auto j = json::parse(static_cast<char*>(msg.data()),
-                                         static_cast<char*>(msg.data()) + msg.size());
-                    if (j.value("intent", "") == "initiate_sleep_cycle") {
-                        enter_rem_sleep();
-                    }
-                } catch (...) {}
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            if (j.value("intent", "") == "initiate_sleep_cycle") {
+                enter_rem_sleep();
             }
         }
     }
@@ -276,10 +272,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

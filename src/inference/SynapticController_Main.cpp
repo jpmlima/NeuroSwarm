@@ -1,6 +1,7 @@
 #include "ModelManager.hpp"
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -38,7 +39,7 @@ int main(int argc, char** argv) {
         zmq::context_t ctx(1);
         zmq::socket_t sub(ctx, zmq::socket_type::sub);
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, ""); 
+        routing::subscribe(sub, {"embedding_request", "inference_request"});
 
         zmq::socket_t pub(ctx, zmq::socket_type::pub);
         pub.connect("tcp://" + thalamus_ip + ":5555");
@@ -46,18 +47,12 @@ int main(int argc, char** argv) {
         std::cout << "[BRAIN] Synaptic Controller connected to Thalamus at " << thalamus_ip << std::endl;
 
         while (true) {
-            zmq::message_t msg;
-            if (!sub.recv(msg, zmq::recv_flags::none)) continue;
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
 
-            std::string raw(static_cast<char*>(msg.data()), msg.size());
             try {
-                if (raw.empty() || raw[0] != '{') continue;
-                auto j = json::parse(raw);
-                
                 std::string intent = j.value("intent", "");
                 std::string cid = j.value("cid", "unknown");
-
-                if (intent == "critic_validate") continue; // Handled exclusively by CriticLobe
 
                 if (j.value("origin", "") != "synaptic_controller" && intent == "embedding_request") {
                     std::string text = j.value("text", "");
@@ -69,9 +64,7 @@ int main(int argc, char** argv) {
                         {"intent", "embedding_result"},
                         {"embedding", vec}
                     };
-                    std::string s = resp.dump();
-                    zmq::message_t m(s.size()); memcpy(m.data(), s.c_str(), s.size());
-                    pub.send(m, zmq::send_flags::none);
+                    routing::publish(pub, resp);
                 }
                 else if (j.value("origin", "") != "synaptic_controller" && j.contains("text")) {
                     std::string prompt = j["text"];
@@ -92,10 +85,7 @@ int main(int argc, char** argv) {
                         {"text", response}
                     };
                     
-                    std::string s_resp = resp.dump();
-                    zmq::message_t z_resp(s_resp.size());
-                    memcpy(z_resp.data(), s_resp.c_str(), s_resp.size());
-                    pub.send(z_resp, zmq::send_flags::none);
+                    routing::publish(pub, resp);
                 }
             } catch (...) {}
         }

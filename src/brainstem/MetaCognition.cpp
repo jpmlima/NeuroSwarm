@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -20,7 +21,7 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe_all(sub);
         
         std::cout << "[META-COGNITION] Self-observation layer active." << std::endl;
         init_diary();
@@ -28,14 +29,11 @@ public:
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
-                try {
-                    auto j = json::parse(raw);
-                    process_event(j);
-                } catch (...) {}
-            }
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            try {
+                process_event(j);
+            } catch (...) {}
         }
     }
 

@@ -5,6 +5,7 @@
 #include <array>
 #include <csignal>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 
 using json = nlohmann::json;
 
@@ -17,22 +18,17 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, ""); 
+        routing::subscribe(sub, {"execution_request", "genesis_request"});
 
         std::cout << "[MOTOR] Cortex online." << std::endl;
     }
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
-                if (raw.find("genesis_request") != std::string::npos) {
-                    std::cout << "[MOTOR] Raw genesis message: " << raw << std::endl;
-                }
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            {
                 try {
-                    if (raw[0] != '{') continue;
-                    auto j = json::parse(raw);
                     
                     if (j.value("intent", "") == "execution_request") {
                         std::string cmd = j.value("command", "");
@@ -112,9 +108,7 @@ private:
     zmq::socket_t sub;
 
     void dispatch(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t m(s.size()); memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 
     std::string execute(const std::string& cmd, int& exit_code) {

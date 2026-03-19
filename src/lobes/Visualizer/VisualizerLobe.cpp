@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <httplib.h>
 #include <iostream>
 #include <string>
@@ -19,7 +20,7 @@ public:
         : ctx(1), sub(ctx, zmq::socket_type::sub) {
 
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe_all(sub);
 
         std::cout << "[VISUALIZER] EEG Subsystem online. Web Dashboard on http://localhost:8080" << std::endl;
     }
@@ -52,16 +53,14 @@ private:
 
     void listen_zmq() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                try {
-                    auto j = json::parse(static_cast<char*>(msg.data()), static_cast<char*>(msg.data()) + msg.size());
-                    std::lock_guard<std::mutex> lock(event_mutex);
-                    j["ui_ts"] = std::time(nullptr);
-                    event_buffer.push_front(j);
-                    if (event_buffer.size() > max_events) event_buffer.pop_back();
-                } catch (...) {}
-            }
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            try {
+                std::lock_guard<std::mutex> lock(event_mutex);
+                j["ui_ts"] = std::time(nullptr);
+                event_buffer.push_front(j);
+                if (event_buffer.size() > max_events) event_buffer.pop_back();
+            } catch (...) {}
         }
     }
 

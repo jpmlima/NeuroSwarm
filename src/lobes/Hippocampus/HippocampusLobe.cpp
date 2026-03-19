@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <vector>
@@ -24,7 +25,10 @@ public:
         
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, ""); 
+        routing::subscribe(sub, {
+            "search_memory", "recall_memory", "consolidate_memories",
+            "embedding_result", "execution_result"
+        });
 
         if (!fs::exists(base_dir)) {
             fs::create_directories(base_dir);
@@ -35,15 +39,11 @@ public:
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
-                try {
-                    if (raw.empty() || raw[0] != '{') continue;
-                    auto j = json::parse(raw);
-                    process_neural_event(j);
-                } catch (...) {}
-            }
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            try {
+                process_neural_event(j);
+            } catch (...) {}
         }
     }
 
@@ -157,17 +157,13 @@ private:
         std::vector<float> query_vec;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (std::chrono::steady_clock::now() < deadline) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::dontwait)) {
-                try {
-                    auto j = json::parse(static_cast<char*>(msg.data()),
-                                         static_cast<char*>(msg.data()) + msg.size());
-                    if (j.value("intent", "") == "embedding_result" &&
-                        j.value("cid", "") == search_cid) {
-                        query_vec = j.value("embedding", std::vector<float>{});
-                        break;
-                    }
-                } catch (...) {}
+            auto emb_j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (!emb_j.is_null()) {
+                if (emb_j.value("intent", "") == "embedding_result" &&
+                    emb_j.value("cid", "") == search_cid) {
+                    query_vec = emb_j.value("embedding", std::vector<float>{});
+                    break;
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
@@ -299,10 +295,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string payload = data.dump();
-        zmq::message_t msg(payload.size());
-        memcpy(msg.data(), payload.c_str(), payload.size());
-        pub.send(msg, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

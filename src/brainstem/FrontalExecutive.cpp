@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <fstream>
@@ -26,7 +27,13 @@ public:
 
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe(sub, {
+            "stimulus", "visual_stimulus", "execution_result",
+            "high_stress_alert", "homeostatic_pulse", "prompt_update",
+            "time_pulse", "search_result", "critic_result",
+            "intrinsic_goal", "polecat_ready", "polecat_done",
+            "inference_result"
+        });
 
         load_system_knowledge();
         std::cout << "[EXECUTIVE] Connected to Thalamus at " << thalamus_ip << std::endl;
@@ -36,8 +43,8 @@ public:
         auto last_activity = std::chrono::steady_clock::now();
 
         while (true) {
-            zmq::message_t msg;
-            if (!sub.recv(msg, zmq::recv_flags::dontwait)) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) {
                 if (active_goals.empty()) {
                     auto now = std::chrono::steady_clock::now();
                     if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 30) {
@@ -62,11 +69,7 @@ public:
                 continue;
             }
 
-            std::string raw(static_cast<char*>(msg.data()), msg.size());
             try {
-                if (raw.empty() || raw[0] != '{') continue;
-                auto j = json::parse(raw);
-                
                 std::string origin = j.value("origin", "");
                 std::string intent = j.value("intent", "");
 
@@ -740,10 +743,7 @@ private:
     }
 
     void dispatch_to_all(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

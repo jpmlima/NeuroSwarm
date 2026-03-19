@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -21,7 +22,7 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe_all(sub);
         
         std::cout << "[HOMEOSTASIS] Autonomic nervous system online." << std::endl;
     }
@@ -155,10 +156,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

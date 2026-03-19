@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <fstream>
@@ -37,7 +38,10 @@ public:
 
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe(sub, {
+            "polecat_assign", "search_result", "inference_result",
+            "critic_result", "execution_result", "time_pulse"
+        });
 
         // Allow ZMQ subscription to propagate before sending messages
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -58,8 +62,8 @@ public:
         auto last_activity = std::chrono::steady_clock::now();
 
         while (true) {
-            zmq::message_t msg;
-            if (!sub.recv(msg, zmq::recv_flags::dontwait)) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) {
                 // Timeout: self-terminate if idle for 120 seconds
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 120) {
@@ -81,11 +85,7 @@ public:
                 continue;
             }
 
-            std::string raw(static_cast<char*>(msg.data()), msg.size());
             try {
-                if (raw.empty() || raw[0] != '{') continue;
-                auto j = json::parse(raw);
-
                 std::string origin = j.value("origin", "");
                 std::string intent = j.value("intent", "");
                 std::string msg_cid = j.value("cid", "");
@@ -128,12 +128,8 @@ public:
                     handle_execution_result(j);
                 }
 
-            } catch (...) {
-                if (!cid.empty()) {
-                    history += "\nCRITICAL ERROR: Malformed message received.";
-                    request_thought("Your previous response was malformed. Provide a valid JSON action now.");
-                }
-            }
+            } catch (...) {}
+
         }
     }
 
@@ -358,10 +354,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

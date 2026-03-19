@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <string>
 #include <chrono>
@@ -99,10 +100,7 @@ private:
             {"is_night", (lt->tm_hour >= 22 || lt->tm_hour < 6)}
         };
 
-        std::string s = pulse.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, pulse);
     }
 };
 

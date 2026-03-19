@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <vector>
@@ -16,20 +17,17 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, ""); // Subscribe to all neural bus events
+        routing::subscribe(sub, {"user_input", "inference_request"});
 
         std::cout << "[WERNICKE] Semantic Interpreter Online." << std::endl;
     }
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            {
                 try {
-                    if (raw.empty() || raw[0] != '{') continue;
-                    auto j = json::parse(raw);
-                    
                     std::string origin = j.value("origin", "");
                     std::string intent = j.value("intent", "");
 
@@ -86,10 +84,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string s = data.dump();
-        zmq::message_t msg(s.size());
-        memcpy(msg.data(), s.c_str(), s.size());
-        pub.send(msg, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

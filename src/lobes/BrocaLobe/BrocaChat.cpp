@@ -2,6 +2,7 @@
 #include <string>
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <thread>
 #include <chrono>
 
@@ -15,7 +16,7 @@ int main() {
 
     zmq::socket_t sub(ctx, zmq::socket_type::sub);
     sub.connect("tcp://localhost:5556");
-    sub.set(zmq::sockopt::subscribe, ""); 
+    routing::subscribe(sub, {"inference_result", "execution_result"});
 
     std::cout << "\033[1;32m" << "=== NEUROSWARM AGI TERMINAL ===" << "\033[0m" << std::endl;
     std::cout << "Connected to Thalamus. Ready for neural stimulus." << std::endl;
@@ -37,10 +38,7 @@ int main() {
             {"text", input}
         };
 
-        std::string s_req = req.dump();
-        zmq::message_t z_req(s_req.size());
-        memcpy(z_req.data(), s_req.c_str(), s_req.size());
-        pub.send(z_req, zmq::send_flags::none);
+        routing::publish(pub, req);
 
         std::cout << "\033[1;33m[BRAIN IS THINKING...]\033[0m" << std::flush;
 
@@ -48,11 +46,9 @@ int main() {
         auto start_time = std::chrono::steady_clock::now();
 
         while (!answered) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::dontwait)) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (!j.is_null()) {
                 try {
-                    auto j = json::parse(std::string(static_cast<char*>(msg.data()), msg.size()));
-                    
                     std::string intent = j.value("intent", "");
                     std::string origin = j.value("origin", "");
                     std::string text = j.value("text", "");

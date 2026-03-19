@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <thread>
@@ -18,7 +19,7 @@ public:
         
         pub.connect(pub_addr);
         sub.connect(sub_addr);
-        sub.set(zmq::sockopt::subscribe, ""); // Assina tudo para monitorar riscos
+        routing::subscribe_all(sub); // Monitors all traffic for threat detection
 
         std::cout << "[AMYGDALA] Neural amygdala online (PUB/SUB)." << std::endl;
     }
@@ -28,15 +29,11 @@ public:
         homeostasis_monitor.detach();
 
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
-                try {
-                    if (raw.empty() || raw[0] != '{') continue;
-                    auto j = json::parse(raw);
-                    evaluate_stimulus(j);
-                } catch (...) {}
-            }
+            auto j = routing::receive(sub);
+            if (j.is_null()) continue;
+            try {
+                evaluate_stimulus(j);
+            } catch (...) {}
         }
     }
 
@@ -140,10 +137,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string payload = data.dump();
-        zmq::message_t msg(payload.size());
-        memcpy(msg.data(), payload.c_str(), payload.size());
-        pub.send(msg, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

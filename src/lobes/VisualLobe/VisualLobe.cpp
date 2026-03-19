@@ -8,6 +8,7 @@
 
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <string>
 #include <iostream>
 #include <thread>
@@ -28,7 +29,7 @@ public:
         
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe(sub, {"sensory_visual_input"});
         
         std::cout << "[VISUAL LOBE] Sensory system online. Watching: " << fs::absolute(root_path) << std::endl;
     }
@@ -69,11 +70,9 @@ private:
 
     void listen_zmq() {
         while (true) {
-            zmq::message_t msg;
-            if (sub.recv(msg, zmq::recv_flags::none)) {
-                std::string raw(static_cast<char*>(msg.data()), msg.size());
+            auto j = routing::receive(sub);
+            if (!j.is_null()) {
                 try {
-                    auto j = json::parse(raw);
                     if (j.value("intent", "") == "sensory_visual_input") {
                         std::string image_path = j.value("image_path", "");
                         std::cout << "[VISUAL LOBE] Processing visual stimulus from: " << image_path << std::endl;
@@ -170,10 +169,7 @@ private:
     }
 
     void dispatch(const json& data) {
-        std::string payload = data.dump();
-        zmq::message_t msg(payload.size());
-        memcpy(msg.data(), payload.c_str(), payload.size());
-        pub.send(msg, zmq::send_flags::none);
+        routing::publish(pub, data);
     }
 };
 

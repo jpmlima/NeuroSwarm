@@ -1,5 +1,6 @@
 #include <zmq.hpp>
 #include <nlohmann/json.hpp>
+#include <common/routing.hpp>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -41,7 +42,11 @@ public:
 
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        sub.set(zmq::sockopt::subscribe, "");
+        routing::subscribe(sub, {
+            "execution_result", "intrinsic_goal_request",
+            "homeostatic_pulse", "high_stress_alert",
+            "time_pulse", "intrinsic_goal_result"
+        });
 
         mkdir("./data", 0755);
         load_self_model();
@@ -53,16 +58,13 @@ public:
 
     void start() {
         while (true) {
-            zmq::message_t msg;
-            if (!sub.recv(msg, zmq::recv_flags::dontwait)) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
 
-            std::string raw(static_cast<char*>(msg.data()), msg.size());
             try {
-                if (raw.empty() || raw[0] != '{') continue;
-                auto j = json::parse(raw);
 
                 std::string origin = j.value("origin", "");
                 std::string intent = j.value("intent", "");
@@ -442,10 +444,7 @@ private:
             {"context", context}
         };
 
-        std::string s = goal.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, goal);
 
         std::cout << "[BASAL_GANGLIA] Intrinsic goal published: domain='" << best_domain
                   << "' fitness=" << best_fitness << " (" << context << ")" << std::endl;
@@ -461,10 +460,7 @@ private:
             {"timestamp", current_timestamp}
         };
 
-        std::string s = signal.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, signal);
 
         std::cout << "[BASAL_GANGLIA] Dopamine signal: " << reason
                   << " in domain '" << domain << "' (magnitude=" << magnitude << ")" << std::endl;
@@ -477,10 +473,7 @@ private:
             {"domain", domain}
         };
 
-        std::string s = update.dump();
-        zmq::message_t m(s.size());
-        memcpy(m.data(), s.c_str(), s.size());
-        pub.send(m, zmq::send_flags::none);
+        routing::publish(pub, update);
     }
 
     void check_cooldowns() {
