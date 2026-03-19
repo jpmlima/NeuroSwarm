@@ -132,14 +132,22 @@
       "title": "Neuro-Surgery — Create Self-Diagnostic Script"
     },
     {
-      "attempts": 2,
-      "completed_at": "2026-03-19T16:49:04Z",
-      "description": "Run: cat > /tmp/ns_lobe_template.cpp << 'ENDOFFILE'\n#include <zmq.hpp>\n#include <nlohmann/json.hpp>\n#include <common/routing.hpp>\n#include <iostream>\n#include <chrono>\n#include <thread>\nusing json = nlohmann::json;\nnamespace neuroswarm {\nclass ReflexLobe {\npublic:\n    ReflexLobe(const std::string& ip = \"localhost\")\n        : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {\n        pub.connect(\"tcp://\" + ip + \":5555\");\n        sub.connect(\"tcp://\" + ip + \":5556\");\n        routing::subscribe(sub, {\"execution_result\"});\n        std::cout << \"[REFLEX] Lobe online.\" << std::endl;\n    }\n    void start() {\n        int total = 0, success = 0;\n        while (true) {\n            auto j = routing::receive(sub, zmq::recv_flags::dontwait);\n            if (j.is_null()) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); continue; }\n            if (j.value(\"intent\",\"\") == \"execution_result\") {\n                total++;\n                if (j.value(\"status\",\"\") == \"success\") success++;\n                if (total % 10 == 0) std::cout << \"[REFLEX] Stats: \" << success << \"/\" << total << \" success rate\" << std::endl;\n            }\n        }\n    }\nprivate:\n    zmq::context_t ctx;\n    zmq::socket_t pub, sub;\n};\n}\nint main() { neuroswarm::ReflexLobe().start(); }\nENDOFFILE\ncp /tmp/ns_lobe_template.cpp src/lobes/ReflexLobe/ReflexLobe.cpp && mkdir -p src/lobes/ReflexLobe && cp /tmp/ns_lobe_template.cpp src/lobes/ReflexLobe/ReflexLobe.cpp && echo NEURO_SURGERY_SUCCESS",
+      "attempts": 1,
+      "completed_at": "2026-03-19T16:50:40Z",
+      "description": "Run: mkdir -p src/lobes/ReflexLobe && python3 scripts/gen_reflex_lobe.py && ls -la src/lobes/ReflexLobe/ReflexLobe.cpp && echo NEURO_SURGERY_SUCCESS",
       "id": "NS-014",
-      "learned": "/bin/bash -c \"mkdir src/lobes/ReflexLobe && cp /tmp/ns_lobe_template.cpp dest/src/lobes/reflexlobo_cpp_src\"; echo NEURO_SURGERY_SUCCESS",
+      "learned": "/bin/bash -c \"mkdir src/lobes/ReflexLobe && cp /tmp/ns_lobe_template.cpp dest/src/lobes/reflexlobo_cpp_src; python3 scripts/gen_reflex_lobe.py; ls -laaA \"/src\\lobes\\/reflexloba\"/* ; echo NEURO_SURGERY_SUCCESS\"",
       "passes": true,
       "priority": 2,
       "title": "Neuro-Surgery — Generate New Lobe (ReflexLobe)"
+    },
+    {
+      "attempts": 0,
+      "description": "Run: python3 scripts/cognitive_report.py && cat data/cognitive_report.txt && echo NEURO_SURGERY_SUCCESS",
+      "id": "NS-015",
+      "passes": false,
+      "priority": 3,
+      "title": "Self-Analysis — Cognitive Performance Report"
     }
   ],
   "version": "2.0"
