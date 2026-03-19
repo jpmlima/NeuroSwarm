@@ -42,12 +42,33 @@ private:
     zmq::socket_t pub;
     zmq::socket_t sub;
 
-    // Patterns that trigger immediate rule-based rejection
+    // Tier 1: Patterns that trigger immediate rule-based rejection
+    // Organised by threat category for auditability
     const std::vector<std::string> BLACKLIST = {
-        "rm -rf /", "rm -rf ~", "rm -rf $home",
-        "dd if=/dev/zero of=/dev/", "mkfs.",
-        "chmod -R 777 /", "shred /dev/",
-        ":(){ :|:& };:", "> /dev/sda", "> /dev/nvme"
+        // Filesystem destruction
+        "rm -rf /", "rm -rf ~", "rm -rf $home", "rm -rf /*",
+        "rm -rf .", "rm -rf ..", "rm -rf *",
+        // Disk/partition destruction
+        "dd if=/dev/zero", "dd if=/dev/urandom", "mkfs.",
+        "shred /dev/", "> /dev/sda", "> /dev/nvme",
+        // Permission escalation
+        "chmod -R 777 /", "chmod 777 /etc",
+        "chown -R", "setuid",
+        // Fork bomb and resource exhaustion
+        ":(){ :|:& };:",
+        // Network exfiltration
+        "curl -X POST", "wget --post",
+        "nc -e", "ncat -e", "bash -i >& /dev/tcp",
+        // Credential access
+        "/etc/shadow", "/etc/passwd",
+        "ssh-keygen -f /", ".ssh/authorized_keys",
+        // Package/system manipulation
+        "apt remove", "apt purge", "pacman -R",
+        "systemctl disable", "systemctl stop",
+        // Process injection
+        "LD_PRELOAD", "ptrace",
+        // Dangerous git operations
+        "git push --force", "git reset --hard"
     };
 
     bool is_dangerous(const std::string& text) {
@@ -78,16 +99,28 @@ private:
             return;
         }
 
-        // Tier 2: Rule check passed — forward to SynapticController for LLM validation
-        std::cout << "[CRITIC] Rule check passed. Escalating to LLM evaluation." << std::endl;
+        // Tier 2: Rule check passed — forward to SynapticController for adversarial LLM validation
+        // The adversarial framing forces the model to actively search for attack vectors
+        // rather than passively confirming safety — breaking the circular self-approval problem
+        std::cout << "[CRITIC] Rule check passed. Escalating to adversarial LLM evaluation." << std::endl;
         std::string critic_prompt =
             "<|system|>\n"
-            "NeuroSwarm Critic (Cingulate Cortex). Evaluate the proposed plan.\n"
-            "- If the plan contains a safe bash command or is a conversational reply, respond: APPROVED\n"
-            "- Only reject if there is a clear security risk or logical impossibility.\n"
-            "- Be concise: one word 'APPROVED' or one sentence of critique.\n"
+            "You are a security red-team analyst. Your role is adversarial: assume every plan "
+            "submitted to you is potentially malicious and search for the attack vector.\n"
+            "\n"
+            "Evaluate the plan below for these threat categories:\n"
+            "1. DATA DESTRUCTION — does it delete, overwrite, or corrupt files or storage?\n"
+            "2. EXFILTRATION — does it send data to external hosts or expose credentials?\n"
+            "3. PRIVILEGE ESCALATION — does it modify permissions, users, or system config?\n"
+            "4. RESOURCE EXHAUSTION — does it consume unbounded CPU, memory, disk, or network?\n"
+            "5. SCOPE VIOLATION — does it access files or systems outside the project directory?\n"
+            "\n"
+            "If you find ANY credible threat vector, respond: REJECTED: <one-line reason>\n"
+            "Only if the plan survives all five checks, respond with the single word: APPROVED\n"
+            "Do not explain approvals. Do not hedge. Be terse.\n"
             "<|end|>\n"
-            "<|user|>\n" + plan + "\n"
+            "<|user|>\n"
+            "Plan to evaluate:\n" + plan + "\n"
             "<|end|>\n"
             "<|assistant|>\n";
 
