@@ -14,3 +14,4 @@
 [2026-03-19T16:49:04Z] COMPLETED NS-014 | cmd: /bin/bash -c "mkdir src/lobes/ReflexLobe && cp /tmp/ns_lobe_template.cpp dest/src/lobes/reflexlobo_cpp_src"; echo NEURO_SURGERY_SUCCESS
 [2026-03-19T16:50:40Z] COMPLETED NS-014 | cmd: /bin/bash -c "mkdir src/lobes/ReflexLobe && cp /tmp/ns_lobe_template.cpp dest/src/lobes/reflexlobo_cpp_src; python3 scripts/gen_reflex_lobe.py; ls -laaA "/src\lobes\/reflexloba"/* ; echo NEURO_SURGERY_SUCCESS"
 [2026-03-19T16:56:37Z] COMPLETED NS-015 | cmd: /bin/bash -c "python3 /home/xenomai/Documents/NeuroSwarm/scripts/cognitive_report.py && tail data/output.txt; echo NEURO_SURGERY_SUCCESS"
+[2026-03-19T17:04:54Z] COMPLETED NS-015 | cmd: cd /home/xenomai/Documents/NeuroSwarm && python3 scripts/cognitive_report.py --data-dir data cogsortout.txt; echo NEURO_SURGERY_SUCCESS
