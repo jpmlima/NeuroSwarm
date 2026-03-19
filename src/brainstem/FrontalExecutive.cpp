@@ -99,6 +99,12 @@ public:
                     std::cout << "[EXECUTIVE] System knowledge updated by REM Engine ("
                               << j.value("learned_from", 0) << " traces)." << std::endl;
                 }
+                else if (origin == "chronos" && intent == "time_pulse") {
+                    current_timestamp = j.value("timestamp", "");
+                    current_uptime = j.value("uptime_human", "");
+                    current_time_of_day = j.value("time_of_day", "");
+                    is_night = j.value("is_night", false);
+                }
                 else if (origin == "hippocampus" && intent == "search_result") {
                     handle_memory_recall(j);
                 }
@@ -153,6 +159,11 @@ private:
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
     std::string system_knowledge; // injected into every prompt, updated by REM Engine
+    // Temporal context from ChronosLobe
+    std::string current_timestamp;
+    std::string current_uptime;
+    std::string current_time_of_day;
+    bool is_night = false;
 
     void handle_critic_feedback(const json& data) {
         std::string cid = data.value("cid", "unknown");
@@ -631,7 +642,9 @@ private:
             {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
             {"text", "<|system|>\nFRONTAL EXECUTIVE OF NEUROSWARM\nCRITICAL: The 'command' field must contain a REAL BASH command.\nMODES: Use 'mode': 'reality' for normal commands, and 'mode': 'neuro_surgery' ONLY when modifying and recompiling NeuroSwarm source code (src/*.cpp).\nExample for Neuro-Surgery: {\"thought\": \"optimizing thalamus\", \"command\": \"sed -i 's/old/new/g' src/brainstem/Thalamus.cpp\", \"mode\": \"neuro_surgery\", \"status\": \"COMPLETED\"}\nNEVER use placeholders like 'bash' or 'python' alone.\nRespond ONLY with the JSON structure.\n"
              + (system_knowledge.empty() ? "" : "\n" + system_knowledge + "\n")
-             + "<|end|>\n<|user|>\nGOAL: " + state.goal + state.memory_context + "\nHISTORY: " + state.history + "\n" + extra_prompt + "<|end|>\n<|assistant|>\n"}
+             + "<|end|>\n<|user|>\n"
+             + (current_timestamp.empty() ? "" : "TIME: " + current_timestamp + " | " + current_time_of_day + " | uptime: " + current_uptime + "\n")
+             + "GOAL: " + state.goal + state.memory_context + "\nHISTORY: " + state.history + "\n" + extra_prompt + "<|end|>\n<|assistant|>\n"}
         };
         dispatch_to_all(req);
     }

@@ -31,6 +31,8 @@ public:
         lobes.push_back({"CRITIC", base + "critic_lobe"});
         lobes.push_back({"VISUALIZER", base + "visualizer"});
         lobes.push_back({"REM_ENGINE", base + "rem_engine"});
+        lobes.push_back({"CHRONOS", base + "chronos_lobe"});
+        lobes.push_back({"STATISTICS", base + "statistics_lobe"});
     }
 
     void awaken() {

@@ -66,6 +66,12 @@ target_link_libraries(visualizer PRIVATE zmq nlohmann_json::nlohmann_json pthrea
 add_executable(rem_engine src/inference/REMEngine.cpp)
 target_link_libraries(rem_engine PRIVATE zmq nlohmann_json::nlohmann_json)
 
+add_executable(chronos_lobe src/lobes/ChronosLobe/ChronosLobe.cpp)
+target_link_libraries(chronos_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(statistics_lobe src/lobes/StatisticsLobe/StatisticsLobe.cpp)
+target_link_libraries(statistics_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
 target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
 

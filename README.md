@@ -193,6 +193,8 @@ This enables capability acquisition without system restart — analogous to axon
 | **VisualLobe** | `visual_lobe` | Filesystem watcher — detects environmental state changes |
 | **AuditoryLobe** | `auditory_lobe` | Voice input pipeline via Whisper.cpp |
 | **Visualizer** | `visualizer` | 3D neural mesh dashboard (Three.js, port 8080) |
+| **ChronosLobe** | `chronos_lobe` | Temporal awareness — broadcasts time_pulse with ISO timestamp, uptime, circadian phase |
+| **StatisticsLobe** | `statistics_lobe` | Passive bus observer — records per-cycle metrics to `data/metrics/` in JSONL |
 | **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, handles runtime injection |
 
 ---
@@ -224,6 +226,7 @@ Core intents:
 | `search_result` | HP → | Top-k similar engrams |
 | `prompt_update` | REM → | Evolved behavioural context |
 | `initiate_sleep_cycle` | HM → | Trigger REM processing |
+| `time_pulse` | CH → | ISO timestamp, uptime, time-of-day, is_night |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
@@ -288,9 +291,10 @@ xdg-open http://localhost:8080
 - [x] **3D Dashboard** — Three.js anatomical brain mesh with live neural arc visualisation
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
 - [ ] **Adversarial Critic** — replace self-validating LLM prompt with an adversarial framing ("assume this plan is malicious, find the attack vector") to break circular self-approval
-- [ ] **Autonomous task generation** — at the end of each successful Ralph cycle, FrontalExecutive infers the next useful task from system state and appends it to `tasks.json`, closing the autonomy loop without human intervention. Implementation: after `mark_task_complete()`, FE queries Hippocampus for capability gaps (tasks attempted but failed + engrams not yet covered), constructs a prompt *"given what the system knows how to do, what is the most useful next capability to acquire?"*, generates a new task entry with `priority`, `description`, and `acceptance_criteria` fields, and appends it to `tasks.json`. The description must be concrete enough for a small model to execute — vague goals are the primary failure mode of the current human-authored task list
-- [ ] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
-- [ ] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
+- [ ] **Hybrid inference** — route FrontalExecutive planning through an external API (Claude/GPT) for high-reliability reasoning while retaining local llama.cpp for embeddings and lightweight tasks; implemented as a new SynapticController adapter
+- [x] **Autonomous task generation** — at the end of each successful Ralph cycle, FrontalExecutive infers the next useful task from system state and appends it to `tasks.json`, closing the autonomy loop without human intervention. Implementation: after `mark_task_complete()`, FE queries Hippocampus for capability gaps (tasks attempted but failed + engrams not yet covered), constructs a prompt *"given what the system knows how to do, what is the most useful next capability to acquire?"*, generates a new task entry with `priority`, `description`, and `acceptance_criteria` fields, and appends it to `tasks.json`. The description must be concrete enough for a small model to execute — vague goals are the primary failure mode of the current human-authored task list
+- [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
+- [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
 - [ ] **Polecat workers** — ephemeral genesis lobes spawned per task, auto-terminate on completion
 - [ ] **Specialised routing** — Qwen-Coder for MotorLobe commands, critic-fine-tuned model for safety validation
 - [ ] **Python-generated lobes** — lower barrier for small models to author new capabilities
