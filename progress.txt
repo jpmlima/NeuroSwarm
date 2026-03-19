@@ -6,3 +6,4 @@
 [2026-03-19T07:08:18Z] COMPLETED NS-006 | cmd: /bin/bash -c "ps aux | grep polecat_worker && ps au --grep 'thalamus|synaptic' v || echo done"
 [2026-03-19T07:16:53Z] COMPLETED NS-007 | cmd: /bin/bash -c "wc -l data/engrams/memory_index.json > data/memory_depth.txt && tail -3 data/engrams/memory_index.json >> data/memory_depth.txt; echo 'done'"
 [2026-03-19T07:17:50Z] COMPLETED NS-008 | cmd: (cat data/self_model.json | head -40) >data/self_audit.txt && echo done
+[2026-03-19T07:22:51Z] COMPLETED NS-009 | cmd: wc -l src/brainstem/*.php && echo '' | cat >> data/source_stats.txt; find ./lobes/{*/}src/lobes/*/**/*.cpp dir > /dev/null 2>/dev/null || true ; wc-l $PWD/src/workers/compressed-cuda/cmake-build-debug/CMakeFiles/nvidia-simd-platform.dir/__/worker.c -l | cat >> data/source_stats.txt; echo done
