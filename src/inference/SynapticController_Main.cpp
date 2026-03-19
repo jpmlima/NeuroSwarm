@@ -5,7 +5,9 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <filesystem>
 
+namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 int main(int argc, char** argv) {
@@ -35,6 +37,40 @@ int main(int argc, char** argv) {
             std::cerr << "FATAL: Brain Model failed to initialize. Exiting." << std::endl;
             return 1;
         }
+
+        // Load specialist model slots — scan models/ for known patterns
+        const std::string models_dir = "/home/xenomai/Documents/NeuroSwarm/models/";
+
+        // "coder" slot: prefer Qwen2.5-Coder, fall back to Qwen2.5-Instruct (smaller/faster for command gen)
+        bool coder_loaded = false;
+        for (const auto& entry : fs::directory_iterator(models_dir)) {
+            std::string name = entry.path().filename().string();
+            if (name.find("qwen2.5-coder") != std::string::npos && name.find(".gguf") != std::string::npos) {
+                coder_loaded = brain.add_model("coder", entry.path().string());
+                break;
+            }
+        }
+        if (!coder_loaded) {
+            // Fall back to Qwen2.5-1.5B-instruct — a smaller, faster model well-suited for command generation
+            std::string qwen_fallback = models_dir + "qwen2.5-1.5b-instruct-q4_k_m.gguf";
+            if (fs::exists(qwen_fallback) && qwen_fallback != gen_model) {
+                coder_loaded = brain.add_model("coder", qwen_fallback);
+            }
+            if (!coder_loaded)
+                std::cout << "[BRAIN] No coder model found. 'coder' adapter will fall back to base model." << std::endl;
+        }
+
+        // "critic" slot: scan for any model with "critic" in the name
+        bool critic_loaded = false;
+        for (const auto& entry : fs::directory_iterator(models_dir)) {
+            std::string name = entry.path().filename().string();
+            if (name.find("critic") != std::string::npos && name.find(".gguf") != std::string::npos) {
+                critic_loaded = brain.add_model("critic", entry.path().string());
+                break;
+            }
+        }
+        if (!critic_loaded)
+            std::cout << "[BRAIN] No critic model found. 'critic' adapter will fall back to base model." << std::endl;
 
         zmq::context_t ctx(1);
         zmq::socket_t sub(ctx, zmq::socket_type::sub);

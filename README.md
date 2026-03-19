@@ -52,7 +52,7 @@ graph TD
     subgraph "Cognitive Core"
         WN[Wernicke — NLU / Intent Classification]
         FE[Frontal Executive — Goal Orchestration]
-        CL[Critic Lobe — 2-Tier Safety Validation]
+        CL[Critic Lobe — 3-Tier Safety Validation]
     end
 
     subgraph "Memory System"
@@ -269,7 +269,7 @@ Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 | **Embeddings** | nomic-embed-text-v1.5 Q8_0 — dedicated 137M model, mean pooling |
 | **Memory Index** | L2-normalised cosine similarity over JSONL (zero external dependencies) |
 | **Grammar Constraints** | GBNF — llama.cpp grammar-constrained decoding for structured JSON output |
-| **Safety** | Two-tier CriticLobe + Dream Sandbox filesystem isolation |
+| **Safety** | Three-tier CriticLobe (blacklist + scope + LLM) + Dream Sandbox filesystem isolation |
 | **Self-Modification** | GCC shared object compilation + `dlopen` runtime injection |
 | **Observability** | Three.js r128 + cpp-httplib — 3D anatomical brain mesh, live arc particles |
 | **Build System** | CMake 3.16+ / C++17 |
@@ -324,7 +324,7 @@ xdg-open http://localhost:8080
 - [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
 - [x] **Polecat workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
 - [x] **Specialised routing** — XPUB/XSUB topic-based intent filtering via Thalamus proxy. Each lobe subscribes only to its relevant intents at the ZMQ transport layer — messages that don't match never leave the Thalamus. Shared `routing.hpp` header provides `publish()`, `subscribe()`, `subscribe_all()`, `receive()` for all 20+ binaries. Monitoring lobes (Statistics, Visualizer, MetaCognition, Amygdala) subscribe to all traffic
-- [ ] **Model specialisation** — Qwen-Coder for MotorLobe commands, critic-fine-tuned model for safety validation
+- [x] **Model specialisation** — multi-slot ModelManager with named adapter routing. SynapticController auto-loads specialist GGUFs (Qwen-Coder → "coder" slot, critic model → "critic" slot) with graceful fallback to base model. FrontalExecutive uses "coder" adapter for command generation. CriticLobe Tier 2 LLM validation sends non-safe commands through "critic" adapter with GBNF-constrained safety verdict, 10s fail-open timeout
 - [ ] **REM fine-tuning** — LoRA fine-tune on accumulated successful execution traces
 
 ---

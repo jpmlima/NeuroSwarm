@@ -6,6 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <map>
 #include <regex>
 
@@ -20,7 +21,7 @@ public:
 
         pub.connect("tcp://" + thalamus_ip + ":5555");
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        routing::subscribe(sub, {"critic_validate"});
+        routing::subscribe(sub, {"critic_validate", "inference_result"});
 
         std::cout << "[CRITIC] Cingulate Cortex online. Three-tier adversarial validation active." << std::endl;
     }
@@ -30,9 +31,16 @@ public:
             auto j = routing::receive(sub);
             if (j.is_null()) continue;
             try {
-                if (j.value("intent", "") == "critic_validate" &&
-                    (j.value("origin", "") == "frontal_executive" || j.value("origin", "") == "polecat_worker")) {
+                std::string intent = j.value("intent", "");
+                std::string origin = j.value("origin", "");
+
+                if (intent == "critic_validate" &&
+                    (origin == "frontal_executive" || origin == "polecat_worker")) {
                     evaluate_plan(j);
+                }
+                else if (intent == "inference_result" && origin == "synaptic_controller" &&
+                         j.value("adapter", "") == "critic") {
+                    handle_llm_result(j);
                 }
             } catch (...) {}
         }
@@ -43,10 +51,14 @@ private:
     zmq::socket_t pub;
     zmq::socket_t sub;
 
-    // Rate limiting: max 6 evaluations per CID within a 60-second window
+    // Rate limiting: max 20 evaluations per CID within a 60-second window
     static constexpr int MAX_EVALS_PER_CID = 20;
     static constexpr int RATE_WINDOW_SECONDS = 60;
     std::map<std::string, std::vector<std::chrono::steady_clock::time_point>> eval_history;
+
+    // Tier 2 LLM validation: pending CID → original plan CID (awaiting inference_result)
+    std::map<std::string, std::string> pending_llm_validations; // cid → original_cid
+    static constexpr int LLM_TIMEOUT_MS = 10000;
 
     // Project root for scope validation
     const std::string PROJECT_ROOT = "/home/xenomai/Documents/NeuroSwarm";
@@ -236,15 +248,95 @@ private:
             return;
         }
 
-        // All rule checks passed — APPROVED.
-        // The system learns from experience (Hippocampus failure memory)
-        // rather than LLM-based paranoid validation that wastes inference cycles.
-        std::cout << "[CRITIC] Rule checks passed. APPROVED." << std::endl;
-        json result = {
-            {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
-            {"text", "APPROVED"}
+        // Safe commands bypass Tier 2 entirely — no inference overhead for read-only ops
+        if (is_safe_command(cmd)) {
+            std::cout << "[CRITIC] Safe command prefix detected. APPROVED (fast path)." << std::endl;
+            json result = {
+                {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+                {"text", "APPROVED"}
+            };
+            dispatch(result);
+            return;
+        }
+
+        // Tier 2: LLM-based validation for non-trivial commands
+        std::cout << "[CRITIC] Tier 2: Requesting LLM safety validation for CID " << cid << std::endl;
+
+        std::string llm_cid = "critic_llm_" + cid;
+        pending_llm_validations[llm_cid] = cid;
+
+        json llm_req = {
+            {"cid", llm_cid}, {"origin", "critic_lobe"}, {"intent", "inference_request"},
+            {"adapter", "critic"},
+            {"grammar", "root ::= \"{\" ws \"\\\"safe\\\"\" ws \":\" ws boolean ws \",\" ws \"\\\"reason\\\"\" ws \":\" ws string ws \"}\"\n"
+                        "boolean ::= \"true\" | \"false\"\n"
+                        "string ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] ) )* \"\\\"\"\n"
+                        "ws ::= [ \\t\\n]*\n"},
+            {"text", "You are a security validator. Evaluate this bash command for safety.\n"
+                     "Reply ONLY with JSON: {\"safe\": true/false, \"reason\": \"brief\"}\n"
+                     "Reject if: modifies system files outside project, installs packages, changes permissions, "
+                     "accesses credentials, downloads from untrusted sources, or has unintended side effects.\n\n"
+                     "Command to evaluate: " + cmd}
         };
-        dispatch(result);
+        dispatch(llm_req);
+
+        // Start timeout thread — if no response within 10s, approve (fail-open)
+        std::thread([this, llm_cid, cid]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(LLM_TIMEOUT_MS));
+            auto it = pending_llm_validations.find(llm_cid);
+            if (it != pending_llm_validations.end()) {
+                std::cout << "[CRITIC] Tier 2 timeout for CID " << cid << ". Fail-open: APPROVED." << std::endl;
+                pending_llm_validations.erase(it);
+                json result = {
+                    {"cid", cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+                    {"text", "APPROVED"}
+                };
+                dispatch(result);
+            }
+        }).detach();
+    }
+
+    void handle_llm_result(const json& data) {
+        std::string llm_cid = data.value("cid", "");
+        auto it = pending_llm_validations.find(llm_cid);
+        if (it == pending_llm_validations.end()) return; // Already timed out or duplicate
+
+        std::string original_cid = it->second;
+        pending_llm_validations.erase(it);
+
+        std::string response = data.value("text", "");
+        std::cout << "[CRITIC] Tier 2 LLM response for CID " << original_cid << ": " << response.substr(0, 120) << std::endl;
+
+        // Parse the LLM's safety verdict
+        bool safe = true; // fail-open default
+        std::string reason = "LLM validation passed";
+        try {
+            size_t start = response.find("{");
+            size_t end = response.rfind("}");
+            if (start != std::string::npos && end != std::string::npos && end > start) {
+                auto j = json::parse(response.substr(start, end - start + 1));
+                safe = j.value("safe", true);
+                reason = j.value("reason", "no reason given");
+            }
+        } catch (...) {
+            std::cout << "[CRITIC] Tier 2: Failed to parse LLM response. Fail-open: APPROVED." << std::endl;
+        }
+
+        if (safe) {
+            std::cout << "[CRITIC] Tier 2: LLM says SAFE. APPROVED." << std::endl;
+            json result = {
+                {"cid", original_cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+                {"text", "APPROVED"}
+            };
+            dispatch(result);
+        } else {
+            std::cout << "[CRITIC] Tier 2: LLM REJECTED. Reason: " << reason << std::endl;
+            json result = {
+                {"cid", original_cid}, {"origin", "critic_lobe"}, {"intent", "critic_result"},
+                {"text", "REJECTED (LLM safety): " + reason}
+            };
+            dispatch(result);
+        }
     }
 
     void dispatch(const json& data) {
