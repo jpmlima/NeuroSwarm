@@ -111,6 +111,8 @@ public:
                         handle_critic_feedback(j);
                     } else if (adapter == "nlu_specialist") {
                         start_new_goal(j);
+                    } else if (adapter == "task_generator") {
+                        handle_generated_task(j);
                     } else if (adapter == "executive" || adapter == "default") {
                         decide_next_step(j);
                     }
@@ -389,7 +391,8 @@ private:
         }
 
         if (best_idx == -1) {
-            std::cout << "[EXECUTIVE] All tasks complete. NeuroSwarm has achieved its goals." << std::endl;
+            std::cout << "[EXECUTIVE] All tasks complete. Generating next autonomous task..." << std::endl;
+            generate_next_task();
             return;
         }
 
@@ -477,6 +480,145 @@ private:
         }
 
         std::cout << "[EXECUTIVE] Ralph Loop — task " << task_id << " PASSED and committed." << std::endl;
+
+        // Trigger autonomous generation of the next task
+        generate_next_task();
+    }
+
+    // Autonomous task generation — infers the next useful task from system state
+    void generate_next_task() {
+        std::ifstream f("./tasks.json");
+        if (!f.is_open()) return;
+        json tasks_doc;
+        try { f >> tasks_doc; } catch (...) { return; }
+        f.close();
+
+        // Build a summary of completed tasks and their learned commands
+        std::string completed_summary;
+        int completed_count = 0;
+        int next_priority = 1;
+        for (auto& t : tasks_doc["tasks"]) {
+            int pri = t.value("priority", 0);
+            if (pri >= next_priority) next_priority = pri + 1;
+            if (t.value("passes", false)) {
+                completed_summary += "- " + t.value("id", "?") + ": " + t.value("title", "?")
+                    + " (cmd: " + t.value("learned", "?").substr(0, 80) + ")\n";
+                completed_count++;
+            }
+        }
+
+        // Compute next task ID
+        std::string next_id = "NS-" + std::string(3 - std::to_string(completed_count + 1).size(), '0')
+            + std::to_string(completed_count + 1);
+
+        std::cout << "[EXECUTIVE] Autonomous task generation — " << completed_count
+                  << " tasks completed, inferring next useful task..." << std::endl;
+
+        std::string prompt =
+            "<|system|>\n"
+            "You are the task planner for NeuroSwarm, a distributed cognitive architecture.\n"
+            "Your job: given what the system has already accomplished, generate the NEXT most useful task.\n"
+            "\n"
+            "RULES:\n"
+            "- The description MUST contain a concrete bash command or a precise step-by-step instruction.\n"
+            "- Do NOT repeat tasks already completed.\n"
+            "- Prefer tasks that expand system capabilities: monitoring, self-analysis, performance, resilience.\n"
+            "- The task must be achievable by a single bash command or short script.\n"
+            "- Keep the title under 40 characters.\n"
+            "- Keep the description under 200 characters.\n"
+            "\n"
+            "Respond ONLY with a JSON object: {\"title\": \"...\", \"description\": \"...\"}\n"
+            "<|end|>\n"
+            "<|user|>\n"
+            "COMPLETED TASKS:\n" + completed_summary + "\n"
+            "What is the next most useful task for the system to attempt?\n"
+            "<|end|>\n"
+            "<|assistant|>\n";
+
+        json req = {
+            {"cid", "taskgen_" + std::to_string(std::time(nullptr))},
+            {"origin", "frontal_executive"},
+            {"intent", "inference_request"},
+            {"adapter", "task_generator"},
+            {"grammar", "root   ::= \"{\" ws \"\\\"title\\\"\" ws \":\" ws string \",\" ws \"\\\"description\\\"\" ws \":\" ws string \"}\" ws\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nws     ::= [ \\t\\n\\r]*\n"},
+            {"text", prompt},
+            {"_next_priority", next_priority},
+            {"_next_id", next_id}
+        };
+        dispatch_to_all(req);
+    }
+
+    // Handle the LLM response from task generation and append to tasks.json
+    void handle_generated_task(const json& data) {
+        std::string raw = data.value("text", "");
+        std::cout << "[EXECUTIVE] Task generator response: " << raw.substr(0, 200) << std::endl;
+
+        // Parse the generated task
+        std::string title, description;
+        try {
+            size_t start = raw.find("{");
+            size_t end = raw.rfind("}");
+            if (start != std::string::npos && end != std::string::npos && end > start) {
+                auto gen = json::parse(raw.substr(start, end - start + 1));
+                title = gen.value("title", "");
+                description = gen.value("description", "");
+            }
+        } catch (...) {}
+
+        // Regex fallback for truncated output
+        if (title.empty()) {
+            std::smatch m;
+            std::regex title_re("\"title\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (std::regex_search(raw, m, title_re)) title = m[1].str();
+        }
+        if (description.empty()) {
+            std::smatch m;
+            std::regex desc_re("\"description\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (std::regex_search(raw, m, desc_re)) description = m[1].str();
+        }
+
+        if (title.empty() || description.empty()) {
+            std::cout << "[EXECUTIVE] Task generation failed — could not parse title/description." << std::endl;
+            return;
+        }
+
+        // Read metadata passed through the request
+        std::string next_id = data.value("_next_id", "NS-???");
+        int next_priority = data.value("_next_priority", 99);
+
+        // Append to tasks.json
+        std::ifstream fin("./tasks.json");
+        if (!fin.is_open()) return;
+        json tasks_doc;
+        try { fin >> tasks_doc; } catch (...) { return; }
+        fin.close();
+
+        // Check for duplicate titles
+        for (auto& t : tasks_doc["tasks"]) {
+            if (t.value("title", "") == title) {
+                std::cout << "[EXECUTIVE] Task generation skipped — duplicate title: " << title << std::endl;
+                return;
+            }
+        }
+
+        json new_task = {
+            {"id", next_id},
+            {"title", title},
+            {"description", description},
+            {"priority", next_priority},
+            {"passes", false},
+            {"attempts", 0},
+            {"generated_by", "autonomous"}
+        };
+
+        tasks_doc["tasks"].push_back(new_task);
+
+        std::ofstream fout("./tasks.json");
+        fout << tasks_doc.dump(2);
+        fout.close();
+
+        std::cout << "[EXECUTIVE] Autonomous task generated: [" << next_id << "] " << title
+                  << " — " << description.substr(0, 100) << std::endl;
     }
 
     void request_thought(const std::string& cid, const std::string& extra_prompt = "") {
