@@ -33,6 +33,7 @@ public:
         lobes.push_back({"REM_ENGINE", base + "rem_engine"});
         lobes.push_back({"CHRONOS", base + "chronos_lobe"});
         lobes.push_back({"STATISTICS", base + "statistics_lobe"});
+        lobes.push_back({"BASAL_GANGLIA", base + "basal_ganglia"});
     }
 
     void awaken() {

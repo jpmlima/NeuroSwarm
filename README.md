@@ -1,7 +1,7 @@
 # NeuroSwarm: Distributed Cognitive Architecture
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Version-2.1.0-blue?style=for-the-badge" alt="v2.1.0">
+  <img src="https://img.shields.io/badge/Version-2.2.0-blue?style=for-the-badge" alt="v2.2.0">
   <img src="https://img.shields.io/badge/Architecture-Distributed_Cortical_Matrix-green?style=for-the-badge" alt="Architecture">
   <img src="https://img.shields.io/badge/Language-C%2B%2B17-orange?style=for-the-badge" alt="C++17">
   <img src="https://img.shields.io/badge/Inference-Phi--4--mini_Q4__K__M-purple?style=for-the-badge" alt="Phi-4-mini">
@@ -65,6 +65,10 @@ graph TD
         MT[Motor Lobe — OS Execution\nNeuro-Surgery — Runtime Self-Modification]
     end
 
+    subgraph "Motivation System"
+        BG[BasalGanglia — Intrinsic Motivation\nSelf-Model + Fitness Function]
+    end
+
     subgraph "Autonomic Regulation"
         HM[Homeostasis — CPU/RAM/GPU Telemetry]
         MC[MetaCognition — Reflective Diary]
@@ -84,9 +88,12 @@ graph TD
     FE --> MT --> FE
     HP <--> FE
     REM --> FE
+    BG --> FE
+    HM --> BG
     HM --> FE
     MC --> TH
     TH --> VZ
+    TH --> BG
 ```
 
 ---
@@ -96,7 +103,7 @@ graph TD
 Every stimulus follows a deterministic pipeline:
 
 ```
-1. Stimulus arrives (user input / visual change / Ralph task scheduler)
+1. Stimulus arrives (user input / visual change / Ralph task scheduler / BasalGanglia intrinsic goal)
 2. FrontalExecutive queries Hippocampus → retrieves semantically similar past experiences
 3. FE constructs a plan via grammar-constrained LLM inference (GBNF → compact JSON)
 4. CriticLobe validates the plan:
@@ -111,9 +118,12 @@ Every stimulus follows a deterministic pipeline:
 
 ---
 
-## IV. Self-Improvement: The Ralph Loop
+## IV. Motivation: Three-Tier Task Selection
 
-NeuroSwarm includes a structured autonomous self-improvement mechanism — the **Ralph loop** — driven by `tasks.json`.
+NeuroSwarm uses a three-tier priority system to decide what to do next. This replaces the earlier single-source Ralph loop with a layered architecture that enables both extrinsic (human-defined) and intrinsic (self-generated) motivation.
+
+### Tier 1 — External Tasks (Ralph Loop)
+Human-authored goals in `tasks.json` are executed first, preserving backward compatibility:
 
 ```json
 {
@@ -124,23 +134,24 @@ NeuroSwarm includes a structured autonomous self-improvement mechanism — the *
       "priority": 1,
       "passes": true,
       "completed_at": "2026-03-17T04:22:11Z"
-    },
-    {
-      "id": "NS-002",
-      "description": "Verify neural bus health by publishing a diagnostic ping.",
-      "priority": 2,
-      "passes": false
     }
   ]
 }
 ```
 
-Each autonomous cycle:
-1. `pick_next_task()` selects the highest-priority unresolved task
-2. Hippocampus is queried for relevant prior experience
-3. FrontalExecutive generates a plan and submits it for Critic validation
-4. The plan is tested in the Dream Sandbox, then executed in reality
-5. On success: `mark_task_complete()` sets `passes: true`, appends to `progress.txt`, and issues an automatic `git commit` — creating a verifiable audit trail of autonomous achievements
+On success: `mark_task_complete()` sets `passes: true`, appends to `progress.txt`, and issues an automatic `git commit`.
+
+### Tier 2 — Intrinsic Motivation (BasalGanglia)
+When all external tasks are complete, FrontalExecutive requests an intrinsic goal from the **BasalGanglia** lobe. BasalGanglia maintains a self-model (`data/self_model.json`) tracking 14 capability domains and computes a fitness function to select the most informative domain to explore:
+
+```
+F(d) = 0.20 * Coverage + 0.15 * Trend + 0.30 * PredictionError + 0.25 * Novelty - 0.10 * Stress
+```
+
+BasalGanglia provides concrete command templates per domain, so the small model selects rather than invents. On novel capability discovery or high prediction error, a `dopamine_signal` is emitted on the bus.
+
+### Tier 3 — Epistemic Fallback
+If BasalGanglia is unresponsive, a hardcoded self-analysis goal is used as a last resort.
 
 ---
 
@@ -195,6 +206,7 @@ This enables capability acquisition without system restart — analogous to axon
 | **Visualizer** | `visualizer` | 3D neural mesh dashboard (Three.js, port 8080) |
 | **ChronosLobe** | `chronos_lobe` | Temporal awareness — broadcasts time_pulse with ISO timestamp, uptime, circadian phase |
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — records per-cycle metrics to `data/metrics/` in JSONL |
+| **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, goal generation |
 | **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, handles runtime injection |
 
 ---
@@ -227,6 +239,11 @@ Core intents:
 | `prompt_update` | REM → | Evolved behavioural context |
 | `initiate_sleep_cycle` | HM → | Trigger REM processing |
 | `time_pulse` | CH → | ISO timestamp, uptime, time-of-day, is_night |
+| `intrinsic_goal_request` | FE → BG | Request next intrinsic motivation goal |
+| `intrinsic_goal` | BG → FE | Domain, fitness score, suggested commands |
+| `intrinsic_goal_result` | FE → BG | Completion/failure report for self-model update |
+| `dopamine_signal` | BG → | Novel capability discovery or prediction error surprise |
+| `self_model_updated` | BG → | Domain state changed in `data/self_model.json` |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
@@ -292,7 +309,7 @@ xdg-open http://localhost:8080
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
 - [ ] **Adversarial Critic** — replace self-validating LLM prompt with an adversarial framing ("assume this plan is malicious, find the attack vector") to break circular self-approval
 - [ ] **Hybrid inference** — route FrontalExecutive planning through an external API (Claude/GPT) for high-reliability reasoning while retaining local llama.cpp for embeddings and lightweight tasks; implemented as a new SynapticController adapter
-- [x] **Autonomous task generation** — at the end of each successful Ralph cycle, FrontalExecutive infers the next useful task from system state and appends it to `tasks.json`, closing the autonomy loop without human intervention. Implementation: after `mark_task_complete()`, FE queries Hippocampus for capability gaps (tasks attempted but failed + engrams not yet covered), constructs a prompt *"given what the system knows how to do, what is the most useful next capability to acquire?"*, generates a new task entry with `priority`, `description`, and `acceptance_criteria` fields, and appends it to `tasks.json`. The description must be concrete enough for a small model to execute — vague goals are the primary failure mode of the current human-authored task list
+- [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
 - [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
 - [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
 - [ ] **Polecat workers** — ephemeral genesis lobes spawned per task, auto-terminate on completion

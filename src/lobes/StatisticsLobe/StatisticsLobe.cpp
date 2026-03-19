@@ -26,11 +26,12 @@ namespace neuroswarm {
 //   - Time pulses: used for session segmentation only
 //
 // Output files:
-//   data/metrics/ralph_cycles.jsonl   — one entry per completed Ralph task
+//   data/metrics/ralph_cycles.jsonl     — one entry per completed Ralph task
 //   data/metrics/critic_decisions.jsonl
 //   data/metrics/memory_recalls.jsonl
 //   data/metrics/inference_events.jsonl
-//   data/metrics/system_events.jsonl  — startup, stress alerts, sleep cycles
+//   data/metrics/system_events.jsonl    — startup, stress alerts, sleep cycles
+//   data/metrics/intrinsic_goals.jsonl  — intrinsic motivation decisions, results, dopamine signals
 
 class StatisticsLobe {
 public:
@@ -194,6 +195,44 @@ private:
                 {"detail", j.value("text", j.value("reason", ""))}
             };
             append_jsonl("system_events.jsonl", entry);
+        }
+
+        // Intrinsic motivation events from BasalGanglia
+        if (origin == "basal_ganglia" && intent == "intrinsic_goal") {
+            json entry = {
+                {"timestamp", now_iso()},
+                {"event", "intrinsic_goal"},
+                {"cid", cid},
+                {"domain", j.value("domain", "")},
+                {"fitness", j.value("fitness", 0.0f)},
+                {"context", j.value("context", "")}
+            };
+            append_jsonl("intrinsic_goals.jsonl", entry);
+        }
+
+        // Intrinsic goal results from FrontalExecutive
+        if (origin == "frontal_executive" && intent == "intrinsic_goal_result") {
+            json entry = {
+                {"timestamp", now_iso()},
+                {"event", "intrinsic_goal_result"},
+                {"cid", cid},
+                {"domain", j.value("domain", "")},
+                {"success", j.value("success", false)},
+                {"command", j.value("command", "")}
+            };
+            append_jsonl("intrinsic_goals.jsonl", entry);
+        }
+
+        // Dopamine signals from BasalGanglia
+        if (origin == "basal_ganglia" && intent == "dopamine_signal") {
+            json entry = {
+                {"timestamp", now_iso()},
+                {"event", "dopamine_signal"},
+                {"domain", j.value("domain", "")},
+                {"reason", j.value("reason", "")},
+                {"magnitude", j.value("magnitude", 0.0f)}
+            };
+            append_jsonl("intrinsic_goals.jsonl", entry);
         }
     }
 

@@ -16,3 +16,25 @@ Memory is handled as a stream of **Engram Traces**.
 
 ## 4. Frontal Executive (The Orchestrator)
 The Frontal Executive does not execute code. It generates **Cognitive Task Graphs**. It assigns these graphs to Active Columns and monitors the "Nervous Bus" (ZeroMQ) for resonance completion tags.
+
+## 5. BasalGanglia (The Motivation Engine)
+The BasalGanglia implements intrinsic motivation via a deterministic self-model and fitness function. It maintains a capability registry across 14 domains in `data/self_model.json`, computing a fitness score for each domain based on coverage, trend, prediction error, novelty, and system stress. When the Frontal Executive exhausts all external tasks, it requests an intrinsic goal from the BasalGanglia, which responds with the most informative domain to explore and concrete command templates for the small model to select from. Dopamine signals are emitted on novel capability discovery or high prediction error events.
+
+### Spawned by CerebralMatrix
+| Binary | Process | Function |
+|---|---|---|
+| `thalamus` | Neural Bus | ZMQ relay |
+| `synaptic_controller` | Inference | Phi-4-mini + Nomic-Embed |
+| `motor_lobe` | Execution | Dream/Reality/Neuro-Surgery |
+| `frontal_executive` | Orchestration | Goal management, three-tier task selection |
+| `amygdala` | Emotional gating | Priority assignment |
+| `wernicke_lobe` | NLU | Intent classification |
+| `visual_lobe` | Sensation | Filesystem watcher |
+| `homeostasis` | Regulation | CPU/RAM/GPU telemetry |
+| `metacognition` | Reflection | Internal state diary |
+| `critic_lobe` | Safety | Two-tier validation |
+| `visualizer` | Observability | 3D dashboard |
+| `rem_engine` | Learning | Behavioural prompt evolution |
+| `chronos_lobe` | Temporal | Time pulse broadcaster |
+| `statistics_lobe` | Metrics | JSONL event recorder |
+| `basal_ganglia` | Motivation | Intrinsic goal generation, self-model, dopamine |

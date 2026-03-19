@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(NeuroSwarm VERSION 1.1.0 LANGUAGES CXX)
+project(NeuroSwarm VERSION 2.2.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(cppzmq REQUIRED)
@@ -71,6 +71,9 @@ target_link_libraries(chronos_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(statistics_lobe src/lobes/StatisticsLobe/StatisticsLobe.cpp)
 target_link_libraries(statistics_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(basal_ganglia src/lobes/BasalGanglia/BasalGangliaLobe.cpp)
+target_link_libraries(basal_ganglia PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
 target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
