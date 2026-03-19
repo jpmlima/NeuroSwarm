@@ -112,9 +112,12 @@
       "title": "Neuro-Surgery — Increase Worker Pool"
     },
     {
+      "attempts": 3,
+      "completed_at": "2026-03-19T07:38:49Z",
       "description": "Run: sed -i '/NeuroSwarm v2.2.0/a\\        std::cout << \"[EXECUTIVE] Build: \" << __DATE__ << \" \" << __TIME__ << std::endl;' src/brainstem/FrontalExecutive.cpp && cd build && make -j$(nproc) frontal_executive 2>&1 | tail -3 && echo NEURO_SURGERY_SUCCESS",
       "id": "NS-012",
-      "passes": false,
+      "learned": "/bin/bash -c \\\"sed \\\\\\\\\\\"'/home/xenomai/Documents/NeuroSwarm/src/braingstem/FronteExecutive.cpp':a\\\\\\\\\\n        std::cout << [\\\"EXECUTIVE\\\"]  'src/{{date}} {{time}}\\\"><br>;' >> src/brainstame/frontal_executive.cpp; cd /home/xenomai/Documents/NeuroSwarm/build && make -j$(nproc) frontal_exeuciative &>> build.log || echo NEURO_SURGERY_FAILURE",
+      "passes": true,
       "priority": 7,
       "title": "Neuro-Surgery — Add Git Hash to Startup"
     }
