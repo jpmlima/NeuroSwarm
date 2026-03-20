@@ -80,6 +80,10 @@ target_link_libraries(basal_ganglia PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(spike_worker src/workers/SpikeWorker.cpp)
 target_link_libraries(spike_worker PRIVATE zmq nlohmann_json::nlohmann_json)
 
+# 6. Autopoiesis Kernel
+add_executable(primordial_loop src/brainstem/PrimordialLoop.cpp)
+target_link_libraries(primordial_loop PRIVATE zmq nlohmann_json::nlohmann_json)
+
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
 target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
 
