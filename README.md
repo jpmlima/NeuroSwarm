@@ -28,7 +28,7 @@ Each *lobe* is an independent OS process with a precisely scoped cognitive funct
 
 - **Modular** — lobes can be added, removed, or hot-swapped at runtime
 - **Fault-tolerant** — CerebralMatrix monitors all child processes, auto-restarts crashed lobes with exponential backoff
-- **Observable** — all inter-lobe state is visible on the bus and rendered on a real-time academic dashboard
+- **Observable** — all inter-lobe state is visible on the bus and rendered on a real-time dashboard
 - **Self-extending** — autonomous neurogenesis pipeline detects chronic failure domains and generates specialist lobes at runtime
 
 > *"A brain is not an intelligent 'thing' — it is a set of small idiot agents that, by collaborating, produce emergent intelligence."* — Marvin Minsky
@@ -293,7 +293,7 @@ Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 | **Grammar Constraints** | GBNF — llama.cpp grammar-constrained decoding for structured JSON output |
 | **Safety** | Three-tier CriticLobe (blacklist + scope + LLM) + Dream Sandbox filesystem isolation |
 | **Self-Modification** | GCC standalone executable compilation + CerebralMatrix fork/exec injection |
-| **Observability** | HTML5 Canvas + cpp-httplib — VOSviewer-inspired 2D network graph with density clusters |
+| **Observability** | HTML5 Canvas + cpp-httplib — 2D network graph with density clusters |
 | **Build System** | CMake 3.16+ / C++17 |
 | **OS** | Linux (Vulkan compute) |
 
@@ -338,19 +338,19 @@ xdg-open http://localhost:8080
 - [x] **Phi-4-mini** — primary generative model (3.8B, Q4_K_M, 2.4GB)
 - [x] **Dream Sandbox** — isolated filesystem execution before reality deployment
 - [x] **Neuro-Surgery** — runtime C++ lobe compilation and process injection
-- [x] **Cognitive Dashboard** — VOSviewer-inspired 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis/apoptosis metrics, spike task ticker
+- [x] **Cognitive Dashboard** — 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis/apoptosis metrics, spike task ticker
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
 - [x] **Adversarial Critic** — nuclear-only pattern blacklist (~10 catastrophic signatures: disk wipe, fork bombs, credential exfiltration), deterministic scope validation rejecting paths outside the project directory, adversarial red-team LLM prompt with reject-by-default framing. Rate limiting prevents inference flooding during neurotic loops (max 6 evaluations per CID per 60s)
 - [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
 - [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
-- [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
+- [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation
 - [x] **Spike workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
 - [x] **Specialised routing** — XPUB/XSUB topic-based intent filtering via Thalamus proxy. Each lobe subscribes only to its relevant intents at the ZMQ transport layer — messages that don't match never leave the Thalamus. Shared `routing.hpp` header provides `publish()`, `subscribe()`, `subscribe_all()`, `receive()` for all 20+ binaries. Monitoring lobes (Statistics, Visualizer, MetaCognition, Amygdala) subscribe to all traffic
 - [x] **Model specialisation** — multi-slot ModelManager with named adapter routing. SynapticController auto-loads specialist GGUFs (Qwen-Coder → "coder" slot, critic model → "critic" slot) with graceful fallback to base model. FrontalExecutive uses "coder" adapter for command generation. CriticLobe Tier 2 LLM validation sends non-safe commands through "critic" adapter with GBNF-constrained safety verdict, 10s fail-open timeout
 - [x] **REM fine-tuning** — REM Engine exports successful reality-mode execution traces as chat-template training data and spawns `llama-finetune` (CPU-only, no VRAM conflict) to produce specialised GGUFs. ModelManager supports LoRA adapter loading via `llama_adapter_lora_init` for externally-trained adapters, with per-inference activation/deactivation. SynapticController auto-loads fine-tuned models from `models/finetuned/` and LoRA adapters from `models/lora/` at startup
 - [x] **Self-preservation** — CerebralMatrix monitors all child processes via `waitpid(WNOHANG)`, detects crashes with signal/exit-code analysis, auto-restarts with exponential backoff (2s→4s→8s→16s), marks lobes permanently dead after 5 consecutive failures. Orphaned processes from previous sessions cleaned up at startup via `/proc` scan. FrontalExecutive reaps zombie spike workers in idle loop
 - [x] **Neurogenesis pipeline** — BasalGanglia detects chronic domain failure (<30% over 20+ attempts) and generates specialist lobes from parameterised C++ templates. MotorLobe compiles as standalone executables. CerebralMatrix validates binaries and injects via `fork()`/`exec()`. Specialists monitor their domain, publish advice and periodic reports. Apoptosis via `lobe_terminate` allows pruning of unneeded specialists
-- [x] **Academic dashboard** — VOSviewer-inspired 2D Canvas network graph replacing Three.js 3D mesh. Clean white theme with Inter/IBM Plex Mono typography. 16 core lobe nodes with cluster density clouds, curved bezier edges. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker with chronological task entries. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events
+- [x] **Dashboard v2** — 2D Canvas network graph replacing Three.js 3D mesh. 16 core lobe nodes with cluster density clouds, curved bezier edges. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker with chronological task entries. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events
 
 ---
 

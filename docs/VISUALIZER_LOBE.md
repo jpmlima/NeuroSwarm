@@ -1,20 +1,20 @@
 # Visualizer Lobe: Cognitive Observability Dashboard
 
 ## 1. Overview
-The **Visualizer Lobe** provides real-time observability into NeuroSwarm's cognitive state. It renders a VOSviewer-inspired 2D network graph showing all active lobes, their interconnections, and system-wide metrics — designed for academic presentation and thesis documentation.
+The **Visualizer Lobe** provides real-time observability into NeuroSwarm's cognitive state. It renders a 2D network graph showing all active lobes, their interconnections, and system-wide metrics.
 
 ## 2. Technical Stack
 *   **Backend:** C++ implementation using `cpp-httplib` for an ultra-lightweight web server.
 *   **Frontend:** Pure HTML5 Canvas for 2D network graph rendering. No external JS dependencies.
 *   **Communication:** Subscribes to all traffic on the ZMQ Thalamus bus and serves events via a JSON endpoint (`/events`).
-*   **Typography:** Inter (sans-serif) + IBM Plex Mono (monospace) — clean academic styling.
+*   **Typography:** Inter (sans-serif) + IBM Plex Mono (monospace).
 *   **Theme:** White/light professional theme with muted Tailwind-inspired colour palette.
 
 ## 3. Dashboard Layout
 
 ### Centre — Network Graph (Canvas)
 *   16 core lobe nodes with cluster-based colouring (cognitive core, memory, sensory, autonomic, execution, observability)
-*   Radial gradient density clouds per cluster (VOSviewer-style)
+*   Radial gradient density clouds per cluster
 *   Curved bezier edges representing known pub/sub connections (22 static edges)
 *   Node size proportional to cognitive importance (FrontalExecutive largest)
 *   Animated edge particles showing message flow direction
