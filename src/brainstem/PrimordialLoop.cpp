@@ -103,9 +103,13 @@ public:
             phase_tool_discovery();
         }
 
-        // Phase 5: Active Exploration — always run (explores new variations)
-        std::cout << "[PRIMORDIAL] Phase 5 — Active exploration via variation." << std::endl;
-        phase_active_exploration();
+        // Phase 5: Active Exploration — scaled by experience
+        // With many operators already known, reduce exploration to stay fast
+        int probe_count = incremental ? 5 : 20;  // 5 probes if experienced, 20 if fresh
+        std::cout << "[PRIMORDIAL] Phase 5 — Active exploration"
+                  << (incremental ? " (light — " + std::to_string(registry_.size()) + " operators known)" : "")
+                  << "." << std::endl;
+        phase_active_exploration(probe_count);
 
         // Report
         report_self_model();
@@ -142,6 +146,20 @@ public:
         } else {
             std::cout << "[PRIMORDIAL] Phase 7 — Skipped (no network)." << std::endl;
         }
+
+        // Enrich operators with inferred postconditions
+        enrich_operator_postconditions();
+
+        // Signal readiness to all lobes
+        json ready = {
+            {"origin", "primordial_loop"},
+            {"intent", "primordial_ready"},
+            {"operators", static_cast<int>(registry_.size())},
+            {"world_facts", static_cast<int>(world_state_.size())}
+        };
+        routing::publish(pub_, ready);
+        std::cout << "[PRIMORDIAL] Ready signal broadcast. " << registry_.size()
+                  << " operators, " << world_state_.size() << " facts." << std::endl;
 
         // Enter service loop — respond to operator/goal requests from other lobes
         service_loop();
@@ -503,7 +521,7 @@ private:
 
     // ─── Phase 5: Active Exploration ───
 
-    void phase_active_exploration() {
+    void phase_active_exploration(int max_binary_probes = 20) {
         // Sync the variation engine with all known fragments
         variation_.sync_fragments(registry_);
 
@@ -511,13 +529,14 @@ private:
         int candidates_tested = 0;
         int candidates_succeeded = 0;
 
-        // Get stable operators to use as parents
+        // Get stable operators to use as parents (cap at 10 for speed)
         auto stable = registry_.get_stable();
 
-        // Strategy 1: Mutate each known operator
+        // Strategy 1: Mutate known operators (cap to keep fast)
+        int max_mutate = std::min(static_cast<int>(stable.size()), 10);
         std::cout << "[PRIMORDIAL]   Mutating known operators..." << std::endl;
-        for (auto* parent : stable) {
-            auto mutations = variation_.mutate(*parent, 3);
+        for (int i = 0; i < max_mutate; i++) {
+            auto mutations = variation_.mutate(*stable[i], 2);
             for (const auto& candidate : mutations) {
                 if (test_candidate(candidate)) candidates_succeeded++;
                 candidates_tested++;
@@ -526,9 +545,9 @@ private:
 
         // Strategy 2: Recombine pairs of operators
         if (stable.size() >= 2) {
-            std::cout << "[PRIMORDIAL]   Recombining operator pairs..." << std::endl;
-            for (size_t i = 0; i < stable.size() - 1 && i < 5; i++) {
-                auto crosses = variation_.recombine(*stable[i], *stable[i + 1], 2);
+            int max_recomb = std::min(static_cast<int>(stable.size()) - 1, 3);
+            for (int i = 0; i < max_recomb; i++) {
+                auto crosses = variation_.recombine(*stable[i], *stable[i + 1], 1);
                 for (const auto& candidate : crosses) {
                     if (test_candidate(candidate)) candidates_succeeded++;
                     candidates_tested++;
@@ -538,7 +557,7 @@ private:
 
         // Strategy 3: Explore unknown binaries from PATH
         std::cout << "[PRIMORDIAL]   Probing unknown binaries..." << std::endl;
-        probe_unknown_binaries(20);
+        probe_unknown_binaries(max_binary_probes);
 
         // Strategy 4: Fragment assembly (pure exploration)
         std::cout << "[PRIMORDIAL]   Assembling from fragments..." << std::endl;
@@ -618,18 +637,17 @@ private:
             if (bin.find('-') != std::string::npos && bin.size() > 10) continue;
             if (bin.find('.') != std::string::npos) continue;
 
-            // Try running with --help first (safe, informative)
+            // Try running with --help (1s timeout to stay fast)
             std::string cmd = bin + " --help";
-            auto r = exec("timeout 3 " + cmd + " 2>&1 | head -5");
+            auto r = exec("timeout 1 " + cmd + " 2>&1 | head -3");
 
             if (r.exit_code == 0 || (r.exit_code != 0 && !r.output.empty() && r.output.size() > 10)) {
-                // The binary exists and responds — learn it as a potential operator
                 std::string context = "binary_probe_" + bin;
                 size_t output_hash = std::hash<std::string>{}(r.output);
                 surprise_.compute(context, true, output_hash);
 
-                // Try without arguments too
-                auto r2 = exec("timeout 3 " + bin + " 2>&1 | head -3");
+                // Try without arguments (1s timeout)
+                auto r2 = exec("timeout 1 " + bin + " 2>&1 | head -3");
                 if (r2.exit_code == 0 && !r2.output.empty()) {
                     Operator op;
                     op.name = bin;
@@ -1026,6 +1044,98 @@ private:
         std::cout << "[PRIMORDIAL]   Operators:   " << registry_.size() << std::endl;
         std::cout << "[PRIMORDIAL]   Surprise:    " << surprise_.global_surprise() << std::endl;
         std::cout << "[PRIMORDIAL] ═══════════════════" << std::endl;
+    }
+
+    // ─── Postcondition Inference ───
+    // Scan all operators and infer postconditions from command patterns.
+    // This makes the Planner useful — without postconditions, operators are invisible to it.
+
+    void enrich_operator_postconditions() {
+        struct PatternRule {
+            std::string pattern;       // substring to match in command_template
+            std::string postcondition; // postcondition to add
+        };
+
+        static const std::vector<PatternRule> rules = {
+            // File operations
+            {"cat ",        "can_read_file"},
+            {"head ",       "can_read_file"},
+            {"tail ",       "can_read_file"},
+            {"less ",       "can_read_file"},
+            {"stat ",       "can_read_file"},
+            {"wc ",         "can_read_file"},
+            {"file ",       "can_read_file"},
+            {"echo ",       "can_write_file"},
+            {"tee ",        "can_write_file"},
+            {"touch ",      "can_write_file"},
+            {"cp ",         "can_write_file"},
+            {"mv ",         "can_write_file"},
+            {"mkdir ",      "can_write_file"},
+            // Search
+            {"find ",       "can_search_files"},
+            {"grep ",       "can_search_files"},
+            {"locate ",     "can_search_files"},
+            {"rg ",         "can_search_files"},
+            // Process
+            {"ps ",         "can_see_processes"},
+            {"pgrep",       "can_see_processes"},
+            {"top ",        "can_see_processes"},
+            // Network
+            {"ss ",         "network_info_available"},
+            {"netstat",     "network_info_available"},
+            {"ip addr",     "network_info_available"},
+            {"ping ",       "network_info_available"},
+            {"curl ",       "network_info_available"},
+            // System
+            {"uptime",      "know_system_state"},
+            {"free ",       "know_system_state"},
+            {"df ",         "know_disk_space"},
+            {"uname",       "know_system_state"},
+            {"lscpu",       "know_cpu"},
+            // Git
+            {"git ",        "know_git_state"},
+            // Compilation
+            {"g++ ",        "can_create_tool"},
+            {"gcc ",        "can_create_tool"},
+            {"cmake ",      "can_create_tool"},
+            {"make ",       "can_create_tool"},
+            // Data
+            {"jq ",         "can_analyse_data"},
+            {"sort ",       "can_analyse_data"},
+            {"awk ",        "can_analyse_data"},
+            {"python3 ",    "can_run_script"},
+            {"bash ",       "can_run_script"},
+            // Self
+            {"data/self_model",  "know_self_state"},
+            {"data/engrams",     "can_analyse_memory"},
+            {"data/metrics",     "can_analyse_logs"},
+            {"progress.txt",     "can_analyse_logs"},
+        };
+
+        int enriched = 0;
+        // Iterate all operators via get_stable + find
+        auto stable = registry_.get_stable();
+        for (auto* op : stable) {
+            if (op->postconditions.empty()) {
+                for (const auto& rule : rules) {
+                    if (op->command_template.find(rule.pattern) != std::string::npos) {
+                        op->postconditions.push_back(rule.postcondition);
+                        // Also add to world state since we know this command works
+                        world_state_.insert(rule.postcondition);
+                        enriched++;
+                        break; // one postcondition per operator is enough
+                    }
+                }
+            }
+        }
+
+        if (enriched > 0) {
+            registry_.save_full();
+            save_world_state();
+            std::cout << "[PRIMORDIAL] Enriched " << enriched
+                      << " operators with inferred postconditions. World state: "
+                      << world_state_.size() << " facts." << std::endl;
+        }
     }
 
     // ─── Service Loop ───

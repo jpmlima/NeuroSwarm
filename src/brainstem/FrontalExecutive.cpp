@@ -34,7 +34,8 @@ public:
             "high_stress_alert", "homeostatic_pulse", "prompt_update",
             "time_pulse", "search_result", "critic_result",
             "intrinsic_goal", "spike_ready", "spike_done",
-            "inference_result", "metabolic_alert", "goal_plan"
+            "inference_result", "metabolic_alert", "goal_plan",
+            "primordial_ready"
         });
 
         load_system_knowledge();
@@ -137,6 +138,12 @@ public:
                 else if (origin == "primordial_loop" && intent == "goal_plan") {
                     handle_goal_plan(j);
                 }
+                else if (origin == "primordial_loop" && intent == "primordial_ready") {
+                    planner_ready_ = true;
+                    std::cout << "[EXECUTIVE] PrimordialLoop ready: "
+                              << j.value("operators", 0) << " operators, "
+                              << j.value("world_facts", 0) << " facts." << std::endl;
+                }
                 else if (origin == "spike_worker" && intent == "spike_ready") {
                     handle_spike_ready(j);
                 }
@@ -196,6 +203,7 @@ private:
     float system_stress = 0.0f;
     float current_stamina = 100.0f;  // Phase 5: metabolic energy level
     bool waiting_for_intrinsic_goal = false;
+    bool planner_ready_ = false;  // true after PrimordialLoop broadcasts primordial_ready
     std::string system_knowledge; // injected into every prompt, updated by REM Engine
     // Temporal context from ChronosLobe
     std::string current_timestamp;
@@ -752,6 +760,18 @@ private:
     std::set<std::string> pending_plans;  // CIDs awaiting goal_plan response
 
     void try_planner_first(const std::string& cid, const std::string& domain) {
+        // If PrimordialLoop hasn't finished bootstrap yet, skip Planner
+        if (!planner_ready_) {
+            std::cout << "[EXECUTIVE] Planner not ready — trying suggested commands directly." << std::endl;
+            auto it = active_goals.find(cid);
+            if (it != active_goals.end() && !it->second.suggested_commands.empty()) {
+                try_suggested_commands(cid);
+            } else {
+                fallback_to_llm(cid);
+            }
+            return;
+        }
+
         // Map domain to postcondition for the Planner
         static const std::map<std::string, std::string> domain_goals = {
             {"file_write",          "can_write_file"},
@@ -832,24 +852,8 @@ private:
             };
             dispatch_to_all(exec_req);
         } else if (!state.suggested_commands.empty()) {
-            // No plan but have suggested commands from BasalGanglia — try those directly
-            std::cout << "[EXECUTIVE] PLANNER MISS → SUGGESTED CMD: trying "
-                      << state.suggested_commands.size() << " commands from BasalGanglia for domain '"
-                      << state.domain << "'." << std::endl;
-
-            // Pick the first suggested command and execute directly
-            std::string cmd = state.suggested_commands.front();
-            state.suggested_commands.erase(state.suggested_commands.begin());
-
-            state.last_cmd = cmd;
-            state.last_mode = "reality";
-            state.history += "\n[SUGGESTED] Executing BasalGanglia command: " + cmd;
-
-            json exec_req = {
-                {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                {"command", cmd}, {"mode", "reality"}
-            };
-            dispatch_to_all(exec_req);
+            std::cout << "[EXECUTIVE] PLANNER MISS → trying suggested commands." << std::endl;
+            try_suggested_commands(cid);
         } else {
             // No plan and no suggestions — fall back to LLM inference
             auto gaps = data.value("gaps", json::array());
@@ -858,6 +862,33 @@ private:
             std::cout << ". Falling back to LLM." << std::endl;
             fallback_to_llm(cid);
         }
+    }
+
+    void try_suggested_commands(const std::string& cid) {
+        auto it = active_goals.find(cid);
+        if (it == active_goals.end()) return;
+        auto& state = it->second;
+
+        if (state.suggested_commands.empty()) {
+            fallback_to_llm(cid);
+            return;
+        }
+
+        std::string cmd = state.suggested_commands.front();
+        state.suggested_commands.erase(state.suggested_commands.begin());
+
+        std::cout << "[EXECUTIVE] SUGGESTED CMD: " << cmd
+                  << " (" << state.suggested_commands.size() << " remaining)" << std::endl;
+
+        state.last_cmd = cmd;
+        state.last_mode = "reality";
+        state.history += "\n[SUGGESTED] " + cmd;
+
+        json exec_req = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+            {"command", cmd}, {"mode", "reality"}
+        };
+        dispatch_to_all(exec_req);
     }
 
     void fallback_to_llm(const std::string& cid) {
