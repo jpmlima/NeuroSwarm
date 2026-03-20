@@ -32,6 +32,8 @@ public:
         routing::subscribe(inject_sub, {"inject_lobe", "lobe_terminate"});
 
         const std::string base = "/home/xenomai/Documents/NeuroSwarm/build/";
+        // PrimordialLoop bootstraps first — discovers environment, learns operators
+        init_lobes.push_back({"PRIMORDIAL", base + "primordial_loop"});
         init_lobes.push_back({"THALAMUS", base + "thalamus"});
         init_lobes.push_back({"SYNAPTIC", base + "synaptic_controller"});
         init_lobes.push_back({"HIPPOCAMPUS", base + "hippocampus"});

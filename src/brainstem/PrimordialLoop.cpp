@@ -44,7 +44,7 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
@@ -909,6 +909,8 @@ private:
                     handle_probe_request(j);
                 } else if (intent == "goal_request") {
                     handle_goal_request(j);
+                } else if (intent == "domain_resolve_request") {
+                    handle_domain_resolve(j);
                 }
             }
 
@@ -1153,6 +1155,159 @@ private:
         }
 
         routing::publish(pub_, resp);
+    }
+
+    // ─── Domain Resolution: Planner + Variation + LLM for chronic failures ───
+
+    void handle_domain_resolve(const json& j) {
+        std::string domain = j.value("domain", "");
+        std::string cid = j.value("cid", "unknown");
+        auto failed_commands = j.value("failed_commands", std::vector<std::string>{});
+
+        if (domain.empty()) return;
+
+        std::cout << "[PRIMORDIAL] Domain resolve request: " << domain
+                  << " (" << failed_commands.size() << " failed commands)" << std::endl;
+
+        int new_operators = 0;
+        int candidates_tested = 0;
+        int candidates_succeeded = 0;
+
+        // Stage 1: Targeted variation — mutate/recombine operators related to this domain
+        std::cout << "[PRIMORDIAL]   Stage 1: Targeted variation for '" << domain << "'..." << std::endl;
+        variation_.sync_fragments(registry_);
+
+        // Map domain to postcondition patterns for targeted search
+        std::string target_postcondition = domain_to_postcondition(domain);
+
+        auto candidates = variation_.targeted_variation(target_postcondition, registry_, 15);
+        for (const auto& c : candidates) {
+            candidates_tested++;
+            if (test_candidate(c)) {
+                candidates_succeeded++;
+                new_operators++;
+            }
+        }
+
+        // Stage 2: Mutate the failed commands directly — they were close to working
+        std::cout << "[PRIMORDIAL]   Stage 2: Mutating failed commands..." << std::endl;
+        for (const auto& failed_cmd : failed_commands) {
+            // Create a temporary operator from the failed command to mutate it
+            Operator temp_op;
+            temp_op.name = "failed_" + domain;
+            temp_op.command_template = failed_cmd;
+            temp_op.language = "bash";
+            // Decompose into fragments
+            std::istringstream iss(failed_cmd);
+            std::string frag;
+            while (iss >> frag) temp_op.fragments.push_back(frag);
+
+            auto mutations = variation_.mutate(temp_op, 5);
+            for (const auto& m : mutations) {
+                candidates_tested++;
+                if (test_candidate(m)) {
+                    candidates_succeeded++;
+                    new_operators++;
+                }
+            }
+        }
+
+        // Stage 3: Planner — check if any goal related to this domain can now be planned
+        std::cout << "[PRIMORDIAL]   Stage 3: Planner search for '" << target_postcondition << "'..." << std::endl;
+        bool plan_found = false;
+        if (planner_) {
+            auto plan = planner_->plan(world_state_, {target_postcondition});
+            if (plan.success) {
+                plan_found = true;
+                std::cout << "[PRIMORDIAL]   Plan found: " << plan.steps.size() << " steps." << std::endl;
+                // Execute the plan to prove it works
+                execute_plan(plan);
+            }
+        }
+
+        // Stage 4: LLM oracle as last resort (only if variation failed)
+        bool llm_used = false;
+        if (new_operators == 0 && !plan_found && oracle_) {
+            std::cout << "[PRIMORDIAL]   Stage 4: LLM oracle for domain '" << domain << "'..." << std::endl;
+            llm_used = true;
+
+            std::string env = self_.os + " " + self_.arch + ", user=" + self_.user;
+            if (self_.can_compile_cpp) env += ", g++ available";
+            if (self_.can_run_python) env += ", python3+pyzmq available";
+
+            std::vector<std::string> known_ops;
+            for (auto* op : registry_.get_stable()) {
+                known_ops.push_back(op->name + "=" + op->command_template);
+            }
+
+            auto result = oracle_->generate_operator(
+                target_postcondition, known_ops, failed_commands, env);
+
+            if (result.success) {
+                std::string safe_cmd = "timeout 5 bash -c " + shell_escape(result.command);
+                auto r = exec(safe_cmd);
+                if (r.exit_code == 0) {
+                    Operator new_op;
+                    new_op.name = infer_operator_name(result.command);
+                    new_op.command_template = result.command;
+                    new_op.language = result.language;
+                    new_op.postconditions = {target_postcondition};
+                    new_op.learned_from = "llm_oracle_domain_resolve";
+                    new_op.record_use(true, r.duration_ms);
+                    registry_.add(new_op);
+                    variation_.sync_fragments(registry_);
+                    new_operators++;
+                    std::cout << "[PRIMORDIAL]   LLM generated: " << result.command << std::endl;
+                }
+            }
+        }
+
+        // Report result
+        bool resolved = (new_operators > 0 || plan_found);
+        std::string method = plan_found ? "planner" :
+                            (llm_used && new_operators > 0) ? "llm_oracle" :
+                            (new_operators > 0) ? "variation" : "failed";
+
+        json resp = {
+            {"origin", "primordial_loop"},
+            {"intent", "domain_resolve_result"},
+            {"cid", cid},
+            {"domain", domain},
+            {"resolved", resolved},
+            {"method", method},
+            {"new_operators", new_operators},
+            {"candidates_tested", candidates_tested},
+            {"candidates_succeeded", candidates_succeeded},
+            {"operators_total", static_cast<int>(registry_.size())},
+            {"llm_calls", oracle_ ? oracle_->total_calls() : 0}
+        };
+        routing::publish(pub_, resp);
+
+        std::cout << "[PRIMORDIAL] Domain resolve " << (resolved ? "SUCCEEDED" : "FAILED")
+                  << ": domain='" << domain << "' method=" << method
+                  << " new_ops=" << new_operators << std::endl;
+    }
+
+    // Map domain name to a postcondition pattern for the planner
+    static std::string domain_to_postcondition(const std::string& domain) {
+        static const std::map<std::string, std::string> mapping = {
+            {"file_write",          "can_write_file"},
+            {"file_read",           "can_read_file"},
+            {"file_search",         "can_search_files"},
+            {"process_inspection",  "can_see_processes"},
+            {"network_diagnostics", "network_info_available"},
+            {"source_modification", "can_modify_source"},
+            {"compilation",         "can_create_tool"},
+            {"git_operations",      "know_git_state"},
+            {"system_monitoring",   "know_system_state"},
+            {"data_analysis",       "can_analyse_data"},
+            {"script_creation",     "can_create_script"},
+            {"self_inspection",     "know_self_state"},
+            {"memory_analysis",     "can_analyse_memory"},
+            {"log_analysis",        "can_analyse_logs"}
+        };
+        auto it = mapping.find(domain);
+        return it != mapping.end() ? it->second : domain;
     }
 
     static std::string trim(const std::string& s) {

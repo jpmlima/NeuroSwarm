@@ -51,7 +51,7 @@ public:
             "time_pulse", "intrinsic_goal_result",
             "lobe_crash", "lobe_death", "metabolic_alert",
             "genesis_result", "specialist_report", "lobe_injected",
-            "lobe_terminated"
+            "lobe_terminated", "domain_resolve_result"
         });
 
         mkdir("./data", 0755);
@@ -199,6 +199,30 @@ public:
                     std::string name = j.value("lobe_name", "");
                     std::cout << "[BASAL_GANGLIA] NEUROGENESIS COMPLETE: " << name
                               << " is now running in the matrix." << std::endl;
+                }
+                // Autopoiesis: domain resolve result from PrimordialLoop
+                else if (origin == "primordial_loop" && intent == "domain_resolve_result") {
+                    std::string domain = j.value("domain", "");
+                    bool resolved = j.value("resolved", false);
+                    std::string method = j.value("method", "");
+                    int new_ops = j.value("new_operators", 0);
+
+                    pending_resolve.erase(domain);
+
+                    if (resolved) {
+                        std::cout << "[BASAL_GANGLIA] AUTOPOIESIS RESOLVED: domain='" << domain
+                                  << "' method=" << method << " new_ops=" << new_ops << std::endl;
+                        // Reset domain failure tracking — give it a fresh chance
+                        if (self_model.count(domain)) {
+                            auto& d = self_model[domain];
+                            d.consecutive_failures = 0;
+                            d.cooldown_until = 0;
+                        }
+                    } else {
+                        std::cout << "[BASAL_GANGLIA] AUTOPOIESIS FAILED for '" << domain
+                                  << "' — falling back to NEUROGENESIS" << std::endl;
+                        trigger_neurogenesis(domain);
+                    }
                 }
                 // Phase 6: Lobe termination confirmation — specialist removed
                 else if (origin == "cerebral_matrix" && intent == "lobe_terminated") {
@@ -859,6 +883,7 @@ private:
     // Phase 6: Autonomous Neurogenesis — self-generating specialist lobes
     // ──────────────────────────────────────────────────────────────────────
     std::set<std::string> active_specialists;
+    std::set<std::string> pending_resolve;  // domains awaiting autopoiesis resolution
     static constexpr const char* GENESIS_DIR = "./src/lobes/genesis/";
 
     // Apoptosis tracking: domain → consecutive idle/healthy reports
@@ -1225,8 +1250,9 @@ int main() {
     }
 
     void check_neurogenesis(const std::string& domain) {
-        // Guard: already have a specialist for this domain
+        // Guard: already have a specialist or pending resolve for this domain
         if (active_specialists.count(domain)) return;
+        if (pending_resolve.count(domain)) return;
 
         auto& d = self_model[domain];
         int total = d.success + d.failure;
@@ -1235,18 +1261,40 @@ int main() {
         if (total < 20) return;
         if (d.actual_success_rate >= 0.30f) return;
 
-        // Require sufficient stamina to invest in neurogenesis
+        // Require sufficient stamina
         if (current_stamina < 50.0f) return;
 
         // Only trigger when SELF_MODIFY or MASTERY drive is active
         DriveLevel drive = get_current_drive();
         if (drive != DriveLevel::SELF_MODIFY && drive != DriveLevel::MASTERY) return;
 
-        std::cout << "[BASAL_GANGLIA] NEUROGENESIS: Domain '" << domain
+        std::cout << "[BASAL_GANGLIA] AUTOPOIESIS: Domain '" << domain
                   << "' chronically failing (" << (int)(d.actual_success_rate * 100)
-                  << "% over " << total << " attempts). Generating specialist." << std::endl;
+                  << "% over " << total << " attempts). Requesting PrimordialLoop resolution." << std::endl;
 
-        trigger_neurogenesis(domain);
+        // Collect recent failed commands for this domain
+        json failed_cmds = json::array();
+        for (const auto& cmd : d.example_commands) {
+            failed_cmds.push_back(cmd);
+        }
+
+        // Ask PrimordialLoop to try Planner + Variation + LLM first
+        std::string cid = "resolve_" + domain + "_" + std::to_string(std::time(nullptr));
+        json req = {
+            {"origin", "basal_ganglia"},
+            {"intent", "domain_resolve_request"},
+            {"cid", cid},
+            {"domain", domain},
+            {"failed_commands", failed_cmds},
+            {"success_rate", d.actual_success_rate},
+            {"total_attempts", total}
+        };
+        routing::publish(pub, req);
+
+        pending_resolve.insert(domain);
+
+        std::cout << "[BASAL_GANGLIA] AUTOPOIESIS: domain_resolve_request sent for '"
+                  << domain << "' — neurogenesis deferred pending resolution." << std::endl;
     }
 
     // Get suggested commands: prefer genome templates, fall back to static commands
