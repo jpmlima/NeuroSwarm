@@ -1,0 +1,46 @@
+
+Podemos dividir estas ideias em três eixos: Evolução Estrutural, Evolução Cognitiva e Evolução Operacional.
+
+  ---
+
+  1. Evolução Estrutural (A Arquitetura Física do Enxame)
+
+  A. Neurogénese Dinâmica (Criação de Lobos On-the-Fly)
+  Atualmente, a Cerebral Matrix gere lobos pré-definidos (Hipocampo, Amígdala, etc.). O próximo passo evolutivo é permitir que o
+  sistema escreva, compile e injete novos processos C++ (novos Lobos) quando detetar que precisa de uma ferramenta altamente
+  especializada.
+   * Como: Se o sistema se deparar frequentemente com tarefas pesadas de matemática, o FrontalExecutive pode instruir o LLM a
+     gerar um MathLobe.cpp em C++, pedir à Cerebral Matrix para o compilar via g++ em tempo de execução (dlopen ou fork de um
+     novo executável) e conectá-lo ao Thalamus. O sistema ganha um "órgão" novo.
+
+  B. Comunicação Inter-Enxames (Mente Coletiva / "Telepatia")
+  Se instalares o NeuroSwarm em duas máquinas diferentes (ex: o teu portátil e um servidor), eles deveriam poder conectar os seus
+  Thalamus via rede.
+   * Como: Partilhar a base de dados vetorial do Hippocampus ou os "sonhos" (lições) gerados pelo REM Engine. Um nó resolve um
+     problema complexo e transfere o engrama (a memória da solução) para os outros nós. A aprendizagem torna-se distribuída.
+
+  ---
+
+  2. Evolução Cognitiva (Como o Enxame Pensa e Aprende)
+
+  C. Ajuste Fino Autónomo (LoRA) durante o "Sono REM"
+  Eu notei que existe uma pasta models/lora/ e testes como rem_finetune_test.cpp. O passo definitivo aqui é a automação total.
+   * Como: Durante o dia, o sistema falha e é corrigido (ou pelo CriticLobe ou por ti). No "Sono REM", o sistema não deve apenas
+     gerar prompts melhores; deve preparar um dataset em JSONL com essas interações e lançar um script em background para treinar
+     um adaptador LoRA no próprio modelo llama.cpp. Quando acorda, carrega o novo LoRA. Ele acorda literalmente "mais
+     inteligente" e com a memória fixada nos pesos da rede, não apenas em ficheiros de texto.
+
+  D. Sistema Dopaminérgico (Recompensas Globais)
+  Inspirado nos Basal Ganglia (Gânglios Basais) que o projeto já tem. É preciso introduzir um escalar numérico na rede (uma
+  "Dopamina").
+   * Como: Quando um objetivo complexo é atingido com sucesso no Dream Sandbox, o CriticLobe emite um pulso de "alta dopamina"
+     pelo Thalamus. Os lobos que participaram nessa cadeia de pensamento usam esse sinal para reforçar os seus templates de
+     prompt e pesos de decisão (Reinforcement Learning from AI Feedback - RLAIF).
+
+  ---
+
+  Metacognição Robusta: Para a arquitetura ser auto-generativa sem entrar em colapso ou criar "alucinações estruturais", o FrontalExecutive precisará de uma camada de reflexão que valide se um novo "Lobo" ou uma alteração de código é funcional e necessária.
+  Abstração de "Células Estaminais" de Código: 
+  Talvez estejas a pensar em modelos de código que o sistema possa especializar (como o teu gen_reflex_lobe.py faz agora, mas de forma muito mais dinâmica).
+ Fecho do Ciclo de Feedback: 
+ A auto-geração atinge o seu potencial máximo quando o sistema consegue medir o sucesso da nova estrutura (através do Critic Lobe) e decidir se mantém a mutação ou faz "rollback".
