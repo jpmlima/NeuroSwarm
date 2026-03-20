@@ -636,6 +636,8 @@ private:
             // Skip multi-word or complex names
             if (bin.find('-') != std::string::npos && bin.size() > 10) continue;
             if (bin.find('.') != std::string::npos) continue;
+            // Skip GUI applications and interactive programs
+            if (is_gui_or_interactive(bin)) continue;
 
             // Try running with --help (1s timeout to stay fast)
             std::string cmd = bin + " --help";
@@ -662,6 +664,43 @@ private:
         }
 
         std::cout << "[PRIMORDIAL]   Probed " << probed << " new binaries." << std::endl;
+    }
+
+    static bool is_gui_or_interactive(const std::string& bin) {
+        static const std::vector<std::string> skip = {
+            // Editors / IDEs
+            "code", "codium", "vim", "nvim", "nano", "emacs", "gedit", "kate",
+            "subl", "atom", "micro", "helix",
+            // Browsers
+            "firefox", "chromium", "chrome", "brave", "vivaldi", "opera",
+            "qutebrowser", "surf", "midori", "epiphany",
+            // GUI apps
+            "gimp", "inkscape", "blender", "vlc", "mpv", "feh", "eog",
+            "nautilus", "thunar", "dolphin", "pcmanfm", "nemo",
+            "libreoffice", "okular", "evince", "zathura",
+            "steam", "discord", "slack", "telegram", "signal",
+            "obs", "kdenlive", "audacity", "shotwell",
+            // Terminal emulators
+            "alacritty", "kitty", "wezterm", "foot", "xterm", "urxvt",
+            "gnome", "konsole", "tilix", "terminator",
+            // Window managers / compositors
+            "hyprland", "sway", "i3", "dwm", "bspwm", "awesome",
+            "waybar", "polybar", "rofi", "dmenu", "wofi", "walker",
+            // System UI
+            "xdg", "dbus", "systemctl", "journalctl", "loginctl",
+            "bluetoothctl", "nmcli", "nmtui", "pavucontrol", "pamixer",
+            // Interactive tools
+            "python", "python3", "node", "irb", "ghci", "lua", "R",
+            "gdb", "lldb", "valgrind",
+            "less", "more", "man", "info", "vi",
+            "ssh", "telnet", "ftp", "sftp",
+            "mysql", "psql", "sqlite3", "redis",
+            "htop", "btop", "top", "nmon",
+        };
+        for (const auto& s : skip) {
+            if (bin == s) return true;
+        }
+        return false;
     }
 
     static bool is_dangerous(const std::string& cmd) {
