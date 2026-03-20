@@ -26,6 +26,7 @@
 #include <OperatorRegistry.hpp>
 #include <VariationEngine.hpp>
 #include <Planner.hpp>
+#include <LLMOracle.hpp>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -42,7 +43,7 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
@@ -83,8 +84,9 @@ public:
                   << "Global surprise: " << surprise_.global_surprise()
                   << std::endl;
 
-        // Initialize planner with learned operators
+        // Initialize planner and LLM oracle with learned operators
         planner_ = std::make_unique<Planner>(registry_);
+        oracle_ = std::make_unique<LLMOracle>(pub_, sub_);
 
         // Build initial world state from what we discovered
         for (const auto& [id, op] : get_all_postconditions()) {
@@ -109,6 +111,7 @@ private:
     OperatorRegistry registry_;
     VariationEngine variation_;
     std::unique_ptr<Planner> planner_;
+    std::unique_ptr<LLMOracle> oracle_;
     WorldState world_state_;  // current known facts about the world
 
     // Helper: collect all postconditions from learned operators as known facts
@@ -755,7 +758,10 @@ private:
             {"can_run_python", self_.can_run_python},
             {"operators_learned", static_cast<int>(registry_.size())},
             {"global_surprise", surprise_.global_surprise()},
-            {"contexts_known", static_cast<int>(surprise_.contexts_known())}
+            {"contexts_known", static_cast<int>(surprise_.contexts_known())},
+            {"llm_calls", oracle_ ? oracle_->total_calls() : 0},
+            {"llm_successes", oracle_ ? oracle_->total_successes() : 0},
+            {"llm_dependency", oracle_ ? oracle_->dependency_ratio() : 0.0}
         };
 
         // Save to disk
@@ -934,17 +940,81 @@ private:
         } else {
             std::cout << "[PRIMORDIAL] Plan FAILED: " << result.failure_reason << std::endl;
 
-            // Attempt to fill gaps via variation
+            // Attempt to fill gaps: variation first, then LLM as last resort
             if (j.value("auto_generate", false) && !result.gaps.empty()) {
-                std::cout << "[PRIMORDIAL] Attempting to fill gaps via variation..." << std::endl;
+                std::vector<std::string> remaining_gaps;
+
+                // Stage 1: Try variation (no LLM cost)
+                std::cout << "[PRIMORDIAL] Stage 1: Filling gaps via variation..." << std::endl;
                 variation_.sync_fragments(registry_);
 
                 for (const auto& gap : result.gaps) {
+                    bool filled = false;
                     auto candidates = variation_.targeted_variation(gap, registry_, 10);
                     for (const auto& c : candidates) {
                         if (test_candidate(c)) {
-                            std::cout << "[PRIMORDIAL] Gap filled: " << gap << std::endl;
+                            std::cout << "[PRIMORDIAL] Gap filled (variation): " << gap << std::endl;
+                            filled = true;
                             break;
+                        }
+                    }
+                    if (!filled) remaining_gaps.push_back(gap);
+                }
+
+                // Stage 2: LLM oracle for remaining gaps
+                if (!remaining_gaps.empty() && oracle_) {
+                    std::cout << "[PRIMORDIAL] Stage 2: Consulting LLM oracle for "
+                              << remaining_gaps.size() << " remaining gap(s)..." << std::endl;
+
+                    // Build environment summary for context
+                    std::string env = self_.os + " " + self_.arch + ", user=" + self_.user;
+                    if (self_.can_compile_cpp) env += ", g++ available";
+                    if (self_.can_run_python) env += ", python3+pyzmq available";
+                    if (self_.has_gpu) env += ", GPU available";
+                    if (self_.has_network) env += ", network available";
+
+                    // Collect known operator names for context
+                    std::vector<std::string> known_op_names;
+                    auto stable_ops = registry_.get_stable();
+                    for (auto* op : stable_ops) {
+                        known_op_names.push_back(op->name + "=" + op->command_template);
+                    }
+
+                    for (const auto& gap : remaining_gaps) {
+                        std::vector<std::string> failed_attempts;
+
+                        auto oracle_result = oracle_->generate_operator(
+                            gap, known_op_names, failed_attempts, env);
+
+                        if (oracle_result.success) {
+                            // Test the LLM-generated command in sandbox
+                            std::string safe_cmd = "timeout 5 bash -c "
+                                + shell_escape(oracle_result.command);
+                            auto r = exec(safe_cmd);
+
+                            if (r.exit_code == 0) {
+                                // SUCCESS — promote to operator
+                                Operator new_op;
+                                new_op.name = infer_operator_name(oracle_result.command);
+                                new_op.command_template = oracle_result.command;
+                                new_op.language = oracle_result.language;
+                                new_op.postconditions = {gap};
+                                new_op.learned_from = "llm_oracle";
+                                new_op.record_use(true, r.duration_ms);
+                                registry_.add(new_op);
+
+                                // Update fragment pool
+                                variation_.sync_fragments(registry_);
+
+                                std::cout << "[PRIMORDIAL] Gap filled (LLM): " << gap
+                                          << " → " << oracle_result.command << std::endl;
+                            } else {
+                                std::cout << "[PRIMORDIAL] LLM suggestion failed sandbox test: "
+                                          << oracle_result.command << std::endl;
+                            }
+                        } else {
+                            std::cout << "[PRIMORDIAL] LLM oracle could not generate for: "
+                                      << gap << std::endl;
                         }
                     }
                 }
@@ -955,6 +1025,8 @@ private:
                     std::cout << "[PRIMORDIAL] Re-plan succeeded after gap-filling!" << std::endl;
                     resp["success"] = true;
                     resp["gaps"] = json::array();
+                    resp["generation_method"] = "variation+llm";
+                    resp["llm_calls"] = oracle_ ? oracle_->total_calls() : 0;
                     steps_json.clear();
                     for (const auto& step : retry.steps) {
                         steps_json.push_back({
