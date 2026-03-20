@@ -932,6 +932,8 @@ private:
                 int bin_count = sm_doc.value("available_binaries", 0);
                 if (bin_count > 0) {
                     // Re-scan PATH (fast operation, ensures accuracy)
+                    self_.path_dirs.clear();
+                    self_.available_binaries.clear();
                     std::string path_str;
                     auto r = exec("echo $PATH");
                     path_str = trim(r.output);
