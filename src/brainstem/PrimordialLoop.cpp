@@ -25,6 +25,7 @@
 #include <SurpriseEngine.hpp>
 #include <OperatorRegistry.hpp>
 #include <VariationEngine.hpp>
+#include <Planner.hpp>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -41,7 +42,7 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
@@ -82,9 +83,21 @@ public:
                   << "Global surprise: " << surprise_.global_surprise()
                   << std::endl;
 
+        // Initialize planner with learned operators
+        planner_ = std::make_unique<Planner>(registry_);
+
+        // Build initial world state from what we discovered
+        for (const auto& [id, op] : get_all_postconditions()) {
+            world_state_.insert(id);
+        }
+
         broadcast_phase("bootstrap_complete", "Learned " + std::to_string(registry_.size()) + " operators.");
 
-        // Enter service loop — respond to operator requests from other lobes
+        // Phase 6: Self-test — verify the planner works with a simple goal
+        std::cout << "[PRIMORDIAL] Phase 6 — Planner self-test." << std::endl;
+        phase_planner_selftest();
+
+        // Enter service loop — respond to operator/goal requests from other lobes
         service_loop();
     }
 
@@ -95,6 +108,18 @@ private:
     SurpriseEngine surprise_;
     OperatorRegistry registry_;
     VariationEngine variation_;
+    std::unique_ptr<Planner> planner_;
+    WorldState world_state_;  // current known facts about the world
+
+    // Helper: collect all postconditions from learned operators as known facts
+    std::vector<std::pair<std::string, std::string>> get_all_postconditions() {
+        std::vector<std::pair<std::string, std::string>> facts;
+        auto stable = registry_.get_stable();
+        // Since stable requires 5 uses, also include all bootstrap operators
+        // by directly scanning the registry's postconditions
+        // For now, seed with facts from successful probes
+        return facts;
+    }
 
     // Self-model (Axiom 5)
     struct SelfModel {
@@ -609,6 +634,108 @@ private:
         return escaped;
     }
 
+    // ─── Phase 6: Planner Self-Test ───
+
+    void phase_planner_selftest() {
+        // Seed world state with facts we know from bootstrap
+        world_state_.insert("can_see_filesystem");
+        world_state_.insert("can_see_home");
+        world_state_.insert("know_current_directory");
+        world_state_.insert("can_see_processes");
+        world_state_.insert("know_cpu");
+        world_state_.insert("know_memory");
+        world_state_.insert("know_disk_space");
+        world_state_.insert("know_current_time");
+        world_state_.insert("produces_output");
+        if (self_.has_gpu) world_state_.insert("gpu_info_available");
+        if (self_.has_network) world_state_.insert("network_info_available");
+        if (self_.can_compile_cpp) world_state_.insert("can_create_tool");
+        if (self_.can_run_python) world_state_.insert("pyzmq_available");
+        world_state_.insert("know_git_state");
+
+        std::cout << "[PRIMORDIAL]   World state: " << world_state_.size() << " known facts." << std::endl;
+
+        // Test 1: Goal already satisfied
+        auto r1 = planner_->plan(world_state_, {"can_see_filesystem"});
+        std::cout << "[PRIMORDIAL]   Test 1 (already satisfied): "
+                  << (r1.success ? "PASS" : "FAIL")
+                  << " — " << r1.steps.size() << " steps" << std::endl;
+
+        // Test 2: Goal that requires one operator
+        // Remove a fact temporarily and see if planner finds the operator
+        WorldState partial = world_state_;
+        partial.erase("know_disk_space");
+        auto r2 = planner_->plan(partial, {"know_disk_space"});
+        std::cout << "[PRIMORDIAL]   Test 2 (one step): "
+                  << (r2.success ? "PASS" : "FAIL")
+                  << " — " << r2.steps.size() << " steps";
+        if (r2.success && !r2.steps.empty()) {
+            std::cout << " [" << r2.steps[0].operator_name << "]";
+        }
+        std::cout << std::endl;
+
+        // Test 3: Goal with chained preconditions
+        // "binary_exists(test_tool)" requires "compile_cpp" which requires "file_exists({source})"
+        auto r3 = planner_->plan(world_state_, {"binary_exists(test_tool)"});
+        std::cout << "[PRIMORDIAL]   Test 3 (multi-step): "
+                  << (r3.success ? "PASS" : "FAIL")
+                  << " — " << r3.steps.size() << " steps, "
+                  << r3.gaps.size() << " gaps, "
+                  << r3.nodes_explored << " nodes explored";
+        if (!r3.gaps.empty()) {
+            std::cout << " [gap: " << r3.gaps[0] << "]";
+        }
+        std::cout << std::endl;
+
+        // Test 4: Impossible goal (should report gap)
+        auto r4 = planner_->plan(world_state_, {"teleport_to_mars"});
+        std::cout << "[PRIMORDIAL]   Test 4 (impossible): "
+                  << (r4.gaps.size() > 0 ? "PASS" : "FAIL")
+                  << " — correctly identified " << r4.gaps.size() << " gap(s)"
+                  << std::endl;
+
+        // Execute a plan if we found one
+        if (r2.success && !r2.steps.empty()) {
+            std::cout << "[PRIMORDIAL]   Executing plan for 'know_disk_space'..." << std::endl;
+            execute_plan(r2);
+        }
+    }
+
+    void execute_plan(const PlanResult& plan) {
+        for (const auto& step : plan.steps) {
+            std::string cmd = step.command;
+            // Resolve any remaining placeholders with defaults
+            // (in a full system, bindings come from the goal context)
+
+            std::cout << "[PRIMORDIAL]     Step: " << step.operator_name
+                      << " → " << cmd << std::endl;
+
+            auto r = exec(cmd);
+            bool success = (r.exit_code == 0);
+
+            std::cout << "[PRIMORDIAL]     Result: "
+                      << (success ? "OK" : "FAIL")
+                      << " (" << r.duration_ms << "ms)" << std::endl;
+
+            // Update operator stats
+            auto* op = registry_.find(step.operator_name);
+            if (op) {
+                op->record_use(success, r.duration_ms);
+            }
+
+            // Update world state with postconditions
+            if (success) {
+                for (const auto& post : step.postconditions) {
+                    world_state_.insert(post);
+                }
+            } else {
+                std::cout << "[PRIMORDIAL]     Plan execution failed at step: "
+                          << step.operator_name << std::endl;
+                break;
+            }
+        }
+    }
+
     // ─── Self Model Report ───
 
     void report_self_model() {
@@ -669,6 +796,8 @@ private:
                     handle_operator_request(j);
                 } else if (intent == "probe_request") {
                     handle_probe_request(j);
+                } else if (intent == "goal_request") {
+                    handle_goal_request(j);
                 }
             }
 
@@ -748,6 +877,104 @@ private:
             {"is_novel", s.is_novel},
             {"operators_known", static_cast<int>(registry_.size())}
         };
+        routing::publish(pub_, resp);
+    }
+
+    void handle_goal_request(const json& j) {
+        std::string cid = j.value("cid", "unknown");
+        auto goals = j.value("goals", std::vector<std::string>{});
+
+        if (goals.empty()) {
+            // Single goal format
+            std::string goal = j.value("goal", "");
+            if (!goal.empty()) goals.push_back(goal);
+        }
+
+        if (goals.empty()) return;
+
+        std::cout << "[PRIMORDIAL] Goal request [" << cid << "]: ";
+        for (const auto& g : goals) std::cout << g << " ";
+        std::cout << std::endl;
+
+        auto result = planner_->plan(world_state_, goals);
+
+        json resp = {
+            {"origin", "primordial_loop"},
+            {"intent", "goal_plan"},
+            {"cid", cid},
+            {"success", result.success},
+            {"steps_count", static_cast<int>(result.steps.size())},
+            {"gaps", result.gaps},
+            {"nodes_explored", result.nodes_explored}
+        };
+
+        // Include plan steps
+        json steps_json = json::array();
+        for (const auto& step : result.steps) {
+            steps_json.push_back({
+                {"operator_id", step.operator_id},
+                {"operator_name", step.operator_name},
+                {"command", step.command},
+                {"preconditions", step.preconditions},
+                {"postconditions", step.postconditions}
+            });
+        }
+        resp["steps"] = steps_json;
+
+        if (result.success) {
+            std::cout << "[PRIMORDIAL] Plan found: " << result.steps.size()
+                      << " steps, " << result.nodes_explored << " nodes explored." << std::endl;
+
+            // Auto-execute if requested
+            if (j.value("auto_execute", false)) {
+                std::cout << "[PRIMORDIAL] Auto-executing plan..." << std::endl;
+                execute_plan(result);
+                resp["executed"] = true;
+            }
+        } else {
+            std::cout << "[PRIMORDIAL] Plan FAILED: " << result.failure_reason << std::endl;
+
+            // Attempt to fill gaps via variation
+            if (j.value("auto_generate", false) && !result.gaps.empty()) {
+                std::cout << "[PRIMORDIAL] Attempting to fill gaps via variation..." << std::endl;
+                variation_.sync_fragments(registry_);
+
+                for (const auto& gap : result.gaps) {
+                    auto candidates = variation_.targeted_variation(gap, registry_, 10);
+                    for (const auto& c : candidates) {
+                        if (test_candidate(c)) {
+                            std::cout << "[PRIMORDIAL] Gap filled: " << gap << std::endl;
+                            break;
+                        }
+                    }
+                }
+
+                // Retry planning after gap-filling
+                auto retry = planner_->plan(world_state_, goals);
+                if (retry.success) {
+                    std::cout << "[PRIMORDIAL] Re-plan succeeded after gap-filling!" << std::endl;
+                    resp["success"] = true;
+                    resp["gaps"] = json::array();
+                    steps_json.clear();
+                    for (const auto& step : retry.steps) {
+                        steps_json.push_back({
+                            {"operator_id", step.operator_id},
+                            {"operator_name", step.operator_name},
+                            {"command", step.command},
+                            {"preconditions", step.preconditions},
+                            {"postconditions", step.postconditions}
+                        });
+                    }
+                    resp["steps"] = steps_json;
+
+                    if (j.value("auto_execute", false)) {
+                        execute_plan(retry);
+                        resp["executed"] = true;
+                    }
+                }
+            }
+        }
+
         routing::publish(pub_, resp);
     }
 
