@@ -49,31 +49,61 @@ public:
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
 
-        std::cout << "[PRIMORDIAL] Awakening. I know nothing." << std::endl;
+        // Try to load previous world state + self model
+        bool has_memory = load_persisted_state();
+
+        if (has_memory) {
+            std::cout << "[PRIMORDIAL] Awakening. I remember " << world_state_.size()
+                      << " facts, " << registry_.size() << " operators." << std::endl;
+        } else {
+            std::cout << "[PRIMORDIAL] Awakening. I know nothing." << std::endl;
+        }
     }
 
     void start() {
+        bool incremental = !world_state_.empty();
+
         // Phase 0: Existence
         std::cout << "[PRIMORDIAL] Phase 0 — I exist. I can execute." << std::endl;
         broadcast_phase("existence", "I can execute and observe.");
 
         // Phase 1: First Contact
-        std::cout << "[PRIMORDIAL] Phase 1 — First contact with reality." << std::endl;
-        phase_first_contact();
+        if (incremental && !self_.user.empty()) {
+            std::cout << "[PRIMORDIAL] Phase 1 — Recalled: " << self_.user
+                      << "@" << self_.hostname << " (" << self_.os << " " << self_.arch << ")" << std::endl;
+        } else {
+            std::cout << "[PRIMORDIAL] Phase 1 — First contact with reality." << std::endl;
+            phase_first_contact();
+        }
 
         // Phase 2: Capability Discovery
-        std::cout << "[PRIMORDIAL] Phase 2 — Discovering capabilities." << std::endl;
-        phase_capability_discovery();
+        if (incremental && !self_.available_binaries.empty()) {
+            std::cout << "[PRIMORDIAL] Phase 2 — Recalled: " << self_.available_binaries.size()
+                      << " binaries, " << self_.writable_dirs.size() << " writable dirs." << std::endl;
+        } else {
+            std::cout << "[PRIMORDIAL] Phase 2 — Discovering capabilities." << std::endl;
+            phase_capability_discovery();
+        }
 
-        // Phase 3: Sense Acquisition
-        std::cout << "[PRIMORDIAL] Phase 3 — Acquiring senses." << std::endl;
+        // Phase 3: Sense Acquisition — always re-probe (senses change)
+        std::cout << "[PRIMORDIAL] Phase 3 — " << (incremental ? "Re-probing" : "Acquiring") << " senses." << std::endl;
         phase_sense_acquisition();
 
         // Phase 4: Tool Discovery
-        std::cout << "[PRIMORDIAL] Phase 4 — Discovering tools." << std::endl;
-        phase_tool_discovery();
+        if (incremental && !self_.languages.empty()) {
+            std::cout << "[PRIMORDIAL] Phase 4 — Recalled: " << self_.languages.size()
+                      << " languages (" ;
+            for (const auto& l : self_.languages) std::cout << l << " ";
+            std::cout << ")" << std::endl;
+            // Re-verify compilers still exist (fast check)
+            self_.can_compile_cpp = (exec("which g++ 2>/dev/null").exit_code == 0);
+            self_.can_run_python = (exec("which python3 2>/dev/null").exit_code == 0);
+        } else {
+            std::cout << "[PRIMORDIAL] Phase 4 — Discovering tools." << std::endl;
+            phase_tool_discovery();
+        }
 
-        // Phase 5: Active Exploration — use variation to discover new operators
+        // Phase 5: Active Exploration — always run (explores new variations)
         std::cout << "[PRIMORDIAL] Phase 5 — Active exploration via variation." << std::endl;
         phase_active_exploration();
 
@@ -99,6 +129,9 @@ public:
         // Phase 6: Self-test — verify the planner works with a simple goal
         std::cout << "[PRIMORDIAL] Phase 6 — Planner self-test." << std::endl;
         phase_planner_selftest();
+
+        // Persist world state after all phases (world_state_ populated by selftest)
+        save_world_state();
 
         // Phase 7: Network Expansion — discover and probe remote hosts
         if (self_.has_network) {
@@ -836,12 +869,112 @@ private:
                 for (const auto& post : step.postconditions) {
                     world_state_.insert(post);
                 }
+                save_world_state();
             } else {
                 std::cout << "[PRIMORDIAL]     Plan execution failed at step: "
                           << step.operator_name << std::endl;
                 break;
             }
         }
+    }
+
+    // ─── Persistence: world state + self model ───
+
+    static constexpr const char* WORLD_STATE_PATH = "data/world_state.json";
+    static constexpr const char* SELF_MODEL_PATH = "data/self_model_primordial.json";
+
+    bool load_persisted_state() {
+        bool loaded = false;
+
+        // Load world state
+        std::ifstream ws_f(WORLD_STATE_PATH);
+        if (ws_f.is_open()) {
+            try {
+                json ws_doc;
+                ws_f >> ws_doc;
+                if (ws_doc.contains("facts") && ws_doc["facts"].is_array()) {
+                    for (const auto& fact : ws_doc["facts"]) {
+                        world_state_.insert(fact.get<std::string>());
+                    }
+                }
+                loaded = true;
+            } catch (...) {}
+        }
+
+        // Load self model
+        std::ifstream sm_f(SELF_MODEL_PATH);
+        if (sm_f.is_open()) {
+            try {
+                json sm_doc;
+                sm_f >> sm_doc;
+                self_.user = sm_doc.value("user", "");
+                self_.home = sm_doc.value("home", "");
+                self_.hostname = sm_doc.value("hostname", "");
+                self_.os = sm_doc.value("os", "");
+                self_.arch = sm_doc.value("arch", "");
+                self_.has_network = sm_doc.value("has_network", false);
+                self_.has_gpu = sm_doc.value("has_gpu", false);
+                self_.can_compile_cpp = sm_doc.value("can_compile_cpp", false);
+                self_.can_run_python = sm_doc.value("can_run_python", false);
+
+                if (sm_doc.contains("writable_dirs") && sm_doc["writable_dirs"].is_array()) {
+                    self_.writable_dirs.clear();
+                    for (const auto& d : sm_doc["writable_dirs"])
+                        self_.writable_dirs.push_back(d.get<std::string>());
+                }
+                if (sm_doc.contains("languages") && sm_doc["languages"].is_array()) {
+                    self_.languages.clear();
+                    for (const auto& l : sm_doc["languages"])
+                        self_.languages.push_back(l.get<std::string>());
+                }
+
+                // Rebuild available_binaries list (fast, needed for variation)
+                int bin_count = sm_doc.value("available_binaries", 0);
+                if (bin_count > 0) {
+                    // Re-scan PATH (fast operation, ensures accuracy)
+                    std::string path_str;
+                    auto r = exec("echo $PATH");
+                    path_str = trim(r.output);
+                    std::istringstream ps(path_str);
+                    std::string dir;
+                    while (std::getline(ps, dir, ':')) {
+                        if (!dir.empty()) self_.path_dirs.push_back(dir);
+                    }
+
+                    for (const auto& d : self_.path_dirs) {
+                        try {
+                            if (!fs::exists(d)) continue;
+                            for (const auto& entry : fs::directory_iterator(d)) {
+                                if (entry.is_regular_file()) {
+                                    auto perms = entry.status().permissions();
+                                    if ((perms & fs::perms::owner_exec) != fs::perms::none) {
+                                        self_.available_binaries.push_back(entry.path().filename().string());
+                                    }
+                                }
+                            }
+                        } catch (...) {}
+                    }
+                    std::sort(self_.available_binaries.begin(), self_.available_binaries.end());
+                    self_.available_binaries.erase(
+                        std::unique(self_.available_binaries.begin(), self_.available_binaries.end()),
+                        self_.available_binaries.end());
+                }
+
+                loaded = !self_.user.empty();
+            } catch (...) {}
+        }
+
+        return loaded;
+    }
+
+    void save_world_state() {
+        json facts = json::array();
+        for (const auto& fact : world_state_) {
+            facts.push_back(fact);
+        }
+        json doc = {{"facts", facts}, {"count", static_cast<int>(world_state_.size())}};
+        std::ofstream f(WORLD_STATE_PATH);
+        if (f.is_open()) f << doc.dump(2);
     }
 
     // ─── Self Model Report ───
