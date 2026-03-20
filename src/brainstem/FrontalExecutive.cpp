@@ -190,6 +190,7 @@ private:
         std::string domain = "";       // capability domain (set by BasalGanglia)
         float fitness_score = 0.0f;    // fitness at time of selection
         bool is_intrinsic = false;     // true if goal came from BasalGanglia
+        std::vector<std::string> suggested_commands; // from BasalGanglia
     };
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
@@ -539,6 +540,24 @@ private:
             }
             state.history += "\n[ATTEMPT FAILED] cmd='" + state.last_cmd + "' error='" + output.substr(0, 300) + "'";
             state.retries++;
+
+            // If we have more suggested commands, try the next one before LLM
+            if (!state.suggested_commands.empty()) {
+                std::string next_cmd = state.suggested_commands.front();
+                state.suggested_commands.erase(state.suggested_commands.begin());
+                state.last_cmd = next_cmd;
+                state.last_mode = "reality";
+                state.history += "\n[SUGGESTED] Trying next: " + next_cmd;
+                std::cout << "[EXECUTIVE] Suggested cmd failed. Trying next: " << next_cmd
+                          << " (" << state.suggested_commands.size() << " remaining)" << std::endl;
+                json exec_req = {
+                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                    {"command", next_cmd}, {"mode", "reality"}
+                };
+                dispatch_to_all(exec_req);
+                return;
+            }
+
             if (state.retries >= 8) {
                 std::cout << "[EXECUTIVE] Too many retries for CID " << cid << ". Abandoning goal." << std::endl;
                 publish_intrinsic_result(cid, false);
@@ -696,6 +715,10 @@ private:
         state.is_intrinsic = true;
         state.domain = domain;
         state.fitness_score = fitness;
+        // Store suggested commands for direct execution if Planner misses
+        for (size_t i = 0; i < suggested.size() && i < 5; i++) {
+            state.suggested_commands.push_back(suggested[i].get<std::string>());
+        }
 
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
@@ -808,8 +831,27 @@ private:
                 {"command", cmd}, {"mode", "reality"}
             };
             dispatch_to_all(exec_req);
+        } else if (!state.suggested_commands.empty()) {
+            // No plan but have suggested commands from BasalGanglia — try those directly
+            std::cout << "[EXECUTIVE] PLANNER MISS → SUGGESTED CMD: trying "
+                      << state.suggested_commands.size() << " commands from BasalGanglia for domain '"
+                      << state.domain << "'." << std::endl;
+
+            // Pick the first suggested command and execute directly
+            std::string cmd = state.suggested_commands.front();
+            state.suggested_commands.erase(state.suggested_commands.begin());
+
+            state.last_cmd = cmd;
+            state.last_mode = "reality";
+            state.history += "\n[SUGGESTED] Executing BasalGanglia command: " + cmd;
+
+            json exec_req = {
+                {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                {"command", cmd}, {"mode", "reality"}
+            };
+            dispatch_to_all(exec_req);
         } else {
-            // No plan — fall back to LLM inference
+            // No plan and no suggestions — fall back to LLM inference
             auto gaps = data.value("gaps", json::array());
             std::cout << "[EXECUTIVE] PLANNER MISS: no plan for domain '" << state.domain << "'";
             if (!gaps.empty()) std::cout << " (gaps: " << gaps.dump() << ")";
