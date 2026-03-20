@@ -32,7 +32,7 @@ public:
             "high_stress_alert", "homeostatic_pulse", "prompt_update",
             "time_pulse", "search_result", "critic_result",
             "intrinsic_goal", "polecat_ready", "polecat_done",
-            "inference_result"
+            "inference_result", "metabolic_alert"
         });
 
         load_system_knowledge();
@@ -97,6 +97,17 @@ public:
                         std::cout << "[EXECUTIVE] ADRENALINE SPIKE: High stress detected (" << j.value("reason", "unknown") << ")" << std::endl;
                     } else if (intent == "homeostatic_pulse") {
                         system_stress *= 0.85f;
+                        // Phase 5: Read stamina from metabolic system
+                        current_stamina = j.value("stamina", current_stamina);
+                    } else if (intent == "metabolic_alert") {
+                        current_stamina = j.value("stamina", 0.0f);
+                        std::cout << "[EXECUTIVE] METABOLIC ALERT: stamina=" << (int)current_stamina << "%" << std::endl;
+                        // Trigger REM sleep to recover
+                        if (current_stamina < 20.0f) {
+                            json sleep = {{"origin", "frontal_executive"}, {"intent", "initiate_sleep_cycle"},
+                                          {"reason", "metabolic_exhaustion"}};
+                            dispatch_to_all(sleep);
+                        }
                     }
                 }
                 else if (origin == "rem_engine" && intent == "prompt_update") {
@@ -157,6 +168,7 @@ private:
         std::vector<std::string> plan;
         int retries = 0;
         int critic_rejections = 0;
+        int total_thought_cycles = 0; // Total inference cycles — detects oscillating loops (matches PolecatWorker)
         bool active = false;
         std::string last_raw_thought;
         std::string last_cmd;
@@ -174,6 +186,7 @@ private:
     };
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
+    float current_stamina = 100.0f;  // Phase 5: metabolic energy level
     bool waiting_for_intrinsic_goal = false;
     std::string system_knowledge; // injected into every prompt, updated by REM Engine
     // Temporal context from ChronosLobe
@@ -302,7 +315,9 @@ private:
                     {"text", "ERROR: Internal consensus failed. The Critic Lobe rejected all plans. System is confused."}
                 };
                 dispatch_to_all(final_resp);
+                publish_intrinsic_result(cid, false);
                 active_goals.erase(cid);
+                broadcast_idle_if_empty();
             } else {
                 request_thought(cid, "CRITIC FEEDBACK: " + feedback + "\nPlease refine the strategy.");
             }
@@ -457,6 +472,7 @@ private:
                 }
                 publish_intrinsic_result(cid, true);
                 active_goals.erase(cid);
+                broadcast_idle_if_empty();
 
                 // Continuous REM: trigger learning every N successes
                 total_successes++;
@@ -478,6 +494,7 @@ private:
                 std::cout << "[EXECUTIVE] Too many retries for CID " << cid << ". Abandoning goal." << std::endl;
                 publish_intrinsic_result(cid, false);
                 active_goals.erase(cid);
+                broadcast_idle_if_empty();
                 return;
             }
             request_thought(cid, "PREVIOUS ACTION FAILED (attempt " + std::to_string(state.retries) + "/8): " + output.substr(0, 300) + "\nTry a different approach.");
@@ -506,6 +523,15 @@ private:
     //   Tier 2 — Intrinsic motivation via BasalGanglia
     //   Tier 3 — Hardcoded epistemic fallback
     void pick_next_task() {
+        // Phase 5: Emergency stamina gate — refuse all non-survival work when exhausted
+        if (current_stamina < 5.0f) {
+            std::cout << "[EXECUTIVE] EMERGENCY: stamina=" << (int)current_stamina
+                      << "%. Refusing new goals. Waiting for recovery." << std::endl;
+            json sleep = {{"origin", "frontal_executive"}, {"intent", "initiate_sleep_cycle"},
+                          {"reason", "emergency_exhaustion"}};
+            dispatch_to_all(sleep);
+            return;
+        }
         // Tier 1: Check tasks.json for incomplete external tasks
         std::ifstream f("./tasks.json");
         if (f.is_open()) {
@@ -720,6 +746,16 @@ private:
         if (active_goals.find(cid) == active_goals.end()) return;
         auto& state = active_goals[cid];
 
+        state.total_thought_cycles++;
+        if (state.total_thought_cycles > 20) {
+            std::cout << "[EXECUTIVE] Oscillation detected for CID " << cid
+                      << " (" << state.total_thought_cycles << " thought cycles). Abandoning goal." << std::endl;
+            publish_intrinsic_result(cid, false);
+            active_goals.erase(cid);
+            broadcast_idle_if_empty();
+            return;
+        }
+
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", "coder"},
@@ -740,6 +776,16 @@ private:
         ss << f.rdbuf();
         system_knowledge = ss.str();
         std::cout << "[EXECUTIVE] Loaded behavioral knowledge (" << system_knowledge.size() << " bytes)." << std::endl;
+    }
+
+    // Broadcast cognitive idle status so dashboard resets Cognitive Focus display
+    void broadcast_idle_if_empty() {
+        if (!active_goals.empty()) return;
+        json idle = {
+            {"origin", "frontal_executive"},
+            {"intent", "cognitive_idle"}
+        };
+        dispatch_to_all(idle);
     }
 
     void dispatch_to_all(const json& data) {

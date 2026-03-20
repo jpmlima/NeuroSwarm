@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <array>
+#include <vector>
 #include <csignal>
 #include <nlohmann/json.hpp>
 #include <common/routing.hpp>
@@ -12,10 +13,10 @@ using json = nlohmann::json;
 namespace neuroswarm {
 class MotorLobe {
 public:
-    MotorLobe(const std::string& pub_addr = "tcp://localhost:5555", 
-              const std::string& sub_addr = "tcp://localhost:5556") 
+    MotorLobe(const std::string& pub_addr = "tcp://localhost:5555",
+              const std::string& sub_addr = "tcp://localhost:5556")
         : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
-        
+
         pub.connect(pub_addr);
         sub.connect(sub_addr);
         routing::subscribe(sub, {"execution_request", "genesis_request"});
@@ -29,20 +30,26 @@ public:
             if (j.is_null()) continue;
             {
                 try {
-                    
+
                     if (j.value("intent", "") == "execution_request") {
                         std::string cmd = j.value("command", "");
                         std::string mode = j.value("mode", "reality"); // Execution context: "reality" (live), "dream" (sandboxed), or "neuro_surgery" (self-modification)
                         std::string cid = j.value("cid", "unknown");
-                        
+
                         int exit_code = 0;
                         std::string out;
 
                         if (mode == "dream") {
-                            std::string dream_path = "./data/dreams/" + cid;
-                            std::filesystem::create_directories(dream_path + "/data");
-                            out = execute("cd " + dream_path + " && " + cmd, exit_code);
-                            std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << " exit=" << exit_code << std::endl;
+                            // Phase 1: Smart Dream Bypass — read-only commands skip sandbox
+                            if (is_read_only(cmd)) {
+                                out = execute(cmd, exit_code);
+                                std::cout << "[MOTOR] DREAM BYPASS (read-only) for CID: " << cid << " exit=" << exit_code << std::endl;
+                            } else {
+                                std::string dream_path = "./data/dreams/" + cid;
+                                std::filesystem::create_directories(dream_path + "/data");
+                                out = execute("cd " + dream_path + " && " + cmd, exit_code);
+                                std::cout << "[MOTOR] DREAM SEQUENCE executed for CID: " << cid << " exit=" << exit_code << std::endl;
+                            }
                         } else if (mode == "neuro_surgery") {
                             std::cout << "[MOTOR] WARNING: NEURO-SURGERY INITIATED. MODIFYING OWN SOURCE CODE." << std::endl;
                             // Neuro-surgery mode: expects 'cmd' to be a valid shell sequence that patches source files and triggers a full CMake rebuild.
@@ -58,6 +65,7 @@ public:
                             {"cid", cid},
                             {"origin", "motor_cortex"},
                             {"intent", "execution_result"},
+                            {"command", cmd},
                             {"proprioception", out},
                             {"exit_code", exit_code},
                             {"status", (exit_code == 0 ? "success" : "failure")},
@@ -109,6 +117,21 @@ private:
 
     void dispatch(const json& data) {
         routing::publish(pub, data);
+    }
+
+    // Phase 1: Smart Dream Bypass — read-only commands execute in real CWD
+    bool is_read_only(const std::string& cmd) {
+        static const std::vector<std::string> ro_prefixes = {
+            "cat ", "head ", "tail ", "less ", "wc ", "file ", "stat ",
+            "ls ", "find ", "grep ", "rg ", "readlink ", "md5sum ",
+            "sha256sum ", "du ", "df ", "ps ", "uptime", "free ",
+            "uname", "whoami", "id ", "date", "env", "echo $",
+            "python3 -c", "jq ", "pgrep", "top ", "ss ", "netstat",
+            "git -C", "git log", "git status", "git diff", "git show"
+        };
+        for (const auto& p : ro_prefixes)
+            if (cmd.rfind(p, 0) == 0) return true;
+        return false;
     }
 
     std::string execute(const std::string& cmd, int& exit_code) {

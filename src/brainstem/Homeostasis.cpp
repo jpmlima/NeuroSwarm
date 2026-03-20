@@ -28,10 +28,27 @@ public:
     }
 
     void start_monitoring() {
+        // Also subscribe to sleep-related intents for stamina regeneration tracking
+        routing::subscribe(sub, {"initiate_sleep_cycle", "sleep_cycle_complete",
+                                  "inference_result", "execution_request"});
+
         while (true) {
+            // Phase 5: Process bus events for metabolic accounting
+            process_metabolic_events();
+
             auto state = collect_telemetry();
             float success_rate = calculate_success_rate();
-            
+
+            // Phase 5: Stamina drain/regen based on activity
+            if (is_sleeping) {
+                stamina = std::min(100.0f, stamina + 1.0f);  // +1.0/s during REM
+            } else if (state[0] < 0.05f) {
+                stamina = std::min(100.0f, stamina + 0.2f);  // +0.2/s idle regen
+                stamina = std::max(0.0f, stamina - 0.1f);    // -0.1/s idle drain (net +0.1)
+            } else {
+                stamina = std::max(0.0f, stamina - 0.3f);    // -0.3/s active drain
+            }
+
             json pulse = {
                 {"origin", "homeostasis"},
                 {"intent", "homeostatic_pulse"},
@@ -40,9 +57,10 @@ public:
                 {"vram_used_mb", state[2]},
                 {"gpu_load", state[3]},
                 {"success_rate", success_rate},
+                {"stamina", stamina},
                 {"ts", std::time(nullptr)}
             };
-            
+
             dispatch(pulse);
 
             // Emit a high-stress alert when success rate drops below 10%, subject to a 30 s cooldown
@@ -55,14 +73,28 @@ public:
                     {"value", success_rate}
                 };
                 dispatch(alert);
-                alert_cooldown = 30; // Suppress redundant alerts for 30 s after each emission
+                alert_cooldown = 30;
             }
             if (alert_cooldown > 0) alert_cooldown--;
+
+            // Phase 5: Metabolic alert when stamina critically low
+            if (stamina < 20.0f && !metabolic_alert_sent) {
+                json met_alert = {
+                    {"origin", "homeostasis"},
+                    {"intent", "metabolic_alert"},
+                    {"stamina", stamina},
+                    {"reason", "low_stamina"}
+                };
+                dispatch(met_alert);
+                metabolic_alert_sent = true;
+                std::cout << "[HOMEOSTASIS] Metabolic alert: stamina=" << (int)stamina << "%" << std::endl;
+            }
+            if (stamina >= 30.0f) metabolic_alert_sent = false;  // reset hysteresis
 
             // Trigger a sleep-cycle request after sustained CPU idleness (< 5% load for ~60 s)
             if (state[0] < 0.05f) {
                 idle_ticks++;
-                if (idle_ticks > 60) { // Threshold: approximately 60 s of continuous low-load operation
+                if (idle_ticks > 60) {
                     json sleep_req = {
                         {"origin", "homeostasis"},
                         {"intent", "initiate_sleep_cycle"},
@@ -70,6 +102,7 @@ public:
                     };
                     dispatch(sleep_req);
                     idle_ticks = 0;
+                    is_sleeping = true;
                 }
             } else {
                 idle_ticks = 0;
@@ -84,6 +117,36 @@ private:
     zmq::socket_t pub;
     zmq::socket_t sub;
     int idle_ticks = 0;
+
+    // Phase 5: Metabolic Cost Accounting
+    float stamina = 100.0f;  // 0-100 energy scale
+    bool is_sleeping = false;
+    bool metabolic_alert_sent = false;
+
+    // Phase 5: Process bus events for metabolic cost accounting
+    void process_metabolic_events() {
+        // Non-blocking drain of relevant events
+        while (true) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) break;
+
+            std::string intent = j.value("intent", "");
+            if (intent == "sleep_cycle_complete") {
+                is_sleeping = false;
+            } else if (intent == "initiate_sleep_cycle") {
+                is_sleeping = true;
+            } else if (intent == "inference_result") {
+                // Inference costs energy: -0.5 per inference
+                stamina = std::max(0.0f, stamina - 0.5f);
+            } else if (intent == "execution_request") {
+                std::string mode = j.value("mode", "");
+                if (mode == "neuro_surgery") {
+                    // Compilation costs more energy: -2.0
+                    stamina = std::max(0.0f, stamina - 2.0f);
+                }
+            }
+        }
+    }
 
     std::vector<float> collect_telemetry() {
         float cpu = 0.0f;

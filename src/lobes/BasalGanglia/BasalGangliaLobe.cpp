@@ -12,6 +12,7 @@
 #include <ctime>
 #include <algorithm>
 #include <sys/stat.h>
+#include <cstdlib>
 
 using json = nlohmann::json;
 
@@ -45,7 +46,8 @@ public:
         routing::subscribe(sub, {
             "execution_result", "intrinsic_goal_request",
             "homeostatic_pulse", "high_stress_alert",
-            "time_pulse", "intrinsic_goal_result"
+            "time_pulse", "intrinsic_goal_result",
+            "lobe_crash", "lobe_death", "metabolic_alert"
         });
 
         mkdir("./data", 0755);
@@ -83,11 +85,34 @@ public:
                 }
                 else if (origin == "chronos" && intent == "time_pulse") {
                     current_timestamp = j.value("timestamp", "");
-                    // Check cooldown expiry
                     check_cooldowns();
                 }
                 else if (origin == "frontal_executive" && intent == "intrinsic_goal_result") {
                     handle_intrinsic_result(j);
+                }
+                // Phase 3: Drive Hierarchy — survival-level events
+                else if (origin == "cerebral_matrix" && intent == "lobe_crash") {
+                    std::string lobe_name = j.value("lobe_name", "unknown");
+                    pending_drives.push_back({DriveLevel::SURVIVAL,
+                        "Lobe " + lobe_name + " crashed — diagnose and recover",
+                        lobe_name});
+                    std::cout << "[BASAL_GANGLIA] SURVIVAL DRIVE: lobe_crash for " << lobe_name << std::endl;
+                }
+                else if (origin == "cerebral_matrix" && intent == "lobe_death") {
+                    std::string lobe_name = j.value("lobe_name", "unknown");
+                    pending_drives.push_back({DriveLevel::SURVIVAL,
+                        "Lobe " + lobe_name + " is DEAD — critical system degradation",
+                        lobe_name});
+                    std::cout << "[BASAL_GANGLIA] SURVIVAL DRIVE: lobe_death for " << lobe_name << std::endl;
+                }
+                // Phase 5: Metabolic alerts raise homeostasis drive
+                else if (origin == "homeostasis" && intent == "metabolic_alert") {
+                    float stamina = j.value("stamina", 0.0f);
+                    current_stamina = stamina;
+                    pending_drives.push_back({DriveLevel::HOMEOSTASIS,
+                        "Stamina critically low (" + std::to_string((int)stamina) + "%) — request sleep",
+                        "homeostasis"});
+                    std::cout << "[BASAL_GANGLIA] HOMEOSTASIS DRIVE: metabolic_alert stamina=" << stamina << "%" << std::endl;
                 }
             } catch (...) {}
         }
@@ -99,7 +124,55 @@ private:
     zmq::socket_t sub;
     std::string self_model_path;
     float system_stress = 0.0f;
+    float current_stamina = 100.0f;  // Phase 5: metabolic energy level
     std::string current_timestamp;
+
+    // Phase 3: Drive Hierarchy — Maslow-style priority pyramid
+    enum class DriveLevel {
+        SURVIVAL = 0,     // respond to lobe_crash, lobe_death
+        HOMEOSTASIS = 1,  // respond to high CPU/RAM/temp, metabolic alerts
+        EXPLORATION = 2,  // intrinsic motivation — try untested domains
+        MASTERY = 3,      // retry domains with low success rates
+        SELF_MODIFY = 4   // source modification, compilation, code generation
+    };
+
+    struct PendingDrive {
+        DriveLevel level;
+        std::string description;
+        std::string trigger_lobe;  // which lobe triggered this drive
+    };
+
+    std::vector<PendingDrive> pending_drives;
+
+    DriveLevel get_current_drive() {
+        if (!pending_drives.empty()) {
+            // Sort by priority (lowest enum = highest priority)
+            auto best = std::min_element(pending_drives.begin(), pending_drives.end(),
+                [](const PendingDrive& a, const PendingDrive& b) {
+                    return static_cast<int>(a.level) < static_cast<int>(b.level);
+                });
+            return best->level;
+        }
+        // Default: determine from system state
+        if (system_stress > 0.8f) return DriveLevel::HOMEOSTASIS;
+
+        // Check overall success rate for SELF_MODIFY eligibility
+        int total_s = 0, total_a = 0;
+        for (auto& [d, st] : self_model) {
+            total_s += st.success;
+            total_a += st.success + st.failure;
+        }
+        float overall_rate = total_a > 0 ? (float)total_s / total_a : 0.0f;
+        if (overall_rate > 0.70f) return DriveLevel::SELF_MODIFY;
+
+        // Check if any domain has low success rate for MASTERY
+        for (auto& [d, st] : self_model) {
+            int t = st.success + st.failure;
+            if (t >= 5 && st.actual_success_rate < 0.4f) return DriveLevel::MASTERY;
+        }
+
+        return DriveLevel::EXPLORATION;
+    }
 
     // Domain state
     struct DomainState {
@@ -226,21 +299,22 @@ private:
         };
 
         // Classification rules: keyword → domain
+        // Order matters: more specific domains first, generic I/O (file_read/write) last
         classification_rules = {
-            {"file_read",           {"cat", "head", "tail", "less", "more", "wc -l", "file ", "stat ", "md5sum", "sha256sum", "readlink"}},
-            {"file_write",          {"echo", "tee", "cp ", "mv ", "touch", "mkdir", ">>", "> "}},
-            {"file_search",         {"find ", "grep", "locate", "which", "whereis", "fd ", "rg "}},
-            {"process_inspection",  {"ps ", "pgrep", "top", "htop", "pidof", "kill", "/proc/"}},
-            {"network_diagnostics", {"ss ", "netstat", "nc ", "curl", "wget", "ping", "nmap", "ip addr", "ifconfig"}},
-            {"source_modification", {"sed ", "awk ", "patch", "diff ", "src/"}},
-            {"compilation",         {"cmake", "make", "gcc", "g++", "build"}},
-            {"git_operations",      {"git "}},
-            {"system_monitoring",   {"uptime", "free", "df ", "vmstat", "iostat", "sensors", "nvidia-smi", "lscpu", "uname"}},
-            {"data_analysis",       {"python3", "awk", "sort", "uniq", "cut ", "jq ", "data/"}},
-            {"script_creation",     {"#!/", "chmod +x", "bash -c", "sh -c"}},
             {"self_inspection",     {"self_model", "neuroswarm", "du -s"}},
             {"memory_analysis",     {"engram", "memory_index", "system_knowledge"}},
-            {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}}
+            {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}},
+            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model"}},
+            {"git_operations",      {"git "}},
+            {"compilation",         {"cmake", "make ", "gcc", "g++"}},
+            {"network_diagnostics", {"ss ", "netstat", "nc ", "curl ", "wget ", "ping ", "nmap ", "ip addr", "ifconfig"}},
+            {"process_inspection",  {"ps ", "pgrep", "top ", "htop", "pidof", "kill ", "/proc/"}},
+            {"source_modification", {"sed ", "patch ", "diff ", "src/"}},
+            {"script_creation",     {"#!/", "chmod +x", "bash -c", "sh -c"}},
+            {"system_monitoring",   {"uptime", "free ", "df ", "vmstat", "iostat", "sensors", "nvidia-smi", "lscpu", "uname"}},
+            {"file_search",         {"find ", "grep ", "locate ", "which ", "whereis ", "fd ", "rg "}},
+            {"file_write",          {"echo ", "tee ", "cp ", "mv ", "touch ", "mkdir ", ">>", "> "}},
+            {"file_read",           {"cat ", "head ", "tail ", "less ", "more ", "wc -l", "file ", "stat ", "md5sum", "sha256sum", "readlink"}}
         };
     }
 
@@ -372,6 +446,9 @@ private:
             }
         }
 
+        // Phase 4: Update genome fitness for executed command
+        update_genome_fitness(domain, cmd, success);
+
         save_self_model();
         emit_self_model_updated(domain);
     }
@@ -394,7 +471,60 @@ private:
     void handle_goal_request(const json& j) {
         std::string cid = j.value("cid", "");
 
-        // Find the domain with highest fitness, respecting cooldowns
+        // Phase 3: Check pending survival/homeostasis drives first
+        if (!pending_drives.empty()) {
+            // Sort and pop highest-priority drive
+            auto best_it = std::min_element(pending_drives.begin(), pending_drives.end(),
+                [](const PendingDrive& a, const PendingDrive& b) {
+                    return static_cast<int>(a.level) < static_cast<int>(b.level);
+                });
+
+            PendingDrive drive = *best_it;
+            pending_drives.erase(best_it);
+
+            // SURVIVAL drives get urgency=1.0 regardless of stamina
+            std::string drive_name;
+            switch (drive.level) {
+                case DriveLevel::SURVIVAL:    drive_name = "SURVIVAL"; break;
+                case DriveLevel::HOMEOSTASIS: drive_name = "HOMEOSTASIS"; break;
+                default:                      drive_name = "UNKNOWN"; break;
+            }
+
+            json goal = {
+                {"cid", cid},
+                {"origin", "basal_ganglia"},
+                {"intent", "intrinsic_goal"},
+                {"domain", "self_inspection"},
+                {"fitness", 1.0f},
+                {"drive_level", drive_name},
+                {"suggested_commands", json::array({
+                    "ps aux | grep -E '(thalamus|motor_lobe|frontal|synaptic)' | grep -v grep",
+                    "ls -la /proc/self/fd/ | wc -l",
+                    "free -h | head -2"
+                })},
+                {"context", "[" + drive_name + " DRIVE] " + drive.description}
+            };
+            routing::publish(pub, goal);
+            std::cout << "[BASAL_GANGLIA] " << drive_name << " goal published: " << drive.description << std::endl;
+            return;
+        }
+
+        // Phase 5: Stamina gating — suppress exploration when exhausted
+        DriveLevel current_drive = get_current_drive();
+        if (current_stamina < 20.0f && current_drive >= DriveLevel::EXPLORATION) {
+            std::cout << "[BASAL_GANGLIA] Stamina too low (" << (int)current_stamina
+                      << "%). Suppressing exploration." << std::endl;
+            // Request sleep instead
+            json sleep = {
+                {"origin", "basal_ganglia"},
+                {"intent", "initiate_sleep_cycle"},
+                {"reason", "low_stamina"}
+            };
+            routing::publish(pub, sleep);
+            return;
+        }
+
+        // Find the domain with highest fitness, respecting cooldowns and drive level
         long now_ts = std::time(nullptr);
         std::string best_domain;
         float best_fitness = -999.0f;
@@ -405,7 +535,21 @@ private:
             // Skip domains in cooldown
             if (d.cooldown_until > now_ts) continue;
 
+            // Phase 3: Drive-level filtering
+            if (current_drive == DriveLevel::MASTERY) {
+                // Only consider domains with poor success rates
+                int t = d.success + d.failure;
+                if (t < 5 || d.actual_success_rate >= 0.4f) continue;
+            } else if (current_drive == DriveLevel::SELF_MODIFY) {
+                // Only consider source_modification and compilation
+                if (domain != "source_modification" && domain != "compilation") continue;
+            }
+
             float f = compute_fitness(domain);
+
+            // Phase 5: Stamina factor — scale non-survival fitness by energy
+            f *= (current_stamina / 100.0f);
+
             if (f > best_fitness) {
                 best_fitness = f;
                 best_domain = domain;
@@ -413,14 +557,32 @@ private:
         }
 
         if (best_domain.empty()) {
-            std::cout << "[BASAL_GANGLIA] All domains in cooldown. No intrinsic goal available." << std::endl;
-            return;
+            std::cout << "[BASAL_GANGLIA] No suitable domain for current drive. Falling back to exploration." << std::endl;
+            // Fall back to any non-cooldown domain
+            for (auto& domain : domains) {
+                if (self_model[domain].cooldown_until > now_ts) continue;
+                float f = compute_fitness(domain);
+                if (f > best_fitness) { best_fitness = f; best_domain = domain; }
+            }
+            if (best_domain.empty()) {
+                std::cout << "[BASAL_GANGLIA] All domains in cooldown. No intrinsic goal available." << std::endl;
+                return;
+            }
         }
 
         auto& d = self_model[best_domain];
         int total = d.success + d.failure;
 
         // Build context string
+        std::string drive_label;
+        switch (current_drive) {
+            case DriveLevel::SURVIVAL:    drive_label = "SURVIVAL"; break;
+            case DriveLevel::HOMEOSTASIS: drive_label = "HOMEOSTASIS"; break;
+            case DriveLevel::EXPLORATION: drive_label = "EXPLORATION"; break;
+            case DriveLevel::MASTERY:     drive_label = "MASTERY"; break;
+            case DriveLevel::SELF_MODIFY: drive_label = "SELF_MODIFY"; break;
+        }
+
         std::string context;
         if (total == 0) {
             context = "Never attempted. ";
@@ -429,10 +591,12 @@ private:
                     + "Success rate: " + std::to_string((int)(d.actual_success_rate * 100)) + "%. "
                     + "Prediction error: " + std::to_string(d.prediction_error).substr(0, 5) + ". ";
         }
-        context += "System stress: " + std::to_string((int)(system_stress * 100)) + "%.";
+        context += "Drive: " + drive_label + ". ";
+        context += "Stamina: " + std::to_string((int)current_stamina) + "%. ";
+        context += "Stress: " + std::to_string((int)(system_stress * 100)) + "%.";
 
-        // Get suggested commands for this domain
-        auto& cmds = domain_commands[best_domain];
+        // Get suggested commands — Phase 4 genome templates override if available
+        auto suggested = get_suggested_commands(best_domain);
 
         json goal = {
             {"cid", cid},
@@ -440,14 +604,16 @@ private:
             {"intent", "intrinsic_goal"},
             {"domain", best_domain},
             {"fitness", best_fitness},
-            {"suggested_commands", cmds},
+            {"drive_level", drive_label},
+            {"suggested_commands", suggested},
             {"context", context}
         };
 
         routing::publish(pub, goal);
 
         std::cout << "[BASAL_GANGLIA] Intrinsic goal published: domain='" << best_domain
-                  << "' fitness=" << best_fitness << " (" << context << ")" << std::endl;
+                  << "' fitness=" << best_fitness << " drive=" << drive_label
+                  << " (" << context << ")" << std::endl;
     }
 
     void emit_dopamine(const std::string& domain, const std::string& reason, float magnitude) {
@@ -487,6 +653,133 @@ private:
         }
     }
 
+    // Phase 4: Command Genome — evolutionary command template system
+    struct CommandTemplate {
+        std::string cmd;
+        float fitness = 0.5f;
+        int generation = 0;
+    };
+
+    std::map<std::string, std::vector<CommandTemplate>> command_genome;
+    static constexpr const char* GENOME_PATH = "./data/command_genome.json";
+
+    void load_genome() {
+        std::ifstream f(GENOME_PATH);
+        if (!f.is_open()) return;
+        try {
+            json doc;
+            f >> doc;
+            for (auto& [domain, templates] : doc.items()) {
+                for (auto& t : templates) {
+                    CommandTemplate ct;
+                    ct.cmd = t.value("cmd", "");
+                    ct.fitness = t.value("fitness", 0.5f);
+                    ct.generation = t.value("generation", 0);
+                    if (!ct.cmd.empty()) command_genome[domain].push_back(ct);
+                }
+            }
+            std::cout << "[BASAL_GANGLIA] Loaded command genome from " << GENOME_PATH << std::endl;
+        } catch (...) {
+            std::cout << "[BASAL_GANGLIA] Could not parse genome, starting fresh." << std::endl;
+        }
+    }
+
+    void save_genome() {
+        json doc;
+        for (auto& [domain, templates] : command_genome) {
+            json arr = json::array();
+            for (auto& t : templates) {
+                arr.push_back({{"cmd", t.cmd}, {"fitness", t.fitness}, {"generation", t.generation}});
+            }
+            doc[domain] = arr;
+        }
+        std::ofstream f(GENOME_PATH);
+        if (f.is_open()) f << doc.dump(2);
+    }
+
+    // Fitness-proportional selection (roulette wheel)
+    std::string select_template(const std::string& domain) {
+        auto it = command_genome.find(domain);
+        if (it == command_genome.end() || it->second.empty()) return "";
+
+        float total = 0.0f;
+        for (auto& t : it->second) total += std::max(0.01f, t.fitness);
+
+        float r = (float)(rand() % 10000) / 10000.0f * total;
+        float accum = 0.0f;
+        for (auto& t : it->second) {
+            accum += std::max(0.01f, t.fitness);
+            if (accum >= r) return t.cmd;
+        }
+        return it->second.back().cmd;
+    }
+
+    // Update template fitness after execution result
+    void update_genome_fitness(const std::string& domain, const std::string& cmd, bool success) {
+        auto& templates = command_genome[domain];
+
+        // Find matching template
+        bool found = false;
+        for (auto& t : templates) {
+            if (t.cmd == cmd) {
+                float outcome = success ? 1.0f : 0.0f;
+                t.fitness = 0.9f * t.fitness + 0.1f * outcome;
+                found = true;
+                break;
+            }
+        }
+
+        // Novel command: add as new template
+        if (!found && cmd.size() <= 200) {
+            int max_gen = 0;
+            for (auto& t : templates) max_gen = std::max(max_gen, t.generation);
+
+            CommandTemplate ct;
+            ct.cmd = cmd;
+            ct.fitness = success ? 0.6f : 0.3f;
+            ct.generation = max_gen + 1;
+            templates.push_back(ct);
+
+            // Cap at 20 templates per domain
+            if (templates.size() > 20) {
+                // Remove lowest fitness
+                auto worst = std::min_element(templates.begin(), templates.end(),
+                    [](const CommandTemplate& a, const CommandTemplate& b) { return a.fitness < b.fitness; });
+                templates.erase(worst);
+            }
+        }
+
+        save_genome();
+    }
+
+    // Get suggested commands: prefer genome templates, fall back to static commands
+    json get_suggested_commands(const std::string& domain) {
+        json cmds = json::array();
+
+        // Try genome templates first (top 3 by fitness)
+        auto it = command_genome.find(domain);
+        if (it != command_genome.end() && !it->second.empty()) {
+            auto sorted = it->second;
+            std::sort(sorted.begin(), sorted.end(),
+                [](const CommandTemplate& a, const CommandTemplate& b) { return a.fitness > b.fitness; });
+            for (size_t i = 0; i < sorted.size() && i < 3; i++) {
+                cmds.push_back(sorted[i].cmd);
+            }
+            // Add one random template for exploration (mutation pressure)
+            if (sorted.size() > 3) {
+                int idx = rand() % sorted.size();
+                cmds.push_back(sorted[idx].cmd);
+            }
+        }
+
+        // Fall back to static domain commands if genome is empty
+        if (cmds.empty() && domain_commands.count(domain)) {
+            for (auto& c : domain_commands[domain]) cmds.push_back(c);
+        }
+
+        return cmds;
+    }
+
     void load_self_model() {
         // Initialise all domains with defaults
         for (auto& domain : domains) {
@@ -524,6 +817,9 @@ private:
         } catch (...) {
             std::cout << "[BASAL_GANGLIA] Could not parse self-model, using defaults." << std::endl;
         }
+
+        // Phase 4: Load command genome
+        load_genome();
     }
 
     void save_self_model() {
