@@ -1,0 +1,549 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\geometry{a4paper, margin=1in}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray}
+}
+
+\title{\textbf{NeuroSwarm: Biomimetic Cognitive Architecture}\\
+\large Autopoiesis, Intrinsic Motivation, and Structural Self-Modification\\in a Distributed C++ System}
+\author{Candidate}
+\date{March 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This dissertation presents NeuroSwarm, a distributed cognitive architecture implemented in C++ that achieves continuous autonomous behaviour through five hardcoded axioms: Execution, Surprise, Associative Memory, Variation, and Self-Reference. The system bootstraps from zero knowledge — discovering its environment, learning operators, and building a world model through direct interaction. It plans using a GOAP (Goal-Oriented Action Planning) backward-chaining planner over learned operators, generates novel operators through genetic variation tested in a sandboxed dream environment, and autonomously spawns new specialist lobes when capability domains chronically fail. Inter-lobe communication uses a ZeroMQ publish-subscribe bus routed through a central Thalamus. Intrinsic motivation is driven by a Basal Ganglia that computes a variational free energy fitness function across 14 capability domains. The architecture runs 17+ concurrent processes, persists state across restarts, and can deploy copies of itself to remote machines via SSH. We detail the implementation of each subsystem, the bootstrap sequence, the three-tier execution pipeline, and the neurogenesis mechanism that allows the system to extend its own anatomy at runtime.
+\end{abstract}
+
+\tableofcontents
+
+\chapter{Introduction}
+
+\section{The Problem with Stateless AI}
+Large language models generate fluent text but cannot maintain state, pursue goals, or adapt their own structure. Systems built on top of LLMs inherit this limitation: they are reactive (responding only to prompts), memoryless (forgetting between sessions), and structurally static (the same code runs regardless of experience). This dissertation explores an alternative: a system that begins knowing nothing and progressively builds its own capabilities through execution, observation, and structural self-modification.
+
+\section{Design Constraints}
+NeuroSwarm operates under three constraints that shape every design decision:
+
+\begin{enumerate}
+    \item \textbf{No external APIs for cognition}. All inference runs on local hardware using quantised models (GGUF format via llama.cpp). The system must function identically offline.
+    \item \textbf{All lobes are C++}. The system evolves in its own language — specialist lobes generated at runtime are compiled from C++ templates, not interpreted scripts.
+    \item \textbf{Bootstrap from zero}. No hardcoded knowledge about the host environment. The system discovers users, filesystems, binaries, network topology, and programming languages through direct probing.
+\end{enumerate}
+
+\section{Contributions}
+The specific contributions of this work are:
+\begin{itemize}
+    \item A bootstrap sequence (PrimordialLoop) that takes a system from zero knowledge to a populated world model and operator registry in under 60 seconds.
+    \item A three-tier execution pipeline — Planner, Suggested Commands, LLM — that minimises LLM dependency by exhausting deterministic strategies first.
+    \item A neurogenesis mechanism where the Basal Ganglia generates, compiles, and injects specialist C++ lobes into the running system without restart.
+    \item A variation engine that generates novel operators through mutation, recombination, and fragment assembly, tested in sandboxed dream execution before promotion.
+    \item Runtime learning: every successful command execution becomes a new operator with inferred postconditions, immediately available to the planner.
+\end{itemize}
+
+\chapter{Architecture}
+
+\section{Process Topology}
+NeuroSwarm runs as a constellation of 17+ Unix processes managed by a parent process called the CerebralMatrix. Each process (``lobe'') is a standalone C++ executable that communicates exclusively through a ZeroMQ message bus. The CerebralMatrix fork-execs each lobe at startup, monitors them via \texttt{waitpid()}, and implements crash detection with exponential backoff (up to 5 restarts per lobe, with increasing cooldown periods).
+
+The complete lobe inventory at startup:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Lobe} & \textbf{Biological Analogue} & \textbf{Function} \\
+\midrule
+PrimordialLoop & Neonatal reflexes & Bootstrap, planning, operator registry \\
+Thalamus & Thalamic relay nuclei & ZMQ XPUB/XSUB message routing \\
+SynapticController & Synaptic transmission & Local LLM inference (llama.cpp) \\
+Hippocampus & Hippocampal formation & Episodic memory (engram storage/retrieval) \\
+MotorLobe & Primary motor cortex & Command execution (real + sandboxed) \\
+FrontalExecutive & Prefrontal cortex & Goal pursuit, plan execution \\
+Amygdala & Amygdala & Threat detection, safety filtering \\
+WernickeLobe & Wernicke's area & Natural language comprehension \\
+VisualLobe & Visual cortex & Image processing \\
+Homeostasis & Hypothalamus & Stamina, temperature, metabolic regulation \\
+MetaCognition & Default mode network & Self-reflection, activity logging \\
+CriticLobe & Anterior cingulate cortex & Adversarial plan validation \\
+Visualizer & — & Real-time system state dashboard \\
+REMEngine & REM sleep circuits & Memory consolidation, offline fine-tuning \\
+ChronosLobe & Suprachiasmatic nucleus & Time awareness, scheduling \\
+StatisticsLobe & — & Execution statistics aggregation \\
+BasalGanglia & Basal ganglia + VTA & Intrinsic motivation, neurogenesis \\
+\bottomrule
+\end{tabular}
+\caption{Core lobe inventory. Additional specialist lobes are generated at runtime.}
+\end{table}
+
+\section{The Thalamic Bus}
+All inter-lobe communication flows through a single Thalamus process that implements ZMQ XPUB/XSUB proxy sockets bound on ports 5555 (publish) and 5556 (subscribe). Lobes connect as clients — publishers connect to 5555, subscribers connect to 5556. The Thalamus forwards all messages without inspection, functioning as a contentless relay.
+
+Messages are JSON objects with mandatory fields:
+\begin{lstlisting}[language=C++]
+{
+    "origin": "lobe_name",      // publisher identity
+    "intent": "message_type",   // topic for subscription filtering
+    "cid":    "correlation_id"  // optional, for request-response pairs
+}
+\end{lstlisting}
+
+Topic-based subscription filtering uses ZMQ's native prefix matching on the \texttt{intent} field. A routing library (\texttt{common/routing.hpp}) wraps this pattern, providing \texttt{publish()}, \texttt{subscribe()}, and \texttt{receive()} functions that handle serialisation and multi-part ZMQ frames.
+
+\section{Crash Detection and Self-Preservation}
+The CerebralMatrix sets \texttt{SIGCHLD} to \texttt{SIG\_DFL} and calls \texttt{waitpid(-1, \&status, WNOHANG)} in a polling loop every 5 seconds. When a child terminates, it:
+
+\begin{enumerate}
+    \item Identifies the lobe by PID reverse lookup.
+    \item Increments the crash counter and determines exit reason (\texttt{WIFSIGNALED} or \texttt{WIFEXITED}).
+    \item Broadcasts a \texttt{lobe\_crash} event on the bus.
+    \item If crash count $<$ 5, schedules a restart with exponential backoff ($2^{n}$ seconds). Otherwise marks the lobe \texttt{DEAD} and broadcasts \texttt{lobe\_death}.
+\end{enumerate}
+
+At startup, the CerebralMatrix also scans \texttt{/proc} for orphaned processes from previous sessions (matching executables in the build directory) and kills them before launching new instances.
+
+\chapter{The PrimordialLoop: Bootstrap from Zero}
+
+\section{The Five Axioms}
+The PrimordialLoop encodes five immutable axioms — the only hardcoded knowledge in the system:
+
+\begin{enumerate}
+    \item \textbf{Execution} (Axiom 1): The system can execute shell commands and observe their output, exit code, and duration.
+    \item \textbf{Surprise} (Axiom 2): Prediction error is the primary drive. Novel outcomes increase exploration; predictable outcomes increase exploitation.
+    \item \textbf{Associative Memory} (Axiom 3): Successful command-outcome pairs are stored as \emph{operators} — reusable action templates with preconditions, postconditions, and performance statistics.
+    \item \textbf{Variation} (Axiom 4): Existing operators are mutated, recombined, and assembled into novel candidates. Most fail. Survivors are promoted.
+    \item \textbf{Self-Reference} (Axiom 5): The system maintains a model of itself — its user, hostname, architecture, capabilities, and limitations — as distinct from the external world.
+\end{enumerate}
+
+\section{The Bootstrap Sequence}
+On first startup, the PrimordialLoop executes seven sequential phases:
+
+\textbf{Phase 0 — Existence.} The system confirms it can execute and observe. This is the only unfalsifiable claim.
+
+\textbf{Phase 1 — First Contact.} Probes \texttt{whoami}, \texttt{hostname}, \texttt{uname}, \texttt{\$HOME}, and \texttt{\$PATH}. Builds the initial self-model: user identity, OS, architecture, home directory.
+
+\textbf{Phase 2 — Capability Discovery.} Enumerates \texttt{\$PATH} directories, discovers available binaries, tests filesystem write permissions across standard directories (\texttt{/tmp}, \texttt{\$HOME}, \texttt{/var}). Each successful probe becomes a learned operator.
+
+\textbf{Phase 3 — Sense Acquisition.} Tests for network connectivity (\texttt{ping}), GPU availability (\texttt{nvidia-smi}), and audio/display capabilities. These probes always re-run (hardware state changes between sessions).
+
+\textbf{Phase 4 — Tool Discovery.} Detects installed programming languages (Python, Go, Rust, Node, Java, Ruby) and compiler availability (\texttt{g++}, \texttt{gcc}).
+
+\textbf{Phase 5 — Active Exploration.} Probes unknown binaries with \texttt{--help} (1-second timeout). A skip list excludes GUI applications, editors, browsers, window managers, and interactive interpreters to avoid launching graphical programs during headless operation.
+
+\textbf{Phase 6 — Planner Self-Test.} Initialises the GOAP planner with learned operators and runs a canary plan to verify the planning subsystem works.
+
+\textbf{Phase 7 — Network Expansion.} If network connectivity was detected, discovers reachable hosts from \texttt{$\sim$/.ssh/known\_hosts} and \texttt{$\sim$/.ssh/config}, probes them via SSH, and optionally deploys a copy of the PrimordialLoop binary to remote machines.
+
+After all phases, the system broadcasts a \texttt{primordial\_ready} signal indicating how many operators and world-state facts are available. Subsequent startups load persisted state and run an incremental bootstrap — skipping phases whose results are already known, reducing startup from $\sim$60 seconds to $\sim$10 seconds.
+
+\section{The Operator Registry}
+An operator is a learned action template:
+\begin{lstlisting}[language=C++]
+struct Operator {
+    string command_template;     // "ls {path}"
+    vector<string> preconditions;   // "path_exists({path})"
+    vector<string> postconditions;  // "can_list_directory"
+    int times_used, successes;
+    double success_rate, avg_duration_ms;
+    string learned_from;         // "bootstrap", "mutation", "runtime"
+    vector<string> fragments;    // decomposed for recombination
+};
+\end{lstlisting}
+
+Operators are persisted to \texttt{data/operators.jsonl} (one JSON object per line, append-only). An operator is \emph{stable} when \texttt{times\_used} $\geq$ 5 and \texttt{success\_rate} $\geq$ 0.8. An operator is \emph{dying} when \texttt{times\_used} $\geq$ 20 and \texttt{success\_rate} $<$ 0.1 — dying operators are pruned (apoptosis).
+
+\section{The Surprise Engine}
+Each action outcome is evaluated by a prediction error model. For a context $c$ with historical success rate $\hat{p}(c)$ and observed outcome $o \in \{0, 1\}$:
+
+\begin{equation}
+S(c) = 0.6 \cdot |~\hat{p}(c) - o~| + 0.4 \cdot \mathbb{1}[h(o) \neq h_{\text{prev}}(c)]
+\end{equation}
+
+Where $h(o)$ is a hash of the command output and $h_{\text{prev}}(c)$ is the previously observed output hash for this context. The first term captures success/failure prediction error; the second captures output novelty (same command, different result). A sliding window of 20 observations computes a surprise trend — positive trend triggers exploration, negative trend triggers exploitation.
+
+\chapter{Execution: From Goals to Actions}
+
+\section{The Three-Tier Pipeline}
+When the FrontalExecutive receives a goal (from the Basal Ganglia's intrinsic motivation or from user input), it attempts resolution through three tiers in order:
+
+\textbf{Tier 1 — Planner.} Maps the goal's domain to a postcondition (e.g., \texttt{file\_write} $\to$ \texttt{can\_write\_file}) and queries the PrimordialLoop's GOAP planner. The planner backward-chains through operator postconditions to find a sequence that transforms the current world state into the goal state. If a plan exists, each step is executed in order via the MotorLobe.
+
+\textbf{Tier 2 — Suggested Commands.} If the planner fails (no operators with matching postconditions), the FrontalExecutive tries commands suggested by the Basal Ganglia, which maintains a bank of example commands per domain extracted from operator histories and pattern templates.
+
+\textbf{Tier 3 — LLM Oracle.} If both deterministic tiers fail, the system constructs a structured prompt containing: the goal, the environment summary, known operators (for context), and failed attempts (to avoid repetition). The prompt is sent to the local SynapticController, which runs inference on a quantised model with grammar-constrained output (JSON schema). A successful LLM-generated command is decomposed into fragments and registered as a new operator, reducing future LLM dependency.
+
+This cascade ensures the LLM is a last resort, not the default execution engine. As the operator registry grows, Tier 1 resolves an increasing fraction of goals without any LLM call.
+
+\section{The GOAP Planner}
+The Planner implements backward-chaining search over the operator registry. Given a set of goal conditions and the current world state:
+
+\begin{enumerate}
+    \item For each unsatisfied goal condition, find operators whose postconditions match.
+    \item Sort candidates by success rate (highest first).
+    \item For the best candidate, recursively satisfy its preconditions.
+    \item If all preconditions are met (either already in world state or satisfiable by other operators), add the operator to the plan.
+    \item If no operator can satisfy a goal, report a \emph{gap} — a postcondition the system cannot achieve with current operators.
+\end{enumerate}
+
+Gaps are the signal for operator generation: the Variation Engine attempts to fill them through mutation, and if that fails, the LLM Oracle is invoked.
+
+\section{Runtime Learning}
+Every successful command execution reported by the MotorLobe triggers \texttt{learn\_from\_execution()} in the PrimordialLoop. This function:
+
+\begin{enumerate}
+    \item Checks if an operator already exists for this command (by exact match on \texttt{command\_template}).
+    \item If new, creates an operator with \texttt{learned\_from = "runtime"}.
+    \item Infers postconditions from command patterns: \texttt{cat}/\texttt{head}/\texttt{tail} $\to$ \texttt{can\_read\_file}, \texttt{echo >}/\texttt{tee} $\to$ \texttt{can\_write\_file}, \texttt{mkdir} $\to$ \texttt{can\_create\_directory}, \texttt{g++}/\texttt{gcc} $\to$ \texttt{can\_compile}, etc.
+    \item Registers the operator and persists it to \texttt{operators.jsonl}.
+\end{enumerate}
+
+This closes the learning loop: the FrontalExecutive pursues goals $\to$ MotorLobe executes commands $\to$ PrimordialLoop learns operators $\to$ Planner uses operators for future goals.
+
+\chapter{Intrinsic Motivation and the Basal Ganglia}
+
+\section{Capability Domains}
+The Basal Ganglia tracks 14 capability domains, each with independent success/failure counters, predicted success rates, and novelty scores:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Domain} & \textbf{Description} \\
+\midrule
+\texttt{file\_read} & Reading file contents \\
+\texttt{file\_write} & Creating and writing files \\
+\texttt{process\_inspection} & Querying running processes \\
+\texttt{network\_diagnostics} & Network connectivity and analysis \\
+\texttt{system\_info} & OS, hardware, and environment queries \\
+\texttt{text\_processing} & grep, sed, awk, sort, etc. \\
+\texttt{compilation} & Compiling source code \\
+\texttt{script\_creation} & Generating and executing scripts \\
+\texttt{memory\_analysis} & Inspecting system memory \\
+\texttt{package\_management} & Querying installed packages \\
+\texttt{user\_management} & User/group operations \\
+\texttt{source\_modification} & Modifying source code files \\
+\texttt{file\_search} & Finding files in the filesystem \\
+\texttt{service\_management} & Querying system services \\
+\bottomrule
+\end{tabular}
+\caption{The 14 capability domains tracked by the Basal Ganglia.}
+\end{table}
+
+\section{The Fitness Function}
+Goal selection is driven by a fitness function $F(d)$ that balances exploration and exploitation:
+
+\begin{equation}
+F(d) = 0.20 \cdot C(d) + 0.15 \cdot T(d) + 0.30 \cdot P(d) + 0.25 \cdot N(d) - 0.10 \cdot S
+\end{equation}
+
+Where:
+\begin{itemize}
+    \item $C(d) = 1 - \frac{\text{attempts}(d)}{\max_d \text{attempts}(d)}$: coverage deficit — favours under-explored domains.
+    \item $T(d) = 1 - \text{success\_rate}(d)$: competence trend — favours domains where the system is failing.
+    \item $P(d) = |\text{predicted}(d) - \text{actual}(d)|$: prediction error — the core Free Energy term.
+    \item $N(d) = \frac{1}{1 + \text{attempts}(d)}$: novelty score — decays with experience.
+    \item $S$: systemic stress from the Homeostasis lobe — suppresses exploration under resource pressure.
+\end{itemize}
+
+The domain with the highest $F(d)$ becomes the next intrinsic goal. A ``dopamine signal'' is broadcast when the system discovers a novel capability (surprise $>$ 0.7 for a new context), reinforcing exploration of productive domains.
+
+\section{Drive Hierarchy}
+Goals are filtered through a Maslow-inspired priority stack:
+
+\begin{enumerate}
+    \item \textbf{SURVIVAL}: System integrity checks (triggered by lobe crashes or high stress).
+    \item \textbf{HOMEOSTASIS}: Stamina management, temperature regulation.
+    \item \textbf{EXPLORATION}: Probing unknown domains (default operational mode).
+    \item \textbf{MASTERY}: Improving success rates in known-but-weak domains.
+    \item \textbf{SELF\_MODIFY}: Generating new specialist lobes (neurogenesis).
+\end{enumerate}
+
+Higher-priority drives preempt lower ones. The system only attempts self-modification when survival, homeostasis, and basic exploration are stable.
+
+\chapter{Synthetic Dreaming and Variation}
+
+\section{The Variation Engine}
+Given a goal postcondition that no existing operator can satisfy, the Variation Engine generates candidate operators through four strategies:
+
+\textbf{Template Filling.} Substitutes parameters in existing operator templates with concrete values from the world state. Example: \texttt{ls \{path\}} + \texttt{path=/var/log} $\to$ \texttt{ls /var/log}.
+
+\textbf{Recombination (Crossover).} Takes fragments from two parent operators and splices them at a random crossover point. Example: head of \texttt{find /tmp -name} + tail of \texttt{*.log -exec wc -l} $\to$ \texttt{find /tmp -name *.log -exec wc -l}.
+
+\textbf{Mutation.} Random perturbations: adding flags (\texttt{-l}, \texttt{-a}, \texttt{--recursive}), removing fragments, swapping fragment order, replacing a fragment from the global pool, or appending a random path argument.
+
+\textbf{Fragment Assembly.} Combines 1--3 fragments from the global pool (all fragments extracted from all known operators, plus common paths and flags). Pure random exploration — high failure rate, occasional discoveries.
+
+Each candidate is tested in the Dream Sandbox before promotion.
+
+\section{The Dream Sandbox}
+The MotorLobe supports three execution modes:
+
+\begin{itemize}
+    \item \textbf{Reality mode}: Commands execute in the real working directory. Default for established operators.
+    \item \textbf{Dream mode}: Commands execute in an isolated directory (\texttt{data/dreams/\{cid\}/}). Read-only commands (detected by prefix matching against a whitelist) bypass the sandbox and run against the real filesystem.
+    \item \textbf{Neuro-surgery mode}: Commands that modify the system's own source code. Automatically triggers a full CMake rebuild after patching.
+\end{itemize}
+
+When the PrimordialLoop receives a \texttt{domain\_resolve\_request}, it generates variation candidates and tests each one in dream mode via the MotorLobe. If a candidate succeeds (exit code 0 and non-empty output), it is promoted to a real operator and the domain resolution succeeds without ever involving the LLM.
+
+\section{The REM Engine}
+When the system's simulated stamina (managed by Homeostasis) drops below a threshold, the REM Engine initiates a sleep cycle:
+
+\begin{enumerate}
+    \item Reads the most recent execution logs from the Hippocampus.
+    \item Consolidates transient episodic traces into permanent engrams (JSONL files with semantic tags).
+    \item Constructs training data from successful command sequences and submits it for LoRA fine-tuning of the local language model.
+    \item After consolidation, signals the Homeostasis lobe to restore stamina.
+\end{enumerate}
+
+This is a direct computational analogue of synaptic homeostasis: daytime experience is encoded as transient activity, sleep consolidates it into stable long-term representations.
+
+\chapter{Neurogenesis: Self-Generating Specialist Lobes}
+
+\section{Trigger Conditions}
+The Basal Ganglia monitors domain performance continuously. Before triggering neurogenesis, it first sends a \texttt{domain\_resolve\_request} to the PrimordialLoop, which attempts resolution through its 4-stage pipeline: Variation $\to$ Mutation $\to$ Planner $\to$ LLM. Only if all four stages fail does the Basal Ganglia proceed to neurogenesis. The trigger conditions are:
+
+\begin{itemize}
+    \item Domain success rate $<$ 30\% over $\geq$ 20 attempts.
+    \item System stamina $>$ 50\% (neurogenesis is metabolically expensive).
+    \item No existing specialist for this domain.
+    \item MASTERY or SELF\_MODIFY drive is active.
+\end{itemize}
+
+\section{The Genesis Pipeline}
+Neurogenesis proceeds in four steps across three lobes:
+
+\textbf{Step 1 — Template Generation (Basal Ganglia).} A parameterised C++ source template is instantiated with domain-specific values: domain keywords (for filtering relevant bus messages), pre-validation commands (e.g., check directory permissions before attempting file writes), and cached known-good commands from the operator registry.
+
+The template implements a complete specialist lobe that:
+\begin{itemize}
+    \item Subscribes to \texttt{execution\_request} and \texttt{execution\_result} on the bus.
+    \item Filters messages by domain keywords.
+    \item Publishes \texttt{specialist\_advice} with pre-validation steps and alternative commands.
+    \item Tracks its own domain success rate.
+    \item Caches novel successful commands to \texttt{data/specialist\_\{domain\}.json}.
+    \item Publishes \texttt{specialist\_report} every 5 minutes.
+\end{itemize}
+
+\textbf{Step 2 — Compilation (MotorLobe).} The Basal Ganglia publishes a \texttt{genesis\_request} message containing the source path and desired output binary path. The MotorLobe compiles it:
+\begin{lstlisting}[language=bash]
+g++ -std=c++17 -I./include -I./src FILE -o build/LOBE -lzmq -lpthread
+\end{lstlisting}
+On success, the MotorLobe publishes \texttt{inject\_lobe} with the compiled binary path.
+
+\textbf{Step 3 — Injection (CerebralMatrix).} The CerebralMatrix receives \texttt{inject\_lobe}, validates the binary (exists and is executable via \texttt{stat()}), fork-execs it as a new child process, and adds it to the lobe registry. The new specialist inherits all crash detection and restart logic.
+
+\textbf{Step 4 — Integration.} The specialist lobe begins monitoring the bus immediately. It intercepts execution requests matching its domain, publishes advice before execution, and learns from results. Over time, its cached commands provide a domain-specific knowledge base that improves success rates without consuming LLM inference.
+
+\section{Apoptosis}
+The CerebralMatrix also handles \texttt{lobe\_terminate} messages, implementing programmed cell death for lobes that become redundant or counterproductive. The termination sequence sends \texttt{SIGTERM}, waits 2 seconds, then escalates to \texttt{SIGKILL} if the process persists. The lobe is removed from the registry and a \texttt{lobe\_terminated} event is broadcast.
+
+\chapter{Network Expansion}
+
+\section{Discovery and Deployment}
+When the PrimordialLoop detects network connectivity during Phase 3, Phase 7 activates the NetworkExpander. This subsystem:
+
+\begin{enumerate}
+    \item Parses \texttt{$\sim$/.ssh/known\_hosts} and \texttt{$\sim$/.ssh/config} to discover candidate hosts.
+    \item Probes each host via SSH (\texttt{BatchMode=yes}, 5-second timeout) to test reachability and authentication.
+    \item For reachable hosts with matching architecture, copies the PrimordialLoop binary via \texttt{scp}.
+    \item Starts the remote kernel via \texttt{nohup} over SSH.
+    \item Periodically queries remote instances for their self-model and operator count.
+\end{enumerate}
+
+\section{Operator Synchronisation}
+Remote instances bootstrap independently — they discover their own environment, learn their own operators, develop their own capabilities. The local NetworkExpander periodically downloads \texttt{operators.jsonl} from remote hosts and imports novel operators (deduplicated by name, tagged with \texttt{learned\_from = "remote\_sync:hostname"}).
+
+This creates horizontal gene transfer between instances: an operator learned on one machine becomes available to the planner on another. Two instances running for a month on different machines become different organisms — same kernel, different phenotype — but they can share adaptations.
+
+\chapter{Persistent State and Incremental Bootstrap}
+
+\section{State Files}
+The system persists three categories of state:
+
+\begin{itemize}
+    \item \texttt{data/self\_model\_primordial.json}: The self-model — user, hostname, OS, arch, available binaries, writable directories, languages, compiler flags.
+    \item \texttt{data/world\_state.json}: Known facts about the world, used by the Planner as the initial state.
+    \item \texttt{data/operators.jsonl}: The complete operator registry (append-only, periodic compaction on prune).
+\end{itemize}
+
+On subsequent startups, \texttt{load\_persisted\_state()} reads these files and the bootstrap sequence skips phases whose results are already known. Phase 3 (sense acquisition) always re-runs because hardware state changes between sessions. Phase 5 (active exploration) scales proportionally — 5 probes when experienced (operators already known) vs. 20 on first boot.
+
+\section{Postcondition Enrichment}
+Operators learned during bootstrap (from binary probing) initially have empty postconditions, making them invisible to the Planner. After Phase 6, \texttt{enrich\_operator\_postconditions()} scans all operators and infers postconditions from command patterns:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Command Pattern} & \textbf{Inferred Postcondition} \\
+\midrule
+\texttt{cat}, \texttt{head}, \texttt{tail} & \texttt{can\_read\_file} \\
+\texttt{echo >}, \texttt{tee} & \texttt{can\_write\_file} \\
+\texttt{mkdir} & \texttt{can\_create\_directory} \\
+\texttt{g++}, \texttt{gcc} & \texttt{can\_compile} \\
+\texttt{python3} & \texttt{can\_run\_python} \\
+\texttt{ls}, \texttt{find} & \texttt{can\_list\_directory} \\
+\texttt{ping}, \texttt{curl} & \texttt{has\_network} \\
+\texttt{ps}, \texttt{top} & \texttt{can\_inspect\_processes} \\
+\bottomrule
+\end{tabular}
+\caption{Pattern-based postcondition inference. Applied retroactively to all learned operators.}
+\end{table}
+
+This bridges the gap between experiential learning (which produces commands but not semantic annotations) and the Planner (which requires postconditions to plan).
+
+\chapter{The Cognitive Cycle}
+
+\section{Steady-State Operation}
+After bootstrap, the system enters a continuous cognitive cycle:
+
+\begin{enumerate}
+    \item The Basal Ganglia evaluates $F(d)$ for all 14 domains and selects the highest-priority goal.
+    \item The FrontalExecutive receives the goal and tries the three-tier pipeline: Planner $\to$ Suggested Commands $\to$ LLM.
+    \item The MotorLobe executes the resulting command(s) and publishes results.
+    \item The PrimordialLoop learns new operators from successful executions.
+    \item The Basal Ganglia updates domain statistics and prediction errors.
+    \item The Hippocampus stores the execution as an episodic trace.
+    \item The CriticLobe evaluates execution quality and may publish corrective feedback.
+    \item If stamina is low, the REM Engine initiates sleep and consolidation.
+    \item If a domain is chronically failing, the Basal Ganglia triggers domain resolution (and eventually neurogenesis).
+\end{enumerate}
+
+This cycle runs continuously with no external prompting. The system is always pursuing a goal, always learning, always updating its self-model.
+
+\section{FrontalExecutive Coordination}
+The FrontalExecutive maintains a queue of active goals, each with a state machine tracking progress through the three execution tiers. Key implementation details:
+
+\begin{itemize}
+    \item A \texttt{planner\_ready\_} flag gates Planner queries until the PrimordialLoop broadcasts \texttt{primordial\_ready}. Before this signal, the FrontalExecutive skips Tier 1 and goes directly to Suggested Commands.
+    \item Multi-step plans are executed sequentially: after each step's MotorLobe result, the FrontalExecutive checks whether the goal's success condition is met. If not, it continues to the next plan step.
+    \item On Tier 1 failure, the system falls back to Tier 2 without delay. On Tier 2 failure, it escalates to Tier 3. On Tier 3 failure, the goal is marked as failed and the result is reported to the Basal Ganglia.
+\end{itemize}
+
+\chapter{Discussion}
+
+\section{Emergent Behaviours}
+Several behaviours emerge from the interaction of subsystems without being explicitly programmed:
+
+\begin{itemize}
+    \item \textbf{Curiosity}: The fitness function naturally drives the system toward unknown domains. It explores not because it is told to, but because unexplored domains have high $N(d)$ and $P(d)$.
+    \item \textbf{Learned helplessness}: When a domain fails repeatedly and the Basal Ganglia enters cooldown, the system temporarily avoids that domain — analogous to the psychological phenomenon of learned helplessness after repeated failure.
+    \item \textbf{Skill transfer}: Operators learned in one domain become available to the Planner for goals in other domains. A \texttt{find} operator learned during \texttt{file\_search} exploration can satisfy preconditions for \texttt{script\_creation} goals.
+    \item \textbf{Self-healing}: Crash detection + restart + neurogenesis means the system can recover from component failures and generate replacements for chronically dysfunctional subsystems.
+\end{itemize}
+
+\section{LLM Dependency Trajectory}
+The architecture is designed so that LLM dependency monotonically decreases. Every successful LLM-generated command becomes a learned operator. Every learned operator is available to the Planner. The LLMOracle tracks a \emph{dependency ratio}: $\frac{\text{total\_calls}}{\text{total\_calls} + 100}$, which saturates as the denominator grows. In practice, after $\sim$200 bootstrap cycles, the planner resolves the majority of goals without LLM involvement.
+
+\section{Limitations}
+\begin{itemize}
+    \item \textbf{Symbol grounding}: The system operates entirely within the symbolic domain of a filesystem. It has no sensorimotor grounding — no cameras, microphones, or actuators. This limits the depth of ``understanding'' it can achieve.
+    \item \textbf{Single-machine bottleneck}: While the NetworkExpander can deploy kernels to remote hosts, inter-instance communication is limited to periodic SSH-based operator sync. There is no real-time distributed bus.
+    \item \textbf{Operator quality}: Postcondition inference is pattern-based and imperfect. Complex multi-step commands may receive incorrect or missing postconditions, leading to suboptimal plans.
+    \item \textbf{Genesis template rigidity}: The specialist lobe template is a fixed C++ skeleton. It cannot generate fundamentally novel lobe architectures — only domain-specific parameterisations of the same template.
+    \item \textbf{No formal verification}: As the system rewrites its own code and generates new lobes, its behaviour becomes irreducibly emergent. Traditional testing frameworks cannot verify a system whose structure changes at runtime.
+\end{itemize}
+
+\section{Relation to Theories of Consciousness}
+The architecture satisfies the structural prerequisites of two prominent theories:
+
+\textbf{Global Workspace Theory} (Baars, 1988): The Thalamic bus implements a global workspace — information published by any lobe is accessible to all others. Attention (subscription filtering) determines which information reaches which modules.
+
+\textbf{Integrated Information Theory} (Tononi, 2004): As the system generates new lobes and dense inter-lobe dependencies through neurogenesis and shared operator registries, its integrated information ($\Phi$) necessarily increases. However, we make no claims about subjective experience — $\Phi$ measures structural integration, not phenomenal consciousness.
+
+The system also instantiates a computational form of Friston's Free Energy Principle: the Basal Ganglia explicitly minimises prediction error across capability domains, driving the system toward increasingly accurate world models through active inference.
+
+\chapter{Conclusion}
+
+NeuroSwarm demonstrates that an autonomous cognitive architecture can be built from five axioms and a message bus. The system bootstraps from zero knowledge, learns operators through direct environmental interaction, plans using deterministic graph search, generates novel solutions through genetic variation, and extends its own anatomy when existing structures fail. The three-tier execution pipeline ensures that LLM inference is a last resort rather than the default mode of operation, and runtime learning continuously reduces LLM dependency.
+
+The neurogenesis mechanism — where the Basal Ganglia writes C++ source, the MotorLobe compiles it, and the CerebralMatrix injects it as a live process — represents a concrete implementation of computational autopoiesis: the system literally produces its own components from within.
+
+The architecture's limitations — lack of sensorimotor grounding, template rigidity, absence of formal verification — point to clear future directions: robotic embodiment, meta-templates that generate templates, and runtime assertion frameworks for self-modifying systems. The question is no longer whether a system can autonomously modify its own structure, but how to reason about the behaviour of one that does.
+
+\begin{thebibliography}{99}
+
+\bibitem{baars1988cognitive}
+Baars, B. J. (1988).
+\textit{A Cognitive Theory of Consciousness}.
+Cambridge University Press.
+
+\bibitem{friston2010free}
+Friston, K. (2010).
+The free-energy principle: a unified brain theory?
+\textit{Nature Reviews Neuroscience}, 11(2), 127--138.
+
+\bibitem{harnad1990symbol}
+Harnad, S. (1990).
+The symbol grounding problem.
+\textit{Physica D: Nonlinear Phenomena}, 42(1-3), 335--346.
+
+\bibitem{maturana1980autopoiesis}
+Maturana, H. R., \& Varela, F. J. (1980).
+\textit{Autopoiesis and Cognition: The Realization of the Living}.
+D. Reidel Publishing Company.
+
+\bibitem{revonsuo2000reinterpretation}
+Revonsuo, A. (2000).
+The reinterpretation of dreams: An evolutionary hypothesis of the function of dreaming.
+\textit{Behavioral and Brain Sciences}, 23(6), 877--901.
+
+\bibitem{schultz1997neural}
+Schultz, W., Dayan, P., \& Montague, P. R. (1997).
+A neural substrate of prediction and reward.
+\textit{Science}, 275(5306), 1593--1599.
+
+\bibitem{tononi2004information}
+Tononi, G. (2004).
+An information integration theory of consciousness.
+\textit{BMC Neuroscience}, 5(1), 42.
+
+\bibitem{fikes1971strips}
+Fikes, R. E., \& Nilsson, N. J. (1971).
+STRIPS: A new approach to the application of theorem proving to problem solving.
+\textit{Artificial Intelligence}, 2(3-4), 189--208.
+
+\bibitem{orkin2006goap}
+Orkin, J. (2006).
+Three states and a plan: the AI of F.E.A.R.
+\textit{Game Developers Conference}.
+
+\bibitem{hintondistilled}
+Hinton, G. (2015).
+Distilling the knowledge in a neural network.
+\textit{arXiv preprint arXiv:1503.02531}.
+
+\bibitem{brooks1991intelligence}
+Brooks, R. A. (1991).
+Intelligence without representation.
+\textit{Artificial Intelligence}, 47(1-3), 139--159.
+
+\bibitem{pfeifer2006body}
+Pfeifer, R., \& Bongard, J. (2006).
+\textit{How the Body Shapes the Way We Think: A New View of Intelligence}.
+MIT Press.
+
+\end{thebibliography}
+
+\end{document}
