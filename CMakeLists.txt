@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(NeuroSwarm VERSION 2.2.0 LANGUAGES CXX)
+project(NeuroSwarm VERSION 3.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(cppzmq REQUIRED)
@@ -117,3 +117,6 @@ target_link_libraries(sensory_test PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(rem_finetune_test tests/rem_finetune_test.cpp)
 target_link_libraries(rem_finetune_test PRIVATE nlohmann_json::nlohmann_json)
+
+add_executable(full_system_test tests/full_system_test.cpp)
+target_link_libraries(full_system_test PRIVATE zmq nlohmann_json::nlohmann_json)

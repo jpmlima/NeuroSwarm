@@ -35,7 +35,7 @@ public:
             "time_pulse", "search_result", "critic_result",
             "intrinsic_goal", "spike_ready", "spike_done",
             "inference_result", "metabolic_alert", "goal_plan",
-            "primordial_ready"
+            "primordial_ready", "dopamine_signal"
         });
 
         load_system_knowledge();
@@ -150,6 +150,9 @@ public:
                 else if (origin == "spike_worker" && intent == "spike_done") {
                     handle_spike_done(j);
                 }
+                else if (origin == "basal_ganglia" && intent == "dopamine_signal") {
+                    handle_dopamine(j);
+                }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
                     std::string adapter = j.value("adapter", "");
                     if (adapter == "critic") {
@@ -198,6 +201,7 @@ private:
         float fitness_score = 0.0f;    // fitness at time of selection
         bool is_intrinsic = false;     // true if goal came from BasalGanglia
         std::vector<std::string> suggested_commands; // from BasalGanglia
+        std::vector<std::string> executed_commands;  // RLAIF: full chain for reinforcement
     };
     std::map<std::string, GoalState> active_goals;
     float system_stress = 0.0f;
@@ -502,6 +506,10 @@ private:
         std::string status = data.value("status", "");
         std::string output = data.value("proprioception", data.value("output", ""));
         std::string mode = data.value("mode", "reality");
+
+        // RLAIF: track every command attempted for this goal
+        if (!state.last_cmd.empty())
+            state.executed_commands.push_back(state.last_cmd);
 
         if (status == "success") {
             if (mode == "dream") {
@@ -904,11 +912,59 @@ private:
         dispatch_to_all(mem_req);
     }
 
+    // RLAIF: dopamine signal received — reinforce participating commands
+    void handle_dopamine(const json& data) {
+        std::string domain = data.value("domain", "");
+        float magnitude = data.value("magnitude", 0.0f);
+
+        // Check recently completed goals for matching domain
+        for (auto& [cid, chain] : recent_chains) {
+            if (chain.domain == domain && !chain.commands.empty()) {
+                json reinforce = {
+                    {"origin", "frontal_executive"},
+                    {"intent", "rlaif_reinforce"},
+                    {"domain", domain},
+                    {"magnitude", magnitude},
+                    {"commands", chain.commands}
+                };
+                dispatch_to_all(reinforce);
+                std::cout << "[EXECUTIVE] RLAIF: Reinforcing " << chain.commands.size()
+                          << " commands in domain '" << domain
+                          << "' (magnitude=" << magnitude << ")" << std::endl;
+            }
+        }
+
+        // Prune old chains (>60s)
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = recent_chains.begin(); it != recent_chains.end(); ) {
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second.completed_at).count() > 60)
+                it = recent_chains.erase(it);
+            else ++it;
+        }
+    }
+
+    // RLAIF: completed execution chain cache
+    struct CompletedChain {
+        std::string domain;
+        std::vector<std::string> commands;
+        std::chrono::steady_clock::time_point completed_at;
+    };
+    std::map<std::string, CompletedChain> recent_chains;
+
     // Publish intrinsic goal result back to BasalGanglia for self-model update
     void publish_intrinsic_result(const std::string& cid, bool success) {
         auto it = active_goals.find(cid);
         if (it == active_goals.end()) return;
         if (!it->second.is_intrinsic) return;
+
+        // RLAIF: cache completed chain for dopamine reinforcement
+        if (success && !it->second.executed_commands.empty()) {
+            CompletedChain chain;
+            chain.domain = it->second.domain;
+            chain.commands = it->second.executed_commands;
+            chain.completed_at = std::chrono::steady_clock::now();
+            recent_chains[cid] = chain;
+        }
 
         json result = {
             {"cid", cid}, {"origin", "frontal_executive"},
@@ -916,7 +972,8 @@ private:
             {"domain", it->second.domain},
             {"fitness_score", it->second.fitness_score},
             {"success", success},
-            {"command", it->second.last_cmd}
+            {"command", it->second.last_cmd},
+            {"executed_commands", it->second.executed_commands}
         };
         dispatch_to_all(result);
     }

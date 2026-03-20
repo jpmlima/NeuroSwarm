@@ -51,12 +51,14 @@ public:
             "time_pulse", "intrinsic_goal_result",
             "lobe_crash", "lobe_death", "metabolic_alert",
             "genesis_result", "specialist_report", "lobe_injected",
-            "lobe_terminated", "domain_resolve_result"
+            "lobe_terminated", "domain_resolve_result",
+            "rlaif_reinforce"
         });
 
         mkdir("./data", 0755);
         load_self_model();
         init_domain_commands();
+        load_meta_templates();
         load_active_specialists();
 
         std::cout << "[BASAL_GANGLIA] Intrinsic motivation engine online. "
@@ -220,8 +222,27 @@ public:
                                           << " IMPROVED domain '" << domain
                                           << "' by +" << (int)(delta * 100) << "%" << std::endl;
                                 emit_dopamine(domain, "neurogenesis_success", delta);
+
+                                // Meta-template: reward the template that spawned this specialist
+                                for (auto& mt : meta_population) {
+                                    if (mt.specialists_spawned > mt.specialists_survived) {
+                                        mt.specialists_survived++;
+                                        mt.fitness = std::min(1.0f, mt.fitness + 0.1f * delta);
+                                        break;
+                                    }
+                                }
+                                // Trigger evolution after enough data
+                                int total_spawned = 0;
+                                for (auto& mt : meta_population) total_spawned += mt.specialists_spawned;
+                                if (total_spawned > 0 && total_spawned % 5 == 0) evolve_meta_templates();
+                                save_meta_templates();
                             }
                         }
+
+                        // Lateral inhibition: if overlapping specialist has higher handled count, prune this one
+                        tracker.cumulative_handled += handled;
+                        tracker.report_count++;
+                        if (check_lateral_inhibition(domain, specialist, tracker)) continue;
 
                         // Trigger apoptosis: 6 idle reports (~30 min) or 3 healthy (~15 min of >70%)
                         if (tracker.consecutive_idle_reports >= 6 ||
@@ -295,6 +316,32 @@ public:
                         std::cout << "[BASAL_GANGLIA] AUTOPOIESIS FAILED for '" << domain
                                   << "' — falling back to NEUROGENESIS" << std::endl;
                         trigger_neurogenesis(domain);
+                    }
+                }
+                // RLAIF: reinforce command genome from successful execution chains
+                else if (origin == "frontal_executive" && intent == "rlaif_reinforce") {
+                    std::string domain = j.value("domain", "");
+                    float magnitude = j.value("magnitude", 0.0f);
+                    auto cmds = j.value("commands", json::array());
+
+                    int reinforced = 0;
+                    for (auto& cmd_j : cmds) {
+                        std::string cmd = cmd_j.get<std::string>();
+                        // Extra fitness boost proportional to dopamine magnitude
+                        auto& templates = command_genome[domain];
+                        for (auto& t : templates) {
+                            if (t.cmd == cmd) {
+                                t.fitness = std::min(1.0f, t.fitness + 0.15f * magnitude);
+                                reinforced++;
+                                break;
+                            }
+                        }
+                    }
+                    if (reinforced > 0) {
+                        save_genome();
+                        std::cout << "[BASAL_GANGLIA] RLAIF: Reinforced " << reinforced
+                                  << " templates in '" << domain << "' (dopamine="
+                                  << magnitude << ")" << std::endl;
                     }
                 }
                 // Phase 6: Lobe termination confirmation — specialist removed
@@ -665,11 +712,25 @@ private:
 
         if (domain.empty()) return;
 
-        // This is handled by handle_execution_result via the bus,
-        // but we use this for explicit domain tagging when FE reports back
         auto& d = self_model[domain];
         if (success) {
             d.consecutive_failures = 0;
+
+            // RLAIF: reinforce all commands from the successful execution chain
+            if (j.contains("executed_commands")) {
+                auto cmds = j["executed_commands"];
+                int reinforced = 0;
+                for (auto& cmd_j : cmds) {
+                    std::string c = cmd_j.get<std::string>();
+                    update_genome_fitness(domain, c, true);
+                    reinforced++;
+                }
+                if (reinforced > 0) {
+                    std::cout << "[BASAL_GANGLIA] RLAIF: Chain reinforcement — "
+                              << reinforced << " commands in '" << domain << "'" << std::endl;
+                    emit_dopamine(domain, "rlaif_chain_success", 0.3f);
+                }
+            }
         }
     }
 
@@ -978,6 +1039,9 @@ private:
         int   post_injection_success = 0;
         int   post_injection_failure = 0;
         static constexpr int EVALUATION_WINDOW = 15;
+        // Lateral inhibition: cumulative performance tracking
+        int cumulative_handled = 0;
+        int report_count = 0;
     };
     std::map<std::string, ApoptosisTracker> apoptosis_trackers;
 
@@ -1232,6 +1296,117 @@ int main() {
 }
 )CPP";
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Meta-templates: specialist template evolution (generators of generators)
+    // ──────────────────────────────────────────────────────────────────────
+    struct MetaTemplate {
+        int report_interval_min = 5;   // how often specialist reports
+        int cache_size = 50;           // max cached commands
+        int max_keywords = 10;         // keyword match limit
+        float fitness = 0.5f;          // meta-fitness: how well its specialists perform
+        int generation = 0;
+        int specialists_spawned = 0;
+        int specialists_survived = 0;  // survived past EVALUATION_WINDOW
+    };
+
+    std::vector<MetaTemplate> meta_population;
+    static constexpr const char* META_TEMPLATE_PATH = "./data/meta_templates.json";
+
+    void load_meta_templates() {
+        std::ifstream f(META_TEMPLATE_PATH);
+        if (!f.is_open()) {
+            // Seed initial population with 3 variants
+            meta_population.push_back({5, 50, 10, 0.5f, 0, 0, 0});   // default
+            meta_population.push_back({3, 30, 8, 0.5f, 0, 0, 0});    // faster reports, smaller cache
+            meta_population.push_back({10, 100, 15, 0.5f, 0, 0, 0}); // slower reports, larger cache
+            return;
+        }
+        try {
+            json doc;
+            f >> doc;
+            for (auto& t : doc) {
+                MetaTemplate mt;
+                mt.report_interval_min = t.value("report_interval", 5);
+                mt.cache_size = t.value("cache_size", 50);
+                mt.max_keywords = t.value("max_keywords", 10);
+                mt.fitness = t.value("fitness", 0.5f);
+                mt.generation = t.value("generation", 0);
+                mt.specialists_spawned = t.value("spawned", 0);
+                mt.specialists_survived = t.value("survived", 0);
+                meta_population.push_back(mt);
+            }
+        } catch (...) {
+            meta_population.push_back({5, 50, 10, 0.5f, 0, 0, 0});
+        }
+    }
+
+    void save_meta_templates() {
+        json doc = json::array();
+        for (auto& mt : meta_population) {
+            doc.push_back({
+                {"report_interval", mt.report_interval_min},
+                {"cache_size", mt.cache_size},
+                {"max_keywords", mt.max_keywords},
+                {"fitness", mt.fitness},
+                {"generation", mt.generation},
+                {"spawned", mt.specialists_spawned},
+                {"survived", mt.specialists_survived}
+            });
+        }
+        std::ofstream f(META_TEMPLATE_PATH);
+        if (f.is_open()) f << doc.dump(2);
+    }
+
+    // Select best meta-template by fitness (roulette wheel)
+    MetaTemplate& select_meta_template() {
+        float total = 0;
+        for (auto& mt : meta_population) total += std::max(0.01f, mt.fitness);
+        float r = (float)(rand() % 10000) / 10000.0f * total;
+        float accum = 0;
+        for (auto& mt : meta_population) {
+            accum += std::max(0.01f, mt.fitness);
+            if (accum >= r) return mt;
+        }
+        return meta_population.back();
+    }
+
+    // Evolve meta-template population: crossover + mutation
+    void evolve_meta_templates() {
+        if (meta_population.size() < 2) return;
+
+        // Sort by fitness
+        std::sort(meta_population.begin(), meta_population.end(),
+            [](const MetaTemplate& a, const MetaTemplate& b) { return a.fitness > b.fitness; });
+
+        // Create offspring from top 2 via crossover
+        auto& parent1 = meta_population[0];
+        auto& parent2 = meta_population[1];
+
+        MetaTemplate child;
+        child.report_interval_min = (rand() % 2) ? parent1.report_interval_min : parent2.report_interval_min;
+        child.cache_size = (rand() % 2) ? parent1.cache_size : parent2.cache_size;
+        child.max_keywords = (rand() % 2) ? parent1.max_keywords : parent2.max_keywords;
+        child.generation = std::max(parent1.generation, parent2.generation) + 1;
+
+        // Mutation (20% chance per parameter)
+        if (rand() % 5 == 0) child.report_interval_min = std::max(1, child.report_interval_min + (rand() % 5) - 2);
+        if (rand() % 5 == 0) child.cache_size = std::max(10, child.cache_size + (rand() % 41) - 20);
+        if (rand() % 5 == 0) child.max_keywords = std::max(3, child.max_keywords + (rand() % 5) - 2);
+
+        // Replace weakest if population full
+        if (meta_population.size() >= 6) {
+            meta_population.back() = child;
+        } else {
+            meta_population.push_back(child);
+        }
+
+        save_meta_templates();
+        std::cout << "[BASAL_GANGLIA] META-TEMPLATE EVOLVED: gen=" << child.generation
+                  << " report=" << child.report_interval_min << "min"
+                  << " cache=" << child.cache_size
+                  << " keywords=" << child.max_keywords << std::endl;
+    }
+
     // Build specialist parameters from domain name
     struct SpecialistParams {
         std::string domain;
@@ -1297,6 +1472,51 @@ int main() {
         return str;
     }
 
+    // Lateral inhibition: when two specialists cover overlapping domains,
+    // the one with fewer handled commands over N reports gets pruned.
+    bool check_lateral_inhibition(const std::string& domain, const std::string& specialist,
+                                  const ApoptosisTracker& tracker) {
+        if (tracker.report_count < 3) return false;  // need enough data
+
+        // Check if any related domain also has an active specialist
+        auto affinity_it = domain_affinity.find(domain);
+        if (affinity_it == domain_affinity.end()) return false;
+
+        for (const auto& related : affinity_it->second) {
+            if (!active_specialists.count(related)) continue;
+            if (!apoptosis_trackers.count(related)) continue;
+
+            auto& rival = apoptosis_trackers[related];
+            if (rival.report_count < 3) continue;
+
+            // Compare average handled per report
+            float my_avg = (float)tracker.cumulative_handled / tracker.report_count;
+            float rival_avg = (float)rival.cumulative_handled / rival.report_count;
+
+            // If this specialist handles <50% of what the rival handles, prune it
+            if (my_avg < rival_avg * 0.5f && rival_avg > 0) {
+                std::cout << "[BASAL_GANGLIA] LATERAL INHIBITION: " << specialist
+                          << " (domain=" << domain << " avg=" << (int)my_avg
+                          << ") suppressed by " << related << " specialist (avg="
+                          << (int)rival_avg << ")" << std::endl;
+
+                json terminate = {
+                    {"origin", "basal_ganglia"},
+                    {"intent", "lobe_terminate"},
+                    {"lobe_name", specialist},
+                    {"domain", domain},
+                    {"reason", "lateral_inhibition"}
+                };
+                routing::publish(pub, terminate);
+                active_specialists.erase(domain);
+                specialist_to_domain.erase(specialist);
+                apoptosis_trackers.erase(domain);
+                return true;
+            }
+        }
+        return false;
+    }
+
     void trigger_neurogenesis(const std::string& domain) {
         auto params = build_specialist_params(domain);
 
@@ -1324,8 +1544,17 @@ int main() {
         active_specialists.insert(domain);
         specialist_to_domain[params.lobe_tag] = domain;
 
+        // Meta-template: apply selected variant's parameters to source
+        auto& meta = select_meta_template();
+        source = str_replace(source, "elapsed >= 5", "elapsed >= " + std::to_string(meta.report_interval_min));
+        source = str_replace(source, "size() > 50", "size() > " + std::to_string(meta.cache_size));
+        meta.specialists_spawned++;
+        save_meta_templates();
+
         std::cout << "[BASAL_GANGLIA] NEUROGENESIS TRIGGERED: domain='" << domain
-                  << "' → " << source_path << std::endl;
+                  << "' → " << source_path
+                  << " (meta: gen=" << meta.generation
+                  << " report=" << meta.report_interval_min << "min)" << std::endl;
 
         // Publish genesis_request for MotorLobe to compile
         json req = {

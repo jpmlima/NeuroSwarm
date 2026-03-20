@@ -148,13 +148,22 @@ public:
             return false;
         }
 
-        // Check architecture compatibility
-        // For now, only deploy to same arch (cross-compilation is Phase F)
+        // Check architecture compatibility — attempt cross-compilation if needed
         if (!host.arch.empty() && host.arch != local_arch_) {
             std::cout << "[NETWORK] Architecture mismatch: local=" << local_arch_
                       << " remote=" << host.arch
-                      << ". Cross-compilation not yet supported." << std::endl;
-            return false;
+                      << ". Attempting cross-compilation..." << std::endl;
+
+            std::string cross_binary = cross_compile(local_kernel_path, host.arch);
+            if (cross_binary.empty()) {
+                std::cout << "[NETWORK] Cross-compilation failed for " << host.arch
+                          << ". Skipping deployment." << std::endl;
+                return false;
+            }
+
+            // Deploy the cross-compiled binary instead
+            std::cout << "[NETWORK] Cross-compiled kernel for " << host.arch << std::endl;
+            return deploy_binary(host, cross_binary);
         }
 
         std::cout << "[NETWORK] Deploying kernel to " << host.address << "..." << std::endl;
@@ -469,6 +478,100 @@ private:
     }
 
     std::unordered_set<std::string> local_names_; // for dedup during sync
+
+    // Cross-compilation: map remote arch to toolchain prefix
+    static std::string get_cross_toolchain(const std::string& arch) {
+        static const std::map<std::string, std::string> toolchains = {
+            {"aarch64",  "aarch64-linux-gnu-g++"},
+            {"armv7l",   "arm-linux-gnueabihf-g++"},
+            {"riscv64",  "riscv64-linux-gnu-g++"},
+            {"i686",     "i686-linux-gnu-g++"},
+            {"mips",     "mips-linux-gnu-g++"},
+            {"mips64",   "mips64-linux-gnu-g++"},
+            {"ppc64le",  "powerpc64le-linux-gnu-g++"},
+            {"s390x",    "s390x-linux-gnu-g++"}
+        };
+        auto it = toolchains.find(arch);
+        return it != toolchains.end() ? it->second : "";
+    }
+
+    // Cross-compile the kernel source for a different architecture
+    std::string cross_compile(const std::string& source_dir, const std::string& target_arch) {
+        std::string compiler = get_cross_toolchain(target_arch);
+        if (compiler.empty()) {
+            std::cout << "[NETWORK] No cross-compiler known for arch: " << target_arch << std::endl;
+            return "";
+        }
+
+        // Check if cross-compiler is installed
+        auto check = exec("which " + compiler + " 2>/dev/null");
+        if (check.exit_code != 0) {
+            std::cout << "[NETWORK] Cross-compiler not installed: " << compiler << std::endl;
+            return "";
+        }
+
+        std::string output = "/tmp/neuroswarm_kernel_" + target_arch;
+        std::string src = "src/brainstem/PrimordialLoop.cpp";
+
+        std::string cmd = compiler + " -std=c++17 -O2"
+            " -I./include -I./src"
+            " -o " + output +
+            " " + src +
+            " -lzmq -lpthread"
+            " 2>&1";
+
+        std::cout << "[NETWORK] Cross-compiling for " << target_arch
+                  << " with " << compiler << "..." << std::endl;
+
+        auto r = exec(cmd);
+        if (r.exit_code != 0) {
+            std::cout << "[NETWORK] Cross-compilation failed:\n"
+                      << r.output.substr(0, 500) << std::endl;
+            return "";
+        }
+
+        std::cout << "[NETWORK] Cross-compilation succeeded: " << output << std::endl;
+        return output;
+    }
+
+    // Deploy a pre-compiled binary to remote host
+    bool deploy_binary(RemoteHost& host, const std::string& binary_path) {
+        // Create remote directory
+        std::string mkdir_cmd = "ssh -o BatchMode=yes "
+            + host.user + "@" + host.address
+            + " 'mkdir -p ~/neuroswarm/data' 2>/dev/null";
+        auto r1 = exec(mkdir_cmd);
+        if (r1.exit_code != 0) return false;
+
+        // Copy binary
+        std::string scp_cmd = "scp -o BatchMode=yes "
+            + binary_path + " "
+            + host.user + "@" + host.address + ":~/neuroswarm/primordial_loop"
+            + " 2>/dev/null";
+        auto r2 = exec(scp_cmd);
+        if (r2.exit_code != 0) return false;
+
+        // Make executable
+        exec("ssh -o BatchMode=yes " + host.user + "@" + host.address
+             + " 'chmod +x ~/neuroswarm/primordial_loop' 2>/dev/null");
+
+        host.has_kernel = true;
+        host.deploy_path = "~/neuroswarm/";
+
+        std::cout << "[NETWORK] Cross-compiled kernel deployed to "
+                  << host.address << " (" << host.arch << ")" << std::endl;
+
+        nlohmann::json event = {
+            {"origin", "network_expander"},
+            {"intent", "kernel_deployed"},
+            {"remote_host", host.address},
+            {"remote_arch", host.arch},
+            {"cross_compiled", true}
+        };
+        routing::publish(pub_, event);
+
+        return true;
+    }
 };
 
 } // namespace neuroswarm
