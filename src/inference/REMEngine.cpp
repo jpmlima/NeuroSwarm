@@ -72,6 +72,7 @@ private:
     static constexpr const char* FINETUNE_BIN    = "./external/llama.cpp/build/bin/llama-finetune";
     static constexpr const char* BASE_MODEL      = "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
     static constexpr const char* FINETUNED_DIR   = "./models/finetuned/";
+    static constexpr const char* LORA_DIR        = "./models/lora/";
     static constexpr int         ANALYSIS_WINDOW = 100; // last N execution events
     static constexpr int         MIN_NEW_TRACES  = 20;  // minimum new successes before export
     static constexpr const char* GENOME_PATH     = "./data/command_genome.json";
@@ -185,17 +186,19 @@ private:
 
             std::string goal = cid_to_goal.count(t.cid) ? cid_to_goal[t.cid] : t.command;
 
-            out << "<|system|>\n"
-                << "You are a bash executor. Reply ONLY with JSON: "
-                << "{\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
-                << "Rules: command MUST be executable bash. No placeholders.\n"
-                << "<|end|>\n"
-                << "<|user|>\n"
-                << "GOAL: " << goal << "\n"
-                << "<|end|>\n"
-                << "<|assistant|>\n"
-                << "{\"thought\":\"execute\",\"command\":\"" << t.command << "\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
-                << "<|end|>\n\n";
+            // Escape command for JSON embedding
+            std::string escaped_cmd = t.command;
+            for (size_t p = 0; (p = escaped_cmd.find('"', p)) != std::string::npos; p += 2)
+                escaped_cmd.insert(p, "\\");
+
+            // JSONL format: one training sample per line
+            json sample = {{"text",
+                "<|system|>\nYou are a bash executor. Reply ONLY with JSON: "
+                "{\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
+                "Rules: command MUST be executable bash. No placeholders.\n<|end|>\n"
+                "<|user|>\nGOAL: " + goal + "\n<|end|>\n"
+                "<|assistant|>\n{\"thought\":\"execute\",\"command\":\"" + escaped_cmd + "\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n<|end|>"}};
+            out << sample.dump() << "\n";
             ++count;
         }
 
@@ -206,7 +209,7 @@ private:
 
         auto now = std::chrono::system_clock::now();
         auto epoch = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        std::string filename = std::string(TRAINING_DIR) + "rem_training_" + std::to_string(epoch) + ".txt";
+        std::string filename = std::string(TRAINING_DIR) + "rem_training_" + std::to_string(epoch) + ".jsonl";
 
         std::ofstream f(filename);
         f << out.str();
@@ -231,11 +234,20 @@ private:
             return;
         }
 
-        fs::create_directories(FINETUNED_DIR);
-
         auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        std::string output_model = std::string(FINETUNED_DIR) + "qwen2.5-rem-" + std::to_string(epoch) + ".gguf";
+
+        // Try LoRA fine-tuning first (lighter, hot-loadable)
+        bool use_lora = true;
+        std::string output_path;
+
+        if (use_lora) {
+            fs::create_directories(LORA_DIR);
+            output_path = std::string(LORA_DIR) + "rem_lora_" + std::to_string(epoch) + ".gguf";
+        } else {
+            fs::create_directories(FINETUNED_DIR);
+            output_path = std::string(FINETUNED_DIR) + "qwen2.5-rem-" + std::to_string(epoch) + ".gguf";
+        }
 
         pid_t pid = fork();
         if (pid < 0) {
@@ -245,26 +257,41 @@ private:
 
         if (pid == 0) {
             // Child process — exec llama-finetune
-            execl(FINETUNE_BIN, "llama-finetune",
-                  "-m", BASE_MODEL,
-                  "-f", training_file.c_str(),
-                  "-o", output_model.c_str(),
-                  "-ngl", "0",
-                  "-c", "512",
-                  "-b", "4",
-                  "-ub", "4",
-                  "--epochs", "2",
-                  "--learning-rate", "1e-5",
-                  (char*)nullptr);
+            if (use_lora) {
+                execl(FINETUNE_BIN, "llama-finetune",
+                      "-m", BASE_MODEL,
+                      "-f", training_file.c_str(),
+                      "--lora-out", output_path.c_str(),
+                      "-ngl", "0",
+                      "-c", "512",
+                      "-b", "4",
+                      "-ub", "4",
+                      "--epochs", "2",
+                      "--learning-rate", "1e-5",
+                      (char*)nullptr);
+            } else {
+                execl(FINETUNE_BIN, "llama-finetune",
+                      "-m", BASE_MODEL,
+                      "-f", training_file.c_str(),
+                      "-o", output_path.c_str(),
+                      "-ngl", "0",
+                      "-c", "512",
+                      "-b", "4",
+                      "-ub", "4",
+                      "--epochs", "2",
+                      "--learning-rate", "1e-5",
+                      (char*)nullptr);
+            }
             // exec failed
             _exit(1);
         }
 
-        // Parent — record PID and write lockfile
+        // Parent — record PID, type, and output path in lockfile
         training_pid = pid;
         std::ofstream lock(LOCKFILE);
-        lock << pid << "\n" << output_model;
-        std::cout << "[REM] Fine-tuning started (PID " << pid << "). Output: " << output_model << std::endl;
+        lock << pid << "\n" << output_path << "\n" << (use_lora ? "lora" : "model");
+        std::cout << "[REM] Fine-tuning started (PID " << pid << ", "
+                  << (use_lora ? "LoRA" : "full model") << "). Output: " << output_path << std::endl;
     }
 
     // -----------------------------------------------------------------------
@@ -295,22 +322,27 @@ private:
             return;
         }
 
-        // Read output model path from lockfile
-        std::string output_model;
+        // Read output model path and type from lockfile
+        std::string output_model, training_type = "model";
         if (fs::exists(LOCKFILE)) {
             std::ifstream lock(LOCKFILE);
             std::string pid_str;
             std::getline(lock, pid_str);
             std::getline(lock, output_model);
+            std::getline(lock, training_type);
+            if (training_type.empty()) training_type = "model";
         }
 
         if (result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-            std::cout << "[REM] Fine-tuning complete! Output: " << output_model << std::endl;
+            std::cout << "[REM] Fine-tuning complete! Output: " << output_model
+                      << " (type: " << training_type << ")" << std::endl;
 
             json tc = {
                 {"origin", "rem_engine"},
                 {"intent", "training_complete"},
-                {"model_path", output_model}
+                {"model_path", output_model},
+                {"type", training_type},
+                {"adapter_name", "rem_latest"}
             };
             dispatch(tc);
         } else {

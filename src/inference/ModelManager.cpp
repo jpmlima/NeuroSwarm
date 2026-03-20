@@ -129,9 +129,19 @@ bool ModelManager::add_model(const std::string& name, const std::string& model_p
 }
 
 bool ModelManager::load_lora(const std::string& name, const std::string& lora_path, float scale) {
+    // Allow replacement of existing adapter (hot-reload from REM fine-tuning)
     if (lora_adapters.count(name)) {
-        log_step("LoRA adapter '" + name + "' already loaded, skipping.");
-        return true;
+        auto& existing = lora_adapters[name];
+        if (existing.path == lora_path) {
+            log_step("LoRA adapter '" + name + "' already loaded with same path, skipping.");
+            return true;
+        }
+        // Free old adapter and replace
+        if (existing.adapter) {
+            llama_adapter_lora_free((llama_adapter_lora*)existing.adapter);
+            log_step("Replaced existing LoRA adapter '" + name + "'");
+        }
+        lora_adapters.erase(name);
     }
     if (!gray_matter) {
         std::cerr << "[BRAIN] Cannot load LoRA — base model not initialized." << std::endl;

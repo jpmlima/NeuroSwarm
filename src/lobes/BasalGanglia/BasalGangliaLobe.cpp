@@ -169,6 +169,60 @@ public:
                             }
                         }
 
+                        // Feedback loop: evaluate performance delta after evaluation window
+                        if (tracker.evaluation_cycle >= ApoptosisTracker::EVALUATION_WINDOW) {
+                            int post_total = tracker.post_injection_success + tracker.post_injection_failure;
+                            float post_rate = post_total > 0
+                                ? (float)tracker.post_injection_success / (float)post_total
+                                : 0.0f;
+                            float delta = post_rate - tracker.pre_injection_success_rate;
+
+                            if (delta < -0.05f) {
+                                // Specialist made things WORSE
+                                std::cout << "[BASAL_GANGLIA] FEEDBACK: " << specialist
+                                          << " DEGRADED domain '" << domain
+                                          << "' (pre=" << (int)(tracker.pre_injection_success_rate * 100)
+                                          << "% post=" << (int)(post_rate * 100) << "%)" << std::endl;
+
+                                json terminate = {
+                                    {"origin", "basal_ganglia"},
+                                    {"intent", "lobe_terminate"},
+                                    {"lobe_name", specialist},
+                                    {"domain", domain},
+                                    {"reason", "performance_degradation"}
+                                };
+                                routing::publish(pub, terminate);
+                                active_specialists.erase(domain);
+                                specialist_to_domain.erase(specialist);
+                                apoptosis_trackers.erase(domain);
+                                continue;  // skip normal apoptosis checks
+                            } else if (delta < 0.05f && tracker.evaluation_cycle >= ApoptosisTracker::EVALUATION_WINDOW * 2) {
+                                // No improvement after 2x window — futile
+                                std::cout << "[BASAL_GANGLIA] FEEDBACK: " << specialist
+                                          << " NO IMPROVEMENT for domain '" << domain
+                                          << "' after " << tracker.evaluation_cycle << " cycles" << std::endl;
+
+                                json terminate = {
+                                    {"origin", "basal_ganglia"},
+                                    {"intent", "lobe_terminate"},
+                                    {"lobe_name", specialist},
+                                    {"domain", domain},
+                                    {"reason", "no_improvement"}
+                                };
+                                routing::publish(pub, terminate);
+                                active_specialists.erase(domain);
+                                specialist_to_domain.erase(specialist);
+                                apoptosis_trackers.erase(domain);
+                                continue;
+                            } else if (delta >= 0.10f) {
+                                // Significant improvement — dopamine reward
+                                std::cout << "[BASAL_GANGLIA] FEEDBACK: " << specialist
+                                          << " IMPROVED domain '" << domain
+                                          << "' by +" << (int)(delta * 100) << "%" << std::endl;
+                                emit_dopamine(domain, "neurogenesis_success", delta);
+                            }
+                        }
+
                         // Trigger apoptosis: 6 idle reports (~30 min) or 3 healthy (~15 min of >70%)
                         if (tracker.consecutive_idle_reports >= 6 ||
                             tracker.consecutive_healthy_reports >= 3) {
@@ -190,15 +244,34 @@ public:
                             routing::publish(pub, terminate);
 
                             active_specialists.erase(domain);
+                            specialist_to_domain.erase(specialist);
                             apoptosis_trackers.erase(domain);
                         }
                     }
                 }
-                // Phase 6: Lobe injection confirmation
+                // Phase 6: Lobe injection confirmation — snapshot baseline for feedback loop
                 else if (origin == "cerebral_matrix" && intent == "lobe_injected") {
                     std::string name = j.value("lobe_name", "");
                     std::cout << "[BASAL_GANGLIA] NEUROGENESIS COMPLETE: " << name
                               << " is now running in the matrix." << std::endl;
+
+                    // Snapshot domain performance at injection time
+                    std::string domain;
+                    for (auto& [d, tag] : specialist_to_domain) {
+                        if (tag == name) { domain = d; break; }
+                    }
+                    if (!domain.empty() && self_model.count(domain)) {
+                        auto& tracker = apoptosis_trackers[domain];
+                        auto& d = self_model[domain];
+                        tracker.pre_injection_success_rate = d.actual_success_rate;
+                        tracker.pre_injection_total = d.success + d.failure;
+                        tracker.evaluation_cycle = 0;
+                        tracker.post_injection_success = 0;
+                        tracker.post_injection_failure = 0;
+                        std::cout << "[BASAL_GANGLIA] FEEDBACK BASELINE: domain='" << domain
+                                  << "' pre_rate=" << (int)(tracker.pre_injection_success_rate * 100)
+                                  << "% at " << tracker.pre_injection_total << " attempts" << std::endl;
+                    }
                 }
                 // Autopoiesis: domain resolve result from PrimordialLoop
                 else if (origin == "primordial_loop" && intent == "domain_resolve_result") {
@@ -570,6 +643,14 @@ private:
             }
         }
 
+        // Feedback loop: track post-injection performance for active specialists
+        if (active_specialists.count(domain) && apoptosis_trackers.count(domain)) {
+            auto& tracker = apoptosis_trackers[domain];
+            if (success) tracker.post_injection_success++;
+            else         tracker.post_injection_failure++;
+            tracker.evaluation_cycle++;
+        }
+
         // Phase 4: Update genome fitness for executed command
         update_genome_fitness(domain, cmd, success);
 
@@ -886,12 +967,22 @@ private:
     std::set<std::string> pending_resolve;  // domains awaiting autopoiesis resolution
     static constexpr const char* GENESIS_DIR = "./src/lobes/genesis/";
 
-    // Apoptosis tracking: domain → consecutive idle/healthy reports
+    // Apoptosis tracking: domain → consecutive idle/healthy reports + performance delta
     struct ApoptosisTracker {
         int consecutive_idle_reports = 0;    // specialist handling 0 commands
         int consecutive_healthy_reports = 0; // domain success rate > 70%
+        // Feedback loop: measure before/after specialist injection
+        float pre_injection_success_rate = 0.0f;
+        int   pre_injection_total = 0;
+        int   evaluation_cycle = 0;          // post-injection execution count
+        int   post_injection_success = 0;
+        int   post_injection_failure = 0;
+        static constexpr int EVALUATION_WINDOW = 15;
     };
     std::map<std::string, ApoptosisTracker> apoptosis_trackers;
+
+    // Map lobe_tag → domain for injection tracking
+    std::map<std::string, std::string> specialist_to_domain;
 
     // Load existing specialists from genesis directory on startup.
     // If the compiled binary exists, re-inject it into the Matrix.
@@ -926,6 +1017,7 @@ private:
             if (::stat(binary.c_str(), &st) == 0 && (st.st_mode & S_IXUSR)) {
                 // Binary exists — re-inject into Matrix
                 active_specialists.insert(domain);
+                specialist_to_domain[params.lobe_tag] = domain;
                 json inject = {
                     {"origin", "basal_ganglia"},
                     {"intent", "inject_lobe"},
@@ -1230,6 +1322,7 @@ int main() {
         f.close();
 
         active_specialists.insert(domain);
+        specialist_to_domain[params.lobe_tag] = domain;
 
         std::cout << "[BASAL_GANGLIA] NEUROGENESIS TRIGGERED: domain='" << domain
                   << "' → " << source_path << std::endl;

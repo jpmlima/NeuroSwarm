@@ -125,8 +125,30 @@ int main(int argc, char** argv) {
 
                 if (intent == "training_complete") {
                     std::string model_path = j.value("model_path", "");
-                    std::cout << "[BRAIN] REM fine-tuning complete. New model available: " << model_path
-                              << "\n[BRAIN] Restart SynapticController to load the fine-tuned model." << std::endl;
+                    std::string type = j.value("type", "model");
+                    std::string adapter_name = j.value("adapter_name", "finetuned");
+
+                    if (type == "lora" && !model_path.empty()) {
+                        // Hot-load LoRA adapter without restart
+                        bool ok = brain.load_lora(adapter_name, model_path);
+                        std::cout << "[BRAIN] REM LoRA hot-loaded: " << model_path
+                                  << " as '" << adapter_name << "' — "
+                                  << (ok ? "success" : "FAILED") << std::endl;
+                        if (ok) {
+                            // Broadcast availability
+                            json avail = {
+                                {"origin", "synaptic_controller"},
+                                {"intent", "lora_available"},
+                                {"adapter_name", adapter_name},
+                                {"model_path", model_path}
+                            };
+                            routing::publish(pub, avail);
+                        }
+                    } else if (!model_path.empty()) {
+                        bool ok = brain.add_model("finetuned", model_path);
+                        std::cout << "[BRAIN] REM fine-tuned model loaded: " << model_path
+                                  << " — " << (ok ? "success" : "FAILED") << std::endl;
+                    }
                 }
                 else if (j.value("origin", "") != "synaptic_controller" && intent == "embedding_request") {
                     std::string text = j.value("text", "");
