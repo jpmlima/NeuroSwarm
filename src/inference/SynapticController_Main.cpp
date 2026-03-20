@@ -72,10 +72,43 @@ int main(int argc, char** argv) {
         if (!critic_loaded)
             std::cout << "[BRAIN] No critic model found. 'critic' adapter will fall back to base model." << std::endl;
 
+        // Load latest fine-tuned model from models/finetuned/ as "finetuned" slot
+        const std::string finetuned_dir = models_dir + "finetuned/";
+        if (fs::exists(finetuned_dir) && fs::is_directory(finetuned_dir)) {
+            std::string latest_ft;
+            fs::file_time_type latest_time{};
+            for (const auto& entry : fs::directory_iterator(finetuned_dir)) {
+                std::string name = entry.path().filename().string();
+                if (name.find(".gguf") != std::string::npos) {
+                    auto mtime = fs::last_write_time(entry.path());
+                    if (latest_ft.empty() || mtime > latest_time) {
+                        latest_ft = entry.path().string();
+                        latest_time = mtime;
+                    }
+                }
+            }
+            if (!latest_ft.empty()) {
+                if (brain.add_model("finetuned", latest_ft))
+                    std::cout << "[BRAIN] Fine-tuned model loaded as 'finetuned' slot: " << latest_ft << std::endl;
+            }
+        }
+
+        // Load LoRA adapters from models/lora/
+        const std::string lora_dir = models_dir + "lora/";
+        if (fs::exists(lora_dir) && fs::is_directory(lora_dir)) {
+            for (const auto& entry : fs::directory_iterator(lora_dir)) {
+                std::string name = entry.path().filename().string();
+                if (name.find(".gguf") != std::string::npos) {
+                    std::string stem = entry.path().stem().string();
+                    brain.load_lora(stem, entry.path().string());
+                }
+            }
+        }
+
         zmq::context_t ctx(1);
         zmq::socket_t sub(ctx, zmq::socket_type::sub);
         sub.connect("tcp://" + thalamus_ip + ":5556");
-        routing::subscribe(sub, {"embedding_request", "inference_request"});
+        routing::subscribe(sub, {"embedding_request", "inference_request", "training_complete"});
 
         zmq::socket_t pub(ctx, zmq::socket_type::pub);
         pub.connect("tcp://" + thalamus_ip + ":5555");
@@ -90,7 +123,12 @@ int main(int argc, char** argv) {
                 std::string intent = j.value("intent", "");
                 std::string cid = j.value("cid", "unknown");
 
-                if (j.value("origin", "") != "synaptic_controller" && intent == "embedding_request") {
+                if (intent == "training_complete") {
+                    std::string model_path = j.value("model_path", "");
+                    std::cout << "[BRAIN] REM fine-tuning complete. New model available: " << model_path
+                              << "\n[BRAIN] Restart SynapticController to load the fine-tuned model." << std::endl;
+                }
+                else if (j.value("origin", "") != "synaptic_controller" && intent == "embedding_request") {
                     std::string text = j.value("text", "");
                     auto vec = brain.get_embeddings(text);
                     

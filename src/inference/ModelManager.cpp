@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <cmath>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -75,6 +77,11 @@ ModelManager::~ModelManager() {
     }
     slots.clear();
 
+    // LoRA adapters are freed automatically when the associated model is freed
+    for (auto& [name, la] : lora_adapters)
+        log_step("LoRA adapter released with base model: " + name);
+    lora_adapters.clear();
+
     if (embed_ctx)                      llama_free((llama_context*)embed_ctx);
     if (ctx_ptr)                        llama_free((llama_context*)ctx_ptr);
     if (own_embed_model && embed_model) llama_model_free((llama_model*)embed_model);
@@ -121,22 +128,75 @@ bool ModelManager::add_model(const std::string& name, const std::string& model_p
     return true;
 }
 
+bool ModelManager::load_lora(const std::string& name, const std::string& lora_path, float scale) {
+    if (lora_adapters.count(name)) {
+        log_step("LoRA adapter '" + name + "' already loaded, skipping.");
+        return true;
+    }
+    if (!gray_matter) {
+        std::cerr << "[BRAIN] Cannot load LoRA — base model not initialized." << std::endl;
+        return false;
+    }
+
+    log_step("Loading LoRA adapter '" + name + "': " + lora_path);
+    void* adapter = llama_adapter_lora_init((llama_model*)gray_matter, lora_path.c_str());
+    if (!adapter) {
+        std::cerr << "[BRAIN] Failed to load LoRA adapter '" << name << "': " << lora_path << std::endl;
+        return false;
+    }
+
+    LoRAAdapter la;
+    la.adapter = adapter;
+    la.scale   = scale;
+    la.path    = lora_path;
+    lora_adapters[name] = la;
+
+    std::cout << "[BRAIN] LoRA adapter '" << name << "' loaded: " << lora_path
+              << " (scale=" << scale << ")" << std::endl;
+    return true;
+}
+
 std::string ModelManager::fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str) {
     if (!gray_matter || !ctx_ptr) return "ERROR: Brain not initialized.";
 
-    // Route to specialist slot if available, otherwise fall back to base model
+    // GPU throttle: enforce minimum 150ms between inference calls to prevent
+    // Vulkan compute saturation during neurotic loops (Xid 32 page faults)
+    static auto last_fire = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_fire);
+    if (elapsed.count() < 150)
+        std::this_thread::sleep_for(std::chrono::milliseconds(150) - elapsed);
+    last_fire = std::chrono::steady_clock::now();
+
+    // Routing priority: 1) Named model slot  2) LoRA adapter on base  3) Base model as-is
     llama_model* model;
     llama_context* ctx;
+    bool using_lora = false;
+
     auto slot_it = slots.find(adapter_name);
     if (slot_it != slots.end() && slot_it->second.model && slot_it->second.ctx) {
+        // Priority 1: dedicated model slot
         model = (llama_model*)slot_it->second.model;
         ctx   = (llama_context*)slot_it->second.ctx;
         log_step("Using specialist slot '" + adapter_name + "' for inference");
     } else {
         model = (llama_model*)gray_matter;
         ctx   = (llama_context*)ctx_ptr;
-        if (adapter_name != "default" && adapter_name != "executive")
-            log_step("Slot '" + adapter_name + "' not found, falling back to base model");
+
+        auto lora_it = lora_adapters.find(adapter_name);
+        if (lora_it != lora_adapters.end() && lora_it->second.adapter) {
+            // Priority 2: LoRA adapter on base model context
+            auto* la = (llama_adapter_lora*)lora_it->second.adapter;
+            float sc = lora_it->second.scale;
+            llama_set_adapters_lora(ctx, &la, 1, &sc);
+            using_lora = true;
+            log_step("Using LoRA adapter '" + adapter_name + "' on base model");
+        } else {
+            // Priority 3: base model, clear any previously applied LoRA
+            llama_set_adapters_lora(ctx, nullptr, 0, nullptr);
+            if (adapter_name != "default" && adapter_name != "executive")
+                log_step("Slot '" + adapter_name + "' not found, falling back to base model");
+        }
     }
 
     // Stable context reset: clear sequence 0
@@ -194,6 +254,11 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     }
 
     llama_sampler_free(smpl);
+
+    // Clear LoRA after inference so it doesn't leak into the next call
+    if (using_lora)
+        llama_set_adapters_lora(ctx, nullptr, 0, nullptr);
+
     return response;
 }
 

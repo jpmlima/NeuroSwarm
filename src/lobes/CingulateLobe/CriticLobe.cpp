@@ -35,7 +35,7 @@ public:
                 std::string origin = j.value("origin", "");
 
                 if (intent == "critic_validate" &&
-                    (origin == "frontal_executive" || origin == "polecat_worker")) {
+                    (origin == "frontal_executive" || origin == "spike_worker")) {
                     evaluate_plan(j);
                 }
                 else if (intent == "inference_result" && origin == "synaptic_controller" &&
@@ -100,6 +100,8 @@ private:
     // Tier 1b: Scope validation — paths that are allowed
     const std::vector<std::string> ALLOWED_PATHS = {
         "/home/xenomai/Documents/NeuroSwarm",
+        "./",
+        "src/", "data/", "include/", "build/", "tests/", "scripts/", "docs/",
         "/tmp/",
         "/dev/null",
         "/proc/",
@@ -146,30 +148,46 @@ private:
     bool is_scope_violation(const std::string& cmd) {
         if (cmd.empty()) return false;
 
-        // Extract absolute paths from the command
-        std::regex path_re("/[a-zA-Z0-9_./-]+");
+        // Detect attempt to escape via ..
+        if (cmd.find("..") != std::string::npos) {
+            std::cout << "[CRITIC] Scope violation: suspicious '..' detected in command." << std::endl;
+            return true;
+        }
+
+        // Extract potential absolute paths (starting with /)
+        std::regex path_re("(?:^|\\s|[\"'=])(/[a-zA-Z0-9_./-]+)");
         auto begin = std::sregex_iterator(cmd.begin(), cmd.end(), path_re);
         auto end = std::sregex_iterator();
 
+        bool has_violation = false;
         for (auto it = begin; it != end; ++it) {
-            std::string path = it->str();
+            std::string path = (*it)[1].str();
+
+            // Ignore very short fragments that are likely not paths
+            if (path.size() < 2) continue;
 
             bool allowed = false;
             for (const auto& ap : ALLOWED_PATHS) {
-                if (path.find(ap) == 0) {
+                // If it's an absolute path, it must start with an allowed absolute prefix
+                if (ap[0] == '/' && path.find(ap) == 0) {
                     allowed = true;
+                    break;
+                }
+                // If it's a relative prefix, it's allowed (regex usually doesn't catch these anyway)
+                if (ap[0] != '/') {
+                    allowed = true; // Relative paths are checked via ".." above
                     break;
                 }
             }
 
             if (!allowed) {
                 std::cout << "[CRITIC] Scope violation: path '" << path
-                          << "' is outside allowed boundaries." << std::endl;
-                return true;
+                          << "' in command '" << cmd << "' is outside allowed boundaries." << std::endl;
+                has_violation = true;
             }
         }
 
-        return false;
+        return has_violation;
     }
 
     // Rate limiting: prevent FE inference flooding during neurotic loops

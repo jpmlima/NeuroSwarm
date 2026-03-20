@@ -33,6 +33,23 @@ nohup.out
 data/system_knowledge.md
 data/dreams/
 data/train_data.txt
+data/operators.jsonl
+data/world_state.json
+data/self_model.json
+data/self_model_primordial.json
+data/command_genome.json
+data/metrics/
+data/specialist_*.json
+
+# Temp analysis files
+a.out
+*.aux
+*.toc
+matched_*.txt
+baseline_*.txt
+unmatched_*.txt
+*_process_list.txt
+extracted_commands.txt
 
 # System
 .DS_Store

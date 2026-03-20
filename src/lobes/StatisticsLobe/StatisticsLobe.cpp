@@ -220,8 +220,8 @@ private:
             append_jsonl("intrinsic_goals.jsonl", entry);
         }
 
-        // Polecat worker events
-        if (origin == "polecat_worker" && (intent == "polecat_ready" || intent == "polecat_done")) {
+        // Spike worker events
+        if (origin == "spike_worker" && (intent == "spike_ready" || intent == "spike_done")) {
             json entry = {
                 {"timestamp", now_iso()},
                 {"event", intent},
@@ -231,7 +231,7 @@ private:
                 {"task_id", j.value("task_id", "")},
                 {"domain", j.value("domain", "")}
             };
-            append_jsonl("polecat_events.jsonl", entry);
+            append_jsonl("spike_events.jsonl", entry);
         }
 
         // Dopamine signals from BasalGanglia
