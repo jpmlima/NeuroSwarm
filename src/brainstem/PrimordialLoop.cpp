@@ -24,6 +24,7 @@
 #include <common/routing.hpp>
 #include <SurpriseEngine.hpp>
 #include <OperatorRegistry.hpp>
+#include <VariationEngine.hpp>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -69,6 +70,10 @@ public:
         std::cout << "[PRIMORDIAL] Phase 4 — Discovering tools." << std::endl;
         phase_tool_discovery();
 
+        // Phase 5: Active Exploration — use variation to discover new operators
+        std::cout << "[PRIMORDIAL] Phase 5 — Active exploration via variation." << std::endl;
+        phase_active_exploration();
+
         // Report
         report_self_model();
 
@@ -89,6 +94,7 @@ private:
     zmq::socket_t sub_;
     SurpriseEngine surprise_;
     OperatorRegistry registry_;
+    VariationEngine variation_;
 
     // Self-model (Axiom 5)
     struct SelfModel {
@@ -419,6 +425,188 @@ private:
         std::cout << "[PRIMORDIAL]   Languages available: ";
         for (const auto& l : self_.languages) std::cout << l << " ";
         std::cout << std::endl;
+    }
+
+    // ─── Phase 5: Active Exploration ───
+
+    void phase_active_exploration() {
+        // Sync the variation engine with all known fragments
+        variation_.sync_fragments(registry_);
+
+        size_t ops_before = registry_.size();
+        int candidates_tested = 0;
+        int candidates_succeeded = 0;
+
+        // Get stable operators to use as parents
+        auto stable = registry_.get_stable();
+
+        // Strategy 1: Mutate each known operator
+        std::cout << "[PRIMORDIAL]   Mutating known operators..." << std::endl;
+        for (auto* parent : stable) {
+            auto mutations = variation_.mutate(*parent, 3);
+            for (const auto& candidate : mutations) {
+                if (test_candidate(candidate)) candidates_succeeded++;
+                candidates_tested++;
+            }
+        }
+
+        // Strategy 2: Recombine pairs of operators
+        if (stable.size() >= 2) {
+            std::cout << "[PRIMORDIAL]   Recombining operator pairs..." << std::endl;
+            for (size_t i = 0; i < stable.size() - 1 && i < 5; i++) {
+                auto crosses = variation_.recombine(*stable[i], *stable[i + 1], 2);
+                for (const auto& candidate : crosses) {
+                    if (test_candidate(candidate)) candidates_succeeded++;
+                    candidates_tested++;
+                }
+            }
+        }
+
+        // Strategy 3: Explore unknown binaries from PATH
+        std::cout << "[PRIMORDIAL]   Probing unknown binaries..." << std::endl;
+        probe_unknown_binaries(20);
+
+        // Strategy 4: Fragment assembly (pure exploration)
+        std::cout << "[PRIMORDIAL]   Assembling from fragments..." << std::endl;
+        auto assembled = variation_.assemble_from_fragments(10);
+        for (const auto& candidate : assembled) {
+            if (test_candidate(candidate)) candidates_succeeded++;
+            candidates_tested++;
+        }
+
+        std::cout << "[PRIMORDIAL]   Exploration complete: "
+                  << candidates_tested << " candidates tested, "
+                  << candidates_succeeded << " succeeded, "
+                  << (registry_.size() - ops_before) << " new operators learned."
+                  << std::endl;
+    }
+
+    bool test_candidate(const VariationEngine::Candidate& candidate) {
+        // Safety: skip obviously dangerous commands
+        if (is_dangerous(candidate.command)) return false;
+
+        // Execute in sandbox context (short timeout via timeout command)
+        std::string safe_cmd = "timeout 5 bash -c " + shell_escape(candidate.command);
+        auto r = exec(safe_cmd);
+        bool success = (r.exit_code == 0);
+
+        std::string context = "variation_" + candidate.origin + "_" + candidate.command.substr(0, 30);
+        size_t output_hash = std::hash<std::string>{}(r.output);
+        auto s = surprise_.compute(context, success, output_hash);
+
+        if (success && s.is_novel && !r.output.empty()) {
+            // New successful command that produces novel output — learn it!
+            std::string op_name = infer_operator_name(candidate.command);
+
+            // Don't duplicate existing operators
+            if (!registry_.find(op_name)) {
+                Operator op;
+                op.name = op_name;
+                op.command_template = candidate.command;
+                op.language = "bash";
+                op.learned_from = candidate.origin;
+                op.record_use(true, r.duration_ms);
+                registry_.add(op);
+
+                std::cout << "[PRIMORDIAL]   EVOLVED: \"" << candidate.command << "\""
+                          << " via " << candidate.origin;
+                if (!candidate.parent_a.empty())
+                    std::cout << " (from " << candidate.parent_a;
+                if (!candidate.parent_b.empty())
+                    std::cout << " x " << candidate.parent_b;
+                if (!candidate.parent_a.empty())
+                    std::cout << ")";
+                std::cout << std::endl;
+
+                // Update fragment pool
+                variation_.sync_fragments(registry_);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void probe_unknown_binaries(int max_probes) {
+        // Pick random binaries from PATH that we haven't tried yet
+        int probed = 0;
+        auto& bins = self_.available_binaries;
+
+        // Prioritise shorter names (core utils tend to be short: ls, cp, mv, df...)
+        std::vector<std::string> sorted_bins = bins;
+        std::sort(sorted_bins.begin(), sorted_bins.end(),
+            [](const std::string& a, const std::string& b) { return a.size() < b.size(); });
+
+        for (const auto& bin : sorted_bins) {
+            if (probed >= max_probes) break;
+            // Skip if we already have an operator for this
+            if (registry_.find(bin)) continue;
+            // Skip multi-word or complex names
+            if (bin.find('-') != std::string::npos && bin.size() > 10) continue;
+            if (bin.find('.') != std::string::npos) continue;
+
+            // Try running with --help first (safe, informative)
+            std::string cmd = bin + " --help";
+            auto r = exec("timeout 3 " + cmd + " 2>&1 | head -5");
+
+            if (r.exit_code == 0 || (r.exit_code != 0 && !r.output.empty() && r.output.size() > 10)) {
+                // The binary exists and responds — learn it as a potential operator
+                std::string context = "binary_probe_" + bin;
+                size_t output_hash = std::hash<std::string>{}(r.output);
+                surprise_.compute(context, true, output_hash);
+
+                // Try without arguments too
+                auto r2 = exec("timeout 3 " + bin + " 2>&1 | head -3");
+                if (r2.exit_code == 0 && !r2.output.empty()) {
+                    Operator op;
+                    op.name = bin;
+                    op.command_template = bin;
+                    op.language = "bash";
+                    op.learned_from = "binary_probe";
+                    op.record_use(true, r2.duration_ms);
+                    registry_.add(op);
+                    probed++;
+                }
+            }
+        }
+
+        std::cout << "[PRIMORDIAL]   Probed " << probed << " new binaries." << std::endl;
+    }
+
+    static bool is_dangerous(const std::string& cmd) {
+        static const std::vector<std::string> dangerous = {
+            "rm ", "rm\t", "rmdir", "mkfs", "dd ", "shred",
+            "chmod 777", "chmod -R", "> /dev/", "fork", ":()",
+            "shutdown", "reboot", "halt", "init ",
+            "mv /", "cp /dev/", "wget ", "curl ",
+            "kill ", "killall", "pkill",
+        };
+        for (const auto& d : dangerous) {
+            if (cmd.find(d) != std::string::npos) return true;
+        }
+        return false;
+    }
+
+    static std::string infer_operator_name(const std::string& cmd) {
+        // Extract the first word as the operator base name
+        std::string name;
+        for (char c : cmd) {
+            if (c == ' ' || c == '\t' || c == '|' || c == ';') break;
+            if (c == '/') { name.clear(); continue; } // strip path prefix
+            name += c;
+        }
+        // Append a suffix from arguments to make it unique
+        size_t hash = std::hash<std::string>{}(cmd) % 10000;
+        return name + "_" + std::to_string(hash);
+    }
+
+    static std::string shell_escape(const std::string& cmd) {
+        std::string escaped = "'";
+        for (char c : cmd) {
+            if (c == '\'') escaped += "'\\''";
+            else escaped += c;
+        }
+        escaped += "'";
+        return escaped;
     }
 
     // ─── Self Model Report ───
