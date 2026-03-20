@@ -1156,6 +1156,8 @@ private:
                     handle_goal_request(j);
                 } else if (intent == "domain_resolve_request") {
                     handle_domain_resolve(j);
+                } else if (intent == "execution_result") {
+                    learn_from_execution(j);
                 }
             }
 
@@ -1170,6 +1172,87 @@ private:
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+    }
+
+    // ─── Runtime Learning: learn from every successful execution ───
+
+    void learn_from_execution(const json& j) {
+        // Only learn from motor_cortex successes
+        if (j.value("origin", "") != "motor_cortex") return;
+        if (j.value("status", "") != "success") return;
+        // Skip dream mode — those are sandbox tests
+        if (j.value("mode", "") == "dream") return;
+
+        std::string cmd = j.value("command", "");
+        if (cmd.empty() || cmd.size() > 200) return;
+
+        // Skip if dangerous
+        if (is_dangerous(cmd)) return;
+
+        // Infer operator name from command
+        std::string op_name = infer_operator_name(cmd);
+
+        // Skip if we already know this exact operator
+        if (registry_.find(op_name)) {
+            // Update usage stats on existing operator
+            auto* existing = registry_.find(op_name);
+            existing->record_use(true, 0);
+            return;
+        }
+
+        // Learn as new operator
+        Operator op;
+        op.name = op_name;
+        op.command_template = cmd;
+        op.language = "bash";
+        op.learned_from = "runtime";
+
+        // Infer postcondition from command pattern
+        std::string post = infer_postcondition(cmd);
+        if (!post.empty()) {
+            op.postconditions.push_back(post);
+            world_state_.insert(post);
+        }
+
+        op.record_use(true, 0);
+        registry_.add(op);
+
+        // Compute surprise
+        size_t output_hash = std::hash<std::string>{}(j.value("proprioception", ""));
+        auto s = surprise_.compute("runtime_" + op_name, true, output_hash);
+
+        if (s.is_novel) {
+            std::cout << "[PRIMORDIAL] RUNTIME LEARNED: \"" << cmd.substr(0, 60) << "\""
+                      << (post.empty() ? "" : " → " + post) << std::endl;
+            variation_.sync_fragments(registry_);
+        }
+    }
+
+    // Infer a postcondition from a command string using pattern rules
+    static std::string infer_postcondition(const std::string& cmd) {
+        static const std::vector<std::pair<std::string, std::string>> rules = {
+            {"cat ",    "can_read_file"},   {"head ",   "can_read_file"},
+            {"tail ",   "can_read_file"},   {"wc ",     "can_read_file"},
+            {"stat ",   "can_read_file"},   {"file ",   "can_read_file"},
+            {"echo ",   "can_write_file"},  {"tee ",    "can_write_file"},
+            {"touch ",  "can_write_file"},  {"cp ",     "can_write_file"},
+            {"mv ",     "can_write_file"},  {"mkdir ",  "can_write_file"},
+            {"find ",   "can_search_files"},{"grep ",   "can_search_files"},
+            {"rg ",     "can_search_files"},
+            {"ps ",     "can_see_processes"},{"pgrep",  "can_see_processes"},
+            {"ss ",     "network_info_available"},{"netstat","network_info_available"},
+            {"curl ",   "network_info_available"},
+            {"uptime",  "know_system_state"},{"free ",  "know_system_state"},
+            {"df ",     "know_disk_space"},  {"uname",  "know_system_state"},
+            {"git ",    "know_git_state"},
+            {"g++ ",    "can_create_tool"},  {"gcc ",   "can_create_tool"},
+            {"cmake ",  "can_create_tool"},  {"make ",  "can_create_tool"},
+            {"python3 ","can_run_script"},   {"bash ",  "can_run_script"},
+        };
+        for (const auto& [pattern, post] : rules) {
+            if (cmd.find(pattern) != std::string::npos) return post;
+        }
+        return "";
     }
 
     void handle_operator_request(const json& j) {
