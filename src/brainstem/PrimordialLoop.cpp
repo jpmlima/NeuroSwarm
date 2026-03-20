@@ -44,7 +44,7 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
@@ -1290,6 +1290,84 @@ private:
         routing::publish(pub_, resp);
     }
 
+    // ─── Dream Sandbox: test candidates via MotorLobe isolation ───
+
+    // Send a command to MotorLobe in dream mode and wait for result.
+    // Used during runtime (domain_resolve) for proper sandboxing.
+    // Bootstrap still uses inline exec() for speed.
+    struct DreamResult {
+        bool success;
+        std::string output;
+        int exit_code;
+    };
+
+    DreamResult dream_test(const std::string& cmd, int timeout_ms = 5000) {
+        std::string cid = "dream_" + std::to_string(
+            std::chrono::system_clock::now().time_since_epoch().count());
+
+        json req = {
+            {"cid", cid},
+            {"origin", "primordial_loop"},
+            {"intent", "execution_request"},
+            {"command", cmd},
+            {"mode", "dream"}
+        };
+        routing::publish(pub_, req);
+
+        // Wait for execution_result with matching CID
+        auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(timeout_ms);
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto resp = routing::receive(sub_, zmq::recv_flags::dontwait);
+            if (!resp.is_null()) {
+                if (resp.value("intent", "") == "execution_result" &&
+                    resp.value("cid", "") == cid) {
+                    return {
+                        resp.value("status", "") == "success",
+                        resp.value("proprioception", ""),
+                        resp.value("exit_code", -1)
+                    };
+                }
+                // Re-queue other messages? No — they'll be handled next loop.
+                // For domain_resolve we accept some message loss.
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        return {false, "timeout", -1};
+    }
+
+    // Test a candidate via dream sandbox (runtime) or inline (bootstrap)
+    bool test_candidate_sandboxed(const VariationEngine::Candidate& candidate) {
+        if (is_dangerous(candidate.command)) return false;
+
+        auto dr = dream_test(candidate.command);
+
+        std::string context = "dream_" + candidate.origin + "_" + candidate.command.substr(0, 30);
+        size_t output_hash = std::hash<std::string>{}(dr.output);
+        auto s = surprise_.compute(context, dr.success, output_hash);
+
+        if (dr.success && s.is_novel && !dr.output.empty()) {
+            std::string op_name = infer_operator_name(candidate.command);
+            if (!registry_.find(op_name)) {
+                Operator op;
+                op.name = op_name;
+                op.command_template = candidate.command;
+                op.language = "bash";
+                op.learned_from = "dream_" + candidate.origin;
+                op.record_use(true, 0);
+                registry_.add(op);
+                variation_.sync_fragments(registry_);
+
+                std::cout << "[PRIMORDIAL]   DREAM EVOLVED: \"" << candidate.command << "\""
+                          << " via " << candidate.origin << std::endl;
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ─── Domain Resolution: Planner + Variation + LLM for chronic failures ───
 
     void handle_domain_resolve(const json& j) {
@@ -1316,7 +1394,7 @@ private:
         auto candidates = variation_.targeted_variation(target_postcondition, registry_, 15);
         for (const auto& c : candidates) {
             candidates_tested++;
-            if (test_candidate(c)) {
+            if (test_candidate_sandboxed(c)) {
                 candidates_succeeded++;
                 new_operators++;
             }
@@ -1338,7 +1416,7 @@ private:
             auto mutations = variation_.mutate(temp_op, 5);
             for (const auto& m : mutations) {
                 candidates_tested++;
-                if (test_candidate(m)) {
+                if (test_candidate_sandboxed(m)) {
                     candidates_succeeded++;
                     new_operators++;
                 }
