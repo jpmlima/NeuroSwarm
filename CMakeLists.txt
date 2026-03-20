@@ -76,9 +76,9 @@ target_link_libraries(statistics_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(basal_ganglia src/lobes/BasalGanglia/BasalGangliaLobe.cpp)
 target_link_libraries(basal_ganglia PRIVATE zmq nlohmann_json::nlohmann_json)
 
-# 5. Polecat Workers (Ephemeral)
-add_executable(polecat_worker src/workers/PolecatWorker.cpp)
-target_link_libraries(polecat_worker PRIVATE zmq nlohmann_json::nlohmann_json)
+# 5. Spike Workers (Ephemeral)
+add_executable(spike_worker src/workers/SpikeWorker.cpp)
+target_link_libraries(spike_worker PRIVATE zmq nlohmann_json::nlohmann_json)
 
 add_executable(CerebralMatrix src/brainstem/CerebralMatrix.cpp)
 target_link_libraries(CerebralMatrix PRIVATE pthread dl zmq nlohmann_json::nlohmann_json)
@@ -110,3 +110,6 @@ target_link_libraries(neuro_surgery_test PRIVATE zmq nlohmann_json::nlohmann_jso
 
 add_executable(sensory_test tests/sensory_test.cpp)
 target_link_libraries(sensory_test PRIVATE zmq nlohmann_json::nlohmann_json)
+
+add_executable(rem_finetune_test tests/rem_finetune_test.cpp)
+target_link_libraries(rem_finetune_test PRIVATE nlohmann_json::nlohmann_json)

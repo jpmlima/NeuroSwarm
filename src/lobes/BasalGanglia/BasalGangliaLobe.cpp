@@ -11,6 +11,8 @@
 #include <thread>
 #include <ctime>
 #include <algorithm>
+#include <set>
+#include <sstream>
 #include <sys/stat.h>
 #include <cstdlib>
 
@@ -47,15 +49,19 @@ public:
             "execution_result", "intrinsic_goal_request",
             "homeostatic_pulse", "high_stress_alert",
             "time_pulse", "intrinsic_goal_result",
-            "lobe_crash", "lobe_death", "metabolic_alert"
+            "lobe_crash", "lobe_death", "metabolic_alert",
+            "genesis_result", "specialist_report", "lobe_injected",
+            "lobe_terminated"
         });
 
         mkdir("./data", 0755);
         load_self_model();
         init_domain_commands();
+        load_active_specialists();
 
         std::cout << "[BASAL_GANGLIA] Intrinsic motivation engine online. "
-                  << domains.size() << " capability domains tracked." << std::endl;
+                  << domains.size() << " capability domains tracked."
+                  << " Active specialists: " << active_specialists.size() << std::endl;
     }
 
     void start() {
@@ -73,6 +79,10 @@ public:
 
                 if (origin == "motor_cortex" && intent == "execution_result") {
                     handle_execution_result(j);
+                    // Phase 6: check if chronic failure should trigger neurogenesis
+                    std::string cmd = j.value("command", "");
+                    std::string domain = classify_command(cmd);
+                    if (!domain.empty()) check_neurogenesis(domain);
                 }
                 else if (intent == "intrinsic_goal_request") {
                     handle_goal_request(j);
@@ -113,6 +123,89 @@ public:
                         "Stamina critically low (" + std::to_string((int)stamina) + "%) — request sleep",
                         "homeostasis"});
                     std::cout << "[BASAL_GANGLIA] HOMEOSTASIS DRIVE: metabolic_alert stamina=" << stamina << "%" << std::endl;
+                }
+                // Phase 6: Neurogenesis — genesis compilation result
+                else if (origin == "motor_cortex" && intent == "genesis_result") {
+                    std::string status = j.value("status", "");
+                    std::string name = j.value("name", "");
+                    if (status == "failure" && !name.empty()) {
+                        // Remove from active set so retry is possible
+                        active_specialists.erase(name);
+                        std::cout << "[BASAL_GANGLIA] NEUROGENESIS FAILED for " << name
+                                  << " — removed from active set for retry" << std::endl;
+                    } else if (status == "success") {
+                        std::cout << "[BASAL_GANGLIA] NEUROGENESIS COMPILED: " << name << std::endl;
+                    }
+                }
+                // Phase 6: Specialist lobe periodic report + apoptosis check
+                else if (intent == "specialist_report") {
+                    std::string specialist = j.value("origin", "");
+                    std::string domain = j.value("domain", "");
+                    float rate = j.value("success_rate", 0.0f);
+                    int handled = j.value("handled", 0);
+                    std::cout << "[BASAL_GANGLIA] SPECIALIST REPORT: " << specialist
+                              << " domain=" << domain << " rate=" << (int)(rate * 100)
+                              << "% handled=" << handled << std::endl;
+
+                    // Apoptosis tracking
+                    if (!specialist.empty() && active_specialists.count(domain)) {
+                        auto& tracker = apoptosis_trackers[domain];
+
+                        // Track idle specialists (0 handled for consecutive reports)
+                        if (handled == 0) {
+                            tracker.consecutive_idle_reports++;
+                        } else {
+                            tracker.consecutive_idle_reports = 0;
+                        }
+
+                        // Track domain recovery (success > 70% in self-model)
+                        if (self_model.count(domain)) {
+                            auto& d = self_model[domain];
+                            int total = d.success + d.failure;
+                            if (total >= 10 && d.actual_success_rate > 0.70f) {
+                                tracker.consecutive_healthy_reports++;
+                            } else {
+                                tracker.consecutive_healthy_reports = 0;
+                            }
+                        }
+
+                        // Trigger apoptosis: 6 idle reports (~30 min) or 3 healthy (~15 min of >70%)
+                        if (tracker.consecutive_idle_reports >= 6 ||
+                            tracker.consecutive_healthy_reports >= 3) {
+
+                            std::string reason = tracker.consecutive_idle_reports >= 6
+                                ? "idle" : "domain_recovered";
+
+                            std::cout << "[BASAL_GANGLIA] APOPTOSIS: Terminating " << specialist
+                                      << " for domain " << domain
+                                      << " reason=" << reason << std::endl;
+
+                            json terminate = {
+                                {"origin", "basal_ganglia"},
+                                {"intent", "lobe_terminate"},
+                                {"lobe_name", specialist},
+                                {"domain", domain},
+                                {"reason", reason}
+                            };
+                            routing::publish(pub, terminate);
+
+                            active_specialists.erase(domain);
+                            apoptosis_trackers.erase(domain);
+                        }
+                    }
+                }
+                // Phase 6: Lobe injection confirmation
+                else if (origin == "cerebral_matrix" && intent == "lobe_injected") {
+                    std::string name = j.value("lobe_name", "");
+                    std::cout << "[BASAL_GANGLIA] NEUROGENESIS COMPLETE: " << name
+                              << " is now running in the matrix." << std::endl;
+                }
+                // Phase 6: Lobe termination confirmation — specialist removed
+                else if (origin == "cerebral_matrix" && intent == "lobe_terminated") {
+                    std::string name = j.value("lobe_name", "");
+                    std::string reason = j.value("reason", "");
+                    std::cout << "[BASAL_GANGLIA] APOPTOSIS COMPLETE: " << name
+                              << " removed (" << reason << ")" << std::endl;
                 }
             } catch (...) {}
         }
@@ -187,6 +280,8 @@ private:
         // Cooldown: consecutive failures and cooldown expiry
         int consecutive_failures = 0;
         long cooldown_until = 0;
+        // Phase 6: stale selection counter — how many times selected without new attempts
+        int stale_selections = 0;
     };
 
     std::vector<std::string> domains = {
@@ -302,9 +397,9 @@ private:
         // Order matters: more specific domains first, generic I/O (file_read/write) last
         classification_rules = {
             {"self_inspection",     {"self_model", "neuroswarm", "du -s"}},
-            {"memory_analysis",     {"engram", "memory_index", "system_knowledge"}},
+            {"memory_analysis",     {"engram", "memory_index", "system_knowledge", "data/engrams"}},
             {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}},
-            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model"}},
+            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model", "sort ", "uniq ", "awk ", "cut ", "| wc", "| sort", "| head", "| tail", "xargs", "column "}},
             {"git_operations",      {"git "}},
             {"compilation",         {"cmake", "make ", "gcc", "g++"}},
             {"network_diagnostics", {"ss ", "netstat", "nc ", "curl ", "wget ", "ping ", "nmap ", "ip addr", "ifconfig"}},
@@ -358,11 +453,15 @@ private:
         // Novelty: exp(-attempts / 10) — never-attempted = 1.0
         float novelty = std::exp(-(float)total / 10.0f);
 
+        // Phase 6: Stale penalty — domain selected many times but never executed
+        float stale_penalty = std::min(1.0f, d.stale_selections * 0.15f);
+
         float fitness = 0.20f * coverage
                       + 0.15f * trend
                       + 0.30f * pred_error
                       + 0.25f * novelty
-                      - 0.10f * system_stress;
+                      - 0.10f * system_stress
+                      - stale_penalty;
 
         return fitness;
     }
@@ -402,6 +501,7 @@ private:
         }
 
         d.last_attempt_ts = std::time(nullptr);
+        d.stale_selections = 0;  // Phase 6: domain is actually executing
 
         // Update actual success rate
         int total = d.success + d.failure;
@@ -572,6 +672,9 @@ private:
 
         auto& d = self_model[best_domain];
         int total = d.success + d.failure;
+
+        // Phase 6: Track stale selections — domain picked but never executed
+        d.stale_selections++;
 
         // Build context string
         std::string drive_label;
@@ -750,6 +853,400 @@ private:
         }
 
         save_genome();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Phase 6: Autonomous Neurogenesis — self-generating specialist lobes
+    // ──────────────────────────────────────────────────────────────────────
+    std::set<std::string> active_specialists;
+    static constexpr const char* GENESIS_DIR = "./src/lobes/genesis/";
+
+    // Apoptosis tracking: domain → consecutive idle/healthy reports
+    struct ApoptosisTracker {
+        int consecutive_idle_reports = 0;    // specialist handling 0 commands
+        int consecutive_healthy_reports = 0; // domain success rate > 70%
+    };
+    std::map<std::string, ApoptosisTracker> apoptosis_trackers;
+
+    // Load existing specialists from genesis directory on startup.
+    // If the compiled binary exists, re-inject it into the Matrix.
+    void load_active_specialists() {
+        std::string cmd = "ls " + std::string(GENESIS_DIR) + "*_specialist.cpp 2>/dev/null";
+        std::array<char, 256> buf;
+        std::string result;
+        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+        if (pipe) {
+            while (fgets(buf.data(), buf.size(), pipe.get())) result += buf.data();
+        }
+
+        // Brief delay to let pub socket connect before publishing
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+
+        std::istringstream iss(result);
+        std::string line;
+        while (std::getline(iss, line)) {
+            auto slash = line.rfind('/');
+            if (slash == std::string::npos) continue;
+            std::string filename = line.substr(slash + 1);
+            auto suffix = filename.find("_specialist.cpp");
+            if (suffix == std::string::npos) continue;
+            std::string domain = filename.substr(0, suffix);
+
+            // Build the expected lobe tag and binary path
+            auto params = build_specialist_params(domain);
+            std::string binary = "build/" + params.lobe_tag;
+
+            // Check if compiled binary exists
+            struct stat st;
+            if (::stat(binary.c_str(), &st) == 0 && (st.st_mode & S_IXUSR)) {
+                // Binary exists — re-inject into Matrix
+                active_specialists.insert(domain);
+                json inject = {
+                    {"origin", "basal_ganglia"},
+                    {"intent", "inject_lobe"},
+                    {"name", params.lobe_tag},
+                    {"path", binary}
+                };
+                routing::publish(pub, inject);
+                std::cout << "[BASAL_GANGLIA] Re-injecting specialist: " << params.lobe_tag
+                          << " for domain " << domain << std::endl;
+            } else {
+                // Source exists but binary missing — don't mark as active, allow neurogenesis
+                std::cout << "[BASAL_GANGLIA] Specialist source exists for " << domain
+                          << " but binary missing. Will regenerate if needed." << std::endl;
+            }
+        }
+    }
+
+    // Pre-validation commands per domain — specialist lobes run these before acting
+    std::map<std::string, std::vector<std::string>> domain_pre_validations = {
+        {"file_write",       {"test -d \"$(dirname '%CMD_TARGET%')\"", "test -w \"$(dirname '%CMD_TARGET%')\" || echo 'DIR_NOT_WRITABLE'"}},
+        {"file_read",        {"test -f '%CMD_TARGET%' || echo 'FILE_NOT_FOUND'", "test -r '%CMD_TARGET%' || echo 'FILE_NOT_READABLE'"}},
+        {"script_creation",  {"which bash || echo 'NO_BASH'", "test -w /tmp || echo 'TMP_NOT_WRITABLE'"}},
+        {"compilation",      {"test -d build || echo 'NO_BUILD_DIR'", "which g++ || echo 'NO_COMPILER'"}},
+        {"file_search",      {"test -d src/ || echo 'NO_SRC_DIR'"}},
+        {"git_operations",   {"test -d .git || echo 'NOT_A_GIT_REPO'"}},
+        {"network_diagnostics", {"which ss || which netstat || echo 'NO_NET_TOOLS'"}},
+        {"process_inspection",  {"test -d /proc || echo 'NO_PROC_FS'"}},
+        {"source_modification", {"test -d src/ || echo 'NO_SRC_DIR'", "test -w src/ || echo 'SRC_NOT_WRITABLE'"}},
+        {"data_analysis",    {"test -d data/ || echo 'NO_DATA_DIR'"}},
+        {"log_analysis",     {"test -f progress.txt || test -d data/metrics/ || echo 'NO_LOGS'"}},
+        {"system_monitoring", {"which uptime || echo 'NO_UPTIME'"}},
+        {"self_inspection",  {"test -f data/self_model.json || echo 'NO_SELF_MODEL'"}},
+        {"memory_analysis",  {"test -d data/engrams/ || echo 'NO_ENGRAMS_DIR'"}}
+    };
+
+    // C++ template for specialist lobes — parameterized with %PLACEHOLDERS%
+    static constexpr const char* SPECIALIST_TEMPLATE = R"CPP(
+#include <zmq.hpp>
+#include <nlohmann/json.hpp>
+#include <common/routing.hpp>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <thread>
+#include <ctime>
+#include <algorithm>
+#include <sys/stat.h>
+
+using json = nlohmann::json;
+
+// Auto-generated specialist lobe for domain: %DOMAIN%
+// Created by BasalGanglia neurogenesis engine.
+
+class %LOBE_NAME% {
+public:
+    %LOBE_NAME%(const std::string& pub_addr = "tcp://localhost:5555",
+                const std::string& sub_addr = "tcp://localhost:5556")
+        : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
+
+        pub.connect(pub_addr);
+        sub.connect(sub_addr);
+        routing::subscribe(sub, {"execution_request", "execution_result"});
+
+        mkdir("./data", 0755);
+        load_cache();
+
+        std::cout << "[%LOBE_TAG%] Specialist lobe online for domain: %DOMAIN%" << std::endl;
+    }
+
+    void start() {
+        auto last_report = std::chrono::steady_clock::now();
+
+        while (true) {
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            } else {
+                try {
+                    std::string intent = j.value("intent", "");
+
+                    if (intent == "execution_request") {
+                        handle_request(j);
+                    } else if (intent == "execution_result") {
+                        handle_result(j);
+                    }
+                } catch (...) {}
+            }
+
+            // Publish report every 5 minutes
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(now - last_report).count();
+            if (elapsed >= 5) {
+                publish_report();
+                last_report = now;
+            }
+        }
+    }
+
+private:
+    zmq::context_t ctx;
+    zmq::socket_t pub;
+    zmq::socket_t sub;
+
+    int handled = 0;
+    int domain_success = 0;
+    int domain_failure = 0;
+    std::vector<std::string> cached_commands;
+    static constexpr const char* CACHE_PATH = "./data/specialist_%DOMAIN%.json";
+
+    // Domain keywords for filtering
+    const std::vector<std::string> domain_keywords = {%DOMAIN_KEYWORDS%};
+
+    bool is_my_domain(const std::string& cmd) {
+        std::string lower = cmd;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        for (auto& kw : domain_keywords) {
+            if (lower.find(kw) != std::string::npos) return true;
+        }
+        return false;
+    }
+
+    void handle_request(const json& j) {
+        std::string cmd = j.value("command", "");
+        if (!is_my_domain(cmd)) return;
+
+        handled++;
+
+        // Publish pre-validation advice
+        json advice = {
+            {"origin", "%LOBE_TAG%"},
+            {"intent", "specialist_advice"},
+            {"domain", "%DOMAIN%"},
+            {"command", cmd},
+            {"pre_validations", json::array({%PRE_VALIDATIONS%})},
+            {"cached_alternatives", get_cached_alternatives()}
+        };
+        routing::publish(pub, advice);
+    }
+
+    void handle_result(const json& j) {
+        std::string cmd = j.value("command", "");
+        if (!is_my_domain(cmd)) return;
+
+        std::string status = j.value("status", "");
+        if (status == "success") {
+            domain_success++;
+            // Cache novel successful commands
+            if (cmd.size() <= 200 && std::find(cached_commands.begin(), cached_commands.end(), cmd) == cached_commands.end()) {
+                cached_commands.push_back(cmd);
+                if (cached_commands.size() > 50) cached_commands.erase(cached_commands.begin());
+                save_cache();
+            }
+        } else {
+            domain_failure++;
+        }
+    }
+
+    json get_cached_alternatives() {
+        json alts = json::array();
+        // Return up to 3 most recent cached successes
+        int start = std::max(0, (int)cached_commands.size() - 3);
+        for (int i = start; i < (int)cached_commands.size(); i++) {
+            alts.push_back(cached_commands[i]);
+        }
+        return alts;
+    }
+
+    void publish_report() {
+        int total = domain_success + domain_failure;
+        float rate = total > 0 ? (float)domain_success / (float)total : 0.0f;
+
+        json report = {
+            {"origin", "%LOBE_TAG%"},
+            {"intent", "specialist_report"},
+            {"domain", "%DOMAIN%"},
+            {"success_rate", rate},
+            {"handled", handled},
+            {"cached_count", (int)cached_commands.size()},
+            {"total_tracked", total}
+        };
+        routing::publish(pub, report);
+
+        std::cout << "[%LOBE_TAG%] Report: rate=" << (int)(rate * 100)
+                  << "% handled=" << handled << " cached=" << cached_commands.size() << std::endl;
+    }
+
+    void load_cache() {
+        std::ifstream f(CACHE_PATH);
+        if (!f.is_open()) return;
+        try {
+            json doc;
+            f >> doc;
+            if (doc.contains("commands") && doc["commands"].is_array()) {
+                for (auto& c : doc["commands"]) cached_commands.push_back(c.get<std::string>());
+            }
+        } catch (...) {}
+    }
+
+    void save_cache() {
+        json doc = {{"commands", cached_commands}};
+        std::ofstream f(CACHE_PATH);
+        if (f.is_open()) f << doc.dump(2);
+    }
+};
+
+int main() {
+    %LOBE_NAME% lobe;
+    lobe.start();
+    return 0;
+}
+)CPP";
+
+    // Build specialist parameters from domain name
+    struct SpecialistParams {
+        std::string domain;
+        std::string lobe_name;    // e.g. "FileWriteSpecialist"
+        std::string lobe_tag;     // e.g. "FILE_WRITE_SPECIALIST"
+        std::string keywords;     // comma-separated quoted strings
+        std::string pre_validations; // comma-separated quoted strings
+    };
+
+    SpecialistParams build_specialist_params(const std::string& domain) {
+        SpecialistParams p;
+        p.domain = domain;
+
+        // Convert domain to CamelCase lobe name: "file_write" → "FileWriteSpecialist"
+        std::string camel;
+        bool capitalize = true;
+        for (char c : domain) {
+            if (c == '_') { capitalize = true; continue; }
+            camel += capitalize ? (char)toupper(c) : c;
+            capitalize = false;
+        }
+        p.lobe_name = camel + "Specialist";
+
+        // Convert domain to UPPER_TAG: "file_write" → "FILE_WRITE_SPECIALIST"
+        std::string upper = domain;
+        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        p.lobe_tag = upper + "_SPECIALIST";
+
+        // Extract keywords from classification_rules
+        std::string kw_str;
+        for (auto& rule : classification_rules) {
+            if (rule.domain == domain) {
+                for (auto& kw : rule.keywords) {
+                    if (!kw_str.empty()) kw_str += ", ";
+                    kw_str += "\"" + kw + "\"";
+                }
+                break;
+            }
+        }
+        if (kw_str.empty()) kw_str = "\"" + domain + "\"";
+        p.keywords = kw_str;
+
+        // Get pre-validation commands
+        std::string pv_str;
+        if (domain_pre_validations.count(domain)) {
+            for (auto& pv : domain_pre_validations[domain]) {
+                if (!pv_str.empty()) pv_str += ", ";
+                pv_str += "\"" + pv + "\"";
+            }
+        }
+        p.pre_validations = pv_str;
+
+        return p;
+    }
+
+    // Simple string replacement helper
+    std::string str_replace(std::string str, const std::string& from, const std::string& to) {
+        size_t pos = 0;
+        while ((pos = str.find(from, pos)) != std::string::npos) {
+            str.replace(pos, from.length(), to);
+            pos += to.length();
+        }
+        return str;
+    }
+
+    void trigger_neurogenesis(const std::string& domain) {
+        auto params = build_specialist_params(domain);
+
+        // Substitute template
+        std::string source = SPECIALIST_TEMPLATE;
+        source = str_replace(source, "%DOMAIN%", params.domain);
+        source = str_replace(source, "%LOBE_NAME%", params.lobe_name);
+        source = str_replace(source, "%LOBE_TAG%", params.lobe_tag);
+        source = str_replace(source, "%DOMAIN_KEYWORDS%", params.keywords);
+        source = str_replace(source, "%PRE_VALIDATIONS%", params.pre_validations);
+
+        // Ensure genesis directory exists
+        mkdir(GENESIS_DIR, 0755);
+
+        // Write source file
+        std::string source_path = std::string(GENESIS_DIR) + domain + "_specialist.cpp";
+        std::ofstream f(source_path);
+        if (!f.is_open()) {
+            std::cerr << "[BASAL_GANGLIA] NEUROGENESIS: Failed to write " << source_path << std::endl;
+            return;
+        }
+        f << source;
+        f.close();
+
+        active_specialists.insert(domain);
+
+        std::cout << "[BASAL_GANGLIA] NEUROGENESIS TRIGGERED: domain='" << domain
+                  << "' → " << source_path << std::endl;
+
+        // Publish genesis_request for MotorLobe to compile
+        json req = {
+            {"origin", "basal_ganglia"},
+            {"intent", "genesis_request"},
+            {"name", params.lobe_tag},
+            {"source_path", source_path},
+            {"output_path", "build/" + params.lobe_tag},
+            {"domain", domain}
+        };
+        routing::publish(pub, req);
+
+        std::cout << "[BASAL_GANGLIA] NEUROGENESIS: genesis_request published for "
+                  << params.lobe_tag << std::endl;
+    }
+
+    void check_neurogenesis(const std::string& domain) {
+        // Guard: already have a specialist for this domain
+        if (active_specialists.count(domain)) return;
+
+        auto& d = self_model[domain];
+        int total = d.success + d.failure;
+
+        // Threshold: 20+ attempts, <30% success rate
+        if (total < 20) return;
+        if (d.actual_success_rate >= 0.30f) return;
+
+        // Require sufficient stamina to invest in neurogenesis
+        if (current_stamina < 50.0f) return;
+
+        // Only trigger when SELF_MODIFY or MASTERY drive is active
+        DriveLevel drive = get_current_drive();
+        if (drive != DriveLevel::SELF_MODIFY && drive != DriveLevel::MASTERY) return;
+
+        std::cout << "[BASAL_GANGLIA] NEUROGENESIS: Domain '" << domain
+                  << "' chronically failing (" << (int)(d.actual_success_rate * 100)
+                  << "% over " << total << " attempts). Generating specialist." << std::endl;
+
+        trigger_neurogenesis(domain);
     }
 
     // Get suggested commands: prefer genome templates, fall back to static commands

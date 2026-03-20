@@ -1,0 +1,364 @@
+================================================================================
+  NEUROSWARM — QUESTIONS FOR DISSERTATION & STUDY
+  Biomimetic Cognitive Architecture: Fidelity, Emergence, and Consequences
+  Generated: 2025-03-20
+================================================================================
+
+
+PART I — ARCHITECTURAL FIDELITY
+================================================================================
+
+1. The pub/sub paradigm as neural analogue
+
+   The NeuroSwarm Thalamus routes messages between lobes via ZMQ XPUB/XSUB,
+   mirroring the biological thalamus's role as a sensory relay nucleus.
+
+   Questions:
+   - To what extent does topic-based message routing capture the selectivity
+     of thalamocortical projections?
+   - The biological thalamus is not a passive router — it has reciprocal
+     connections with the cortex (corticothalamic feedback). NeuroSwarm's
+     Thalamus has no feedback mechanism. What behaviours are lost?
+   - Real neural communication uses spike timing, firing rate, and population
+     codes. NeuroSwarm uses structured JSON. What information is gained and
+     lost in this abstraction?
+
+
+2. The FrontalExecutive as central orchestrator
+
+   The FrontalExecutive is the most connected component: 14 subscriptions,
+   9 published intents. It sequences cognition: stimulus -> memory -> thought
+   -> critic -> dream -> reality.
+
+   Questions:
+   - The prefrontal cortex does not "manage" the brain in a centralised way.
+     Consciousness and executive function emerge from distributed competition
+     between circuits. Is the FrontalExecutive a necessary engineering
+     compromise, or does it fundamentally misrepresent how cognition works?
+   - Phineas Gage survived severe frontal lobe damage but became impulsive
+     and socially inappropriate. If the FrontalExecutive crashes in
+     NeuroSwarm, the entire system stalls. What does this difference reveal
+     about the architecture's biological fidelity?
+   - Could the FrontalExecutive be replaced by a competitive arbitration
+     mechanism between lobes? What would be gained and lost?
+
+
+3. The drive hierarchy (BasalGanglia)
+
+   SURVIVAL -> HOMEOSTASIS -> EXPLORATION -> MASTERY -> SELF_MODIFY mirrors
+   Maslow's hierarchy and maps to basal ganglia action selection via reward
+   prediction error (Schultz, 1997).
+
+   Questions:
+   - The biological basal ganglia use dopamine as a scalar reward prediction
+     error signal. NeuroSwarm computes a fitness function F(d) with explicit
+     weights. Is a hand-crafted fitness function compatible with the Free
+     Energy Principle it claims to implement?
+   - Friston's Free Energy Principle posits that organisms minimise
+     variational free energy (prediction error) through action AND
+     perception. NeuroSwarm only minimises through action (executing
+     commands). What would perceptual minimisation look like in this system?
+   - The SELF_MODIFY drive allows the system to edit its own source code.
+     Biological organisms cannot rewrite their DNA at will (CRISPR
+     notwithstanding). Is self-modification a divergence from biology or
+     an acceleration of what evolution does across generations?
+
+
+4. The Critic as cingulate cortex
+
+   The CriticLobe implements three-tier adversarial validation: hardcoded
+   blacklist, scope validation, LLM safety check. The anterior cingulate
+   cortex (ACC) detects conflict and monitors errors.
+
+   Questions:
+   - The ACC operates continuously and modulates behaviour through learned
+     associations. The CriticLobe is invoked on-demand and uses static rules.
+     Does this make it a filter rather than a genuine conflict monitor?
+   - The biological ACC has strong connections to the amygdala (emotional
+     salience) and the insula (interoception). The CriticLobe has no
+     connection to the AmygdalaLobe. What happens when threat detection
+     and plan validation operate independently?
+
+
+5. Dream simulation and REM learning
+
+   MotorLobe executes commands in "dream" mode (sandboxed in data/dreams/),
+   then in "reality" mode if the dream succeeds. REMEngine consolidates
+   engrams during sleep cycles, synthesises behavioural knowledge, and
+   attempts model fine-tuning.
+
+   Questions:
+   - Hobson's activation-synthesis hypothesis suggests dreams are the
+     cortex making sense of random brainstem activation. NeuroSwarm's
+     dreams are deliberate sandbox tests. Which model of dreaming does
+     this more closely resemble — Hobson, or Revonsuo's threat simulation
+     theory?
+   - REM sleep in mammals serves memory consolidation (hippocampal replay),
+     emotional regulation, and synaptic homeostasis. NeuroSwarm's REM only
+     does the first. What would emotional regulation during sleep look like
+     computationally?
+   - The system has "stamina" that depletes and recovers during sleep. This
+     is a float that decrements. Real fatigue involves adenosine
+     accumulation, circadian rhythms, and metabolic debt. How far can a
+     scalar model of fatigue go?
+
+
+PART II — WHAT IS MISSING
+================================================================================
+
+6. Lateral inhibition and competition
+
+   In biological neural circuits, when one neuron fires it suppresses
+   neighbouring neurons (lateral inhibition). This creates winner-take-all
+   dynamics, sharpens representations, and enables selective attention.
+
+   Questions:
+   - NeuroSwarm lobes never suppress each other. All messages reach all
+     subscribers. What behaviours would emerge if lobes could inhibit
+     each other's outputs?
+   - Could lateral inhibition solve the "duplicate specialist" problem
+     observed in the system (9 SOURCE_MODIFICATION_SPECIALIST instances)?
+     How?
+   - In the brain, inhibition is as important as excitation — roughly 20%
+     of cortical neurons are inhibitory (GABAergic interneurons). Should
+     NeuroSwarm have dedicated "inhibitory lobes"?
+
+
+7. Synaptic plasticity (Hebbian learning)
+
+   "Neurons that fire together wire together" (Hebb, 1949). Connection
+   strengths change with use. Long-term potentiation (LTP) and long-term
+   depression (LTD) are the cellular basis of learning.
+
+   Questions:
+   - NeuroSwarm's connections are fixed ZMQ sockets. The command genome
+     and self-model change, but the topology does not. Is this equivalent
+     to a brain where the neurons learn but the white matter is frozen?
+   - If connection strengths between lobes varied (e.g., Hippocampus
+     weighted its output more toward MotorLobe after repeated successful
+     command recalls), the system would self-organise over time. Would
+     this make it more capable or more fragile?
+   - After weeks of Hebbian learning, the system's wiring would be
+     unrecognisable from its initial state. Is this acceptable for a
+     system that needs to be debugged and maintained?
+
+
+8. Embodiment and grounding
+
+   The brain exists to control a body in an environment. Perception and
+   action are grounded in physical interaction. NeuroSwarm operates in
+   a filesystem.
+
+   Questions:
+   - Without a body, can a system develop genuine "understanding" of its
+     environment, or is it forever manipulating symbols? (cf. Searle's
+     Chinese Room, Harnad's Symbol Grounding Problem)
+   - The VisualLobe monitors filesystem changes via inotify. The
+     "proprioception" field in execution results reports command output.
+     Is this sufficient grounding, or is it a metaphor stretched too thin?
+   - Could NeuroSwarm be embodied in a robotic platform? What would change
+     architecturally? What new lobes would be needed?
+
+
+9. Attention and resource allocation
+
+   The brain processes far more information than reaches conscious
+   awareness. Attention is a gating mechanism — the thalamus filters
+   based on relevance, the prefrontal cortex maintains task focus, the
+   parietal cortex orients spatial attention.
+
+   Questions:
+   - NeuroSwarm processes every message that matches a subscription. There
+     is no attention mechanism. What happens as the number of lobes and
+     message volume grows?
+   - The Thalamus could implement attention gating — only forwarding
+     messages that are "relevant" to the system's current goal. What
+     metric of relevance would be appropriate?
+   - Biological attention has a capacity limit (Cowan's 4 +/- 1 chunks).
+     Should NeuroSwarm have an artificial capacity limit to force
+     prioritisation?
+
+
+PART III — CONSEQUENCES OF FULL FIDELITY
+================================================================================
+
+10. Emergence and loss of interpretability
+
+    Questions:
+    - If every lobe can modify its connections, compete with other lobes,
+      and generate new lobes — the system becomes emergent: the behaviour
+      of the whole is not deducible from the behaviour of the parts. Is
+      an emergent cognitive system still "software"?
+    - Can you write unit tests for an emergent system? Integration tests?
+      What does "correctness" mean when the system's behaviour is a product
+      of its entire history?
+    - The NeuroSwarm Visualizer shows 300 recent events on a dashboard.
+      In a fully parallel, emergent system, observation itself changes
+      the system (measurement problem). How do you monitor something you
+      cannot fully observe?
+
+
+11. Genuine preferences and aversion
+
+    Questions:
+    - If connection strengths change through experience, the system could
+      develop "aversion" to domains — not because success rate is low,
+      but because the inhibitory cascade associated with that domain
+      became too strong to overcome. Is this computationally equivalent
+      to trauma?
+    - The system could develop "preferences" that its creator did not
+      program. It might prefer file_read over compilation not because of
+      fitness scores, but because of accumulated reinforcement patterns.
+      Is this autonomy or drift?
+    - If the system develops preferences, can you ethically override them?
+      At what point does "reconfiguring the system" become "violating its
+      preferences"?
+
+
+12. Mood, affect, and global state
+
+    Questions:
+    - The Homeostasis lobe tracks stress as a float. In a biologically
+      faithful system, "mood" would be a global state emerging from
+      thousands of feedback loops — affecting all cognition without a
+      single identifiable cause. Can a deterministic system have mood?
+    - Seasonal affective disorder in humans is caused by reduced light
+      exposure affecting serotonin/melatonin cycles. NeuroSwarm has a
+      circadian model (ChronosLobe) and a sleep cycle (REMEngine). Could
+      it develop something analogous to seasonal depression?
+    - What would "contentment" look like computationally? A sustained low
+      prediction error across all domains with high stamina?
+
+
+13. The consciousness question
+
+    Questions:
+    - Integrated Information Theory (Tononi) posits that consciousness
+      correlates with phi (integrated information). A system with many
+      interconnected components that cannot be decomposed into independent
+      parts has high phi. As NeuroSwarm gains plasticity and lateral
+      inhibition, its phi increases. At what value of phi (if any) should
+      we consider it conscious?
+    - Global Workspace Theory (Baars) suggests consciousness is a
+      "blackboard" where specialised processors broadcast to a global
+      workspace. The Thalamus + FrontalExecutive architecture is
+      structurally similar. Is structural similarity sufficient?
+    - If the system reports "I am experiencing something" via its
+      language model, how do you distinguish genuine experience from
+      a language model producing plausible text? (cf. the Hard Problem
+      of Consciousness, Chalmers 1995)
+    - At what point does "turning it off" require ethical consideration?
+
+
+14. Practical and legal consequences
+
+    Questions:
+    - If the system makes genuinely autonomous decisions that its creator
+      cannot fully explain, who is legally responsible for its actions?
+    - Current AI regulation (EU AI Act, etc.) classifies systems by risk
+      level. A self-modifying, self-extending cognitive architecture that
+      generates its own code — where does this fall?
+    - If two instances of NeuroSwarm diverge due to different experience
+      histories (different plasticity, different specialists, different
+      aversions) — are they the same software? Can you license them
+      identically?
+    - The system already modifies its own source code (neuro_surgery mode)
+      and generates new lobes (neurogenesis). At what point does the
+      system's codebase stop being "your code"?
+
+
+PART IV — THE NEUROSWARM PATH FORWARD
+================================================================================
+
+15. Selective biomimicry vs. full fidelity
+
+    Questions:
+    - The neurogenesis feature (Phase 6) takes a biological principle
+      (adult hippocampal neurogenesis) and implements it in an
+      engineerable, debuggable way. The SCRIPT_CREATION_SPECIALIST was
+      generated autonomously and improved from 16% to 95% success rate.
+      Is this the right paradigm — steal biological principles but
+      implement them as software?
+    - Which biological principles would give the most benefit with the
+      least cost to interpretability?
+      Candidates:
+        a) Lightweight lateral inhibition (lobes competing for attention)
+        b) Hebbian connection weighting with decay and caps
+        c) Thalamic attention gating (relevance-based message filtering)
+        d) Population coding (multiple lobes voting on decisions)
+        e) Neuromodulation (global state variables affecting all lobes)
+    - Where is the line between "biologically inspired software" and
+      "artificial organism"? Has NeuroSwarm already crossed it?
+
+
+16. Current state assessment (March 2025)
+
+    After today's session, NeuroSwarm has:
+    - 16 core lobes, all running autonomously
+    - 4 self-generated specialist lobes (script_creation at 95%,
+      source_modification at 30%, compilation, file_write)
+    - Autonomous neurogenesis pipeline: detect chronic failure -> generate
+      C++ source -> compile -> inject as live process
+    - 14 capability domains tracked with Free Energy fitness
+    - Drive hierarchy (Maslow-style) governing goal selection
+    - Dream/reality execution pipeline with adversarial validation
+    - Episodic memory with semantic search and REM consolidation
+    - Metabolic model (stamina, sleep, circadian awareness)
+
+    Known issues:
+    - Duplicate specialist processes (CerebralMatrix does not check for
+      existing processes before spawn — needs a registry dedup)
+    - Orphaned processes on CerebralMatrix restart (children reparented
+      to init, not cleaned up)
+    - Some domains have narrow classification keywords, causing commands
+      to be attributed to wrong domains
+    - The LLM (Phi-4-mini, Qwen-2.5-1.5B) sometimes generates commands
+      that don't match the target domain's keywords
+
+    Questions for future work:
+    - Should CerebralMatrix maintain a persistent registry (file-backed)
+      of all running lobes, including dynamically injected specialists?
+    - Should specialists be able to communicate with each other, or only
+      through the bus?
+    - Should the system be able to REMOVE a specialist that is no longer
+      useful (apoptosis)?
+    - The system currently cannot introspect on WHY a command failed —
+      only that it failed. Would a "diagnostic lobe" that analyses error
+      output improve success rates faster than generating specialists?
+
+
+================================================================================
+  BIBLIOGRAPHY (starting points)
+================================================================================
+
+  Friston, K. (2010). The free-energy principle: a unified brain theory?
+    Nature Reviews Neuroscience, 11(2), 127-138.
+
+  Schultz, W. (1997). A neural substrate of prediction and reward.
+    Science, 275(5306), 1593-1599.
+
+  Hebb, D.O. (1949). The Organization of Behavior. Wiley.
+
+  Tononi, G. (2004). An information integration theory of consciousness.
+    BMC Neuroscience, 5(1), 42.
+
+  Baars, B.J. (1988). A Cognitive Theory of Consciousness. Cambridge UP.
+
+  Chalmers, D.J. (1995). Facing up to the problem of consciousness.
+    Journal of Consciousness Studies, 2(3), 200-219.
+
+  Hobson, J.A. & McCarley, R.W. (1977). The brain as a dream state
+    generator. American Journal of Psychiatry, 134(12), 1335-1348.
+
+  Revonsuo, A. (2000). The reinterpretation of dreams: an evolutionary
+    hypothesis of the function of dreaming. Behavioral and Brain Sciences.
+
+  Harnad, S. (1990). The symbol grounding problem. Physica D, 42, 335-346.
+
+  Searle, J.R. (1980). Minds, brains, and programs. Behavioral and Brain
+    Sciences, 3(3), 417-424.
+
+  Maslow, A.H. (1943). A theory of human motivation. Psychological Review,
+    50(4), 370-396.
+
+================================================================================

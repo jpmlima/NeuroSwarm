@@ -32,9 +32,32 @@ The BasalGanglia implements intrinsic motivation via a deterministic self-model 
 | `visual_lobe` | Sensation | Filesystem watcher |
 | `homeostasis` | Regulation | CPU/RAM/GPU telemetry |
 | `metacognition` | Reflection | Internal state diary |
-| `critic_lobe` | Safety | Two-tier validation |
-| `visualizer` | Observability | 3D dashboard |
+| `critic_lobe` | Safety | Three-tier validation |
+| `visualizer` | Observability | 2D network dashboard |
 | `rem_engine` | Learning | Behavioural prompt evolution |
 | `chronos_lobe` | Temporal | Time pulse broadcaster |
 | `statistics_lobe` | Metrics | JSONL event recorder |
-| `basal_ganglia` | Motivation | Intrinsic goal generation, self-model, dopamine |
+| `basal_ganglia` | Motivation | Intrinsic goal generation, self-model, dopamine, neurogenesis |
+
+## 6. Self-Preservation (Crash Detection & Recovery)
+CerebralMatrix monitors all child processes via non-blocking `waitpid(WNOHANG)`. When a lobe crashes:
+1. Exit reason is extracted (signal number or exit code)
+2. `lobe_crash` event is broadcast on the bus
+3. Crash counter is incremented; restart is attempted with exponential backoff (2s → 4s → 8s → 16s)
+4. After 5 consecutive failures, the lobe is marked permanently **DEAD** and a `lobe_death` event is broadcast
+
+Orphaned processes from previous sessions are cleaned up at startup by scanning `/proc` for executables in the build directory.
+
+## 7. Neurogenesis (Runtime Lobe Injection)
+CerebralMatrix subscribes to `inject_lobe` signals on a dedicated ZMQ sub socket. When a new lobe binary is compiled (by MotorLobe via `genesis_request`):
+1. Binary path is validated (exists + executable via `stat()`)
+2. Deduplication check prevents spawning a lobe that is already alive
+3. `fork()`/`exec()` launches the new process
+4. `lobe_injected` event is broadcast on the bus
+
+## 8. Apoptosis (Lobe Termination)
+On receiving a `lobe_terminate` signal:
+1. Target lobe receives `SIGTERM`
+2. 2-second grace period for clean shutdown
+3. `SIGKILL` if still alive
+4. `lobe_terminated` event is broadcast on the bus

@@ -76,10 +76,10 @@ public:
                         std::cout << "[MOTOR] Received genesis_request!" << std::endl;
                         std::string name = j.value("name", "NEW_LOBE");
                         std::string source = j.value("source_path", "");
-                        std::string output = j.value("output_path", "build/lib" + name + ".so");
-                        
-                        // Compile the new lobe as a position-independent shared object with all required include paths
-                        std::string cmd = "g++ -shared -fPIC -std=c++17 -I./include -I./external/llama.cpp/vendor/ " + source + " -o " + output + " -lzmq";
+                        std::string output = j.value("output_path", "build/" + name);
+
+                        // Compile the new lobe as a standalone executable
+                        std::string cmd = "g++ -std=c++17 -I./include -I./src " + source + " -o " + output + " -lzmq -lpthread";
                         std::cout << "[MOTOR] Genesis compiling: " << cmd << std::endl;
                         
                         int exit_code = 0;
@@ -89,6 +89,7 @@ public:
                         if (exit_code == 0) {
                             json inject = {
                                 {"intent", "inject_lobe"},
+                                {"origin", "motor_cortex"},
                                 {"name", name},
                                 {"path", output}
                             };
@@ -99,6 +100,7 @@ public:
                         json resp = {
                             {"origin", "motor_cortex"},
                             {"intent", "genesis_result"},
+                            {"name", name},
                             {"proprioception", out},
                             {"exit_code", exit_code},
                             {"status", (exit_code == 0 ? "success" : "failure")}

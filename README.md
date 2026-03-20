@@ -13,9 +13,9 @@
 ---
 
 <div align="center">
-  <img src="docs/neuroswarm_dashboard.png" alt="NeuroSwarm 3D Neural Dashboard" width="900"/>
+  <img src="docs/neuroswarm_dashboard.png" alt="NeuroSwarm Cognitive Dashboard" width="900"/>
   <br>
-  <sub>Real-time 3D neural mesh dashboard — anatomical lobes, live activity arcs, event stream</sub>
+  <sub>Real-time cognitive dashboard — 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis metrics, spike task ticker</sub>
 </div>
 
 ---
@@ -26,10 +26,10 @@ NeuroSwarm rejects the monolithic LLM paradigm. Rather than delegating all cogni
 
 Each *lobe* is an independent OS process with a precisely scoped cognitive function. Communication is exclusively via ZeroMQ PUB/SUB. No lobe has visibility into the internals of another — only the message schema is shared. This yields a system that is:
 
-- **Modular** — lobes can be added, removed, or hot-swapped at runtime via `dlopen`
-- **Fault-tolerant** — any single lobe crash does not halt the system
-- **Observable** — all inter-lobe state is visible on the bus
-- **Extensible** — new capabilities are compiled as `.so` files and injected dynamically (Neuro-Surgery)
+- **Modular** — lobes can be added, removed, or hot-swapped at runtime
+- **Fault-tolerant** — CerebralMatrix monitors all child processes, auto-restarts crashed lobes with exponential backoff
+- **Observable** — all inter-lobe state is visible on the bus and rendered on a real-time academic dashboard
+- **Self-extending** — autonomous neurogenesis pipeline detects chronic failure domains and generates specialist lobes at runtime
 
 > *"A brain is not an intelligent 'thing' — it is a set of small idiot agents that, by collaborating, produce emergent intelligence."* — Marvin Minsky
 
@@ -66,7 +66,7 @@ graph TD
     end
 
     subgraph "Worker Pool"
-        PW[Polecat Workers — Ephemeral\nfork+exec per goal, max 2]
+        SW[Spike Workers — Ephemeral\nfork+exec per goal, max 2]
     end
 
     subgraph "Motivation System"
@@ -79,7 +79,7 @@ graph TD
     end
 
     subgraph "Observability"
-        VZ[Visualizer — 3D Brain Dashboard\nport 8080]
+        VZ[Visualizer — 2D Network Dashboard\nport 8080]
     end
 
     UI --> TH
@@ -93,8 +93,8 @@ graph TD
     HP <--> FE
     REM --> FE
     BG --> FE
-    FE -->|spawn| PW
-    PW --> TH
+    FE -->|spawn| SW
+    SW --> TH
     HM --> BG
     HM --> FE
     MC --> TH
@@ -180,16 +180,27 @@ The system never modifies model weights. It improves by accumulating richer cont
 
 ---
 
-## VI. Neuro-Surgery: Runtime Self-Modification
+## VI. Neuro-Surgery & Neurogenesis: Runtime Self-Modification
 
-The system is capable of modifying and extending its own implementation at runtime:
+The system is capable of modifying and extending its own implementation at runtime through two mechanisms:
 
+### Neuro-Surgery (Self-Modification)
 1. FrontalExecutive generates a patch (shell command sequence targeting source files)
-2. CriticLobe validates the patch
+2. CriticLobe validates the patch against the three-tier safety pipeline
 3. MotorLobe executes: `patch source → cmake → make -j$(nproc)` inside the `neuro_surgery` execution mode
-4. On successful build, CerebralMatrix `dlopen`s the new `.so` and injects it as a live lobe
+4. On successful build, the modified lobe is restarted by CerebralMatrix
 
-This enables capability acquisition without system restart — analogous to axonal sprouting in biological neural development.
+### Neurogenesis (Self-Extension)
+1. BasalGanglia detects chronic failure in a capability domain (<30% success rate over 20+ attempts)
+2. A specialist lobe is generated from a parameterised C++ template with domain-specific knowledge
+3. MotorLobe compiles it as a standalone executable: `g++ -std=c++17 -o build/{NAME}`
+4. CerebralMatrix receives an `inject_lobe` signal, validates the binary, and `fork()`/`exec()`s it as a live process
+5. The specialist monitors its domain on the bus, publishes `specialist_advice` and `specialist_report`
+
+### Apoptosis (Self-Pruning)
+Lobes that are no longer useful can be terminated via `lobe_terminate` signals. CerebralMatrix sends `SIGTERM`, waits, then `SIGKILL` if necessary.
+
+This enables structural adaptation without system restart — analogous to adult hippocampal neurogenesis and programmed cell death in biological neural development.
 
 ---
 
@@ -210,12 +221,12 @@ This enables capability acquisition without system restart — analogous to axon
 | **MetaCognition** | `metacognition` | Self-reflective diary — internal state narration |
 | **VisualLobe** | `visual_lobe` | Filesystem watcher — detects environmental state changes |
 | **AuditoryLobe** | `auditory_lobe` | Voice input pipeline via Whisper.cpp |
-| **Visualizer** | `visualizer` | 3D neural mesh dashboard (Three.js, port 8080) |
+| **Visualizer** | `visualizer` | 2D network graph dashboard (Canvas, port 8080) |
 | **ChronosLobe** | `chronos_lobe` | Temporal awareness — broadcasts time_pulse with ISO timestamp, uptime, circadian phase |
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — records per-cycle metrics to `data/metrics/` in JSONL |
 | **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, goal generation |
-| **PolecatWorker** | `polecat_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
-| **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, handles runtime injection |
+| **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
+| **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, crash detection with exponential backoff, neurogenesis injection, apoptosis termination, orphan cleanup |
 
 ---
 
@@ -252,9 +263,20 @@ Core intents:
 | `intrinsic_goal_result` | FE → BG | Completion/failure report for self-model update |
 | `dopamine_signal` | BG → | Novel capability discovery or prediction error surprise |
 | `self_model_updated` | BG → | Domain state changed in `data/self_model.json` |
-| `polecat_ready` | PW → FE | Worker announces readiness after fork+exec |
-| `polecat_assign` | FE → PW | Goal assignment dispatched to specific worker |
-| `polecat_done` | PW → FE | Worker completed/failed goal, reports result |
+| `spike_ready` | SW → FE | Worker announces readiness after fork+exec |
+| `spike_assign` | FE → SW | Goal assignment dispatched to specific worker |
+| `spike_done` | SW → FE | Worker completed/failed goal, reports result |
+| `genesis_request` | BG → ML | Request compilation of a new specialist lobe |
+| `genesis_result` | ML → BG | Compilation success/failure report |
+| `inject_lobe` | ML → CM | Request CerebralMatrix to spawn a new lobe process |
+| `lobe_injected` | CM → | Confirmation that a new lobe is running |
+| `lobe_terminate` | → CM | Request to terminate a running lobe (apoptosis) |
+| `lobe_terminated` | CM → | Confirmation that a lobe was terminated |
+| `lobe_crash` | CM → | Notification that a lobe process crashed |
+| `lobe_death` | CM → | Lobe exceeded max restarts, marked permanently dead |
+| `specialist_advice` | SP → | Domain-specific pre-validation and command alternatives |
+| `specialist_report` | SP → BG | Periodic specialist performance metrics |
+| `homeostatic_pulse` | HM → | System telemetry: success rate, stamina, CPU/RAM/GPU |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
@@ -270,8 +292,8 @@ Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 | **Memory Index** | L2-normalised cosine similarity over JSONL (zero external dependencies) |
 | **Grammar Constraints** | GBNF — llama.cpp grammar-constrained decoding for structured JSON output |
 | **Safety** | Three-tier CriticLobe (blacklist + scope + LLM) + Dream Sandbox filesystem isolation |
-| **Self-Modification** | GCC shared object compilation + `dlopen` runtime injection |
-| **Observability** | Three.js r128 + cpp-httplib — 3D anatomical brain mesh, live arc particles |
+| **Self-Modification** | GCC standalone executable compilation + CerebralMatrix fork/exec injection |
+| **Observability** | HTML5 Canvas + cpp-httplib — VOSviewer-inspired 2D network graph with density clusters |
 | **Build System** | CMake 3.16+ / C++17 |
 | **OS** | Linux (Vulkan compute) |
 
@@ -315,17 +337,20 @@ xdg-open http://localhost:8080
 - [x] **Ralph loop** — `tasks.json`-driven autonomous self-improvement with `git commit` audit trail
 - [x] **Phi-4-mini** — primary generative model (3.8B, Q4_K_M, 2.4GB)
 - [x] **Dream Sandbox** — isolated filesystem execution before reality deployment
-- [x] **Neuro-Surgery** — runtime C++ lobe compilation and `dlopen` injection
-- [x] **3D Dashboard** — Three.js anatomical brain mesh with live neural arc visualisation
+- [x] **Neuro-Surgery** — runtime C++ lobe compilation and process injection
+- [x] **Cognitive Dashboard** — VOSviewer-inspired 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis/apoptosis metrics, spike task ticker
 - [x] **GBNF grammar constraints** — structured JSON output from LLM inference
 - [x] **Adversarial Critic** — nuclear-only pattern blacklist (~10 catastrophic signatures: disk wipe, fork bombs, credential exfiltration), deterministic scope validation rejecting paths outside the project directory, adversarial red-team LLM prompt with reject-by-default framing. Rate limiting prevents inference flooding during neurotic loops (max 6 evaluations per CID per 60s)
 - [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
 - [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
 - [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation and eventual academic publication
-- [x] **Polecat workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
+- [x] **Spike workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
 - [x] **Specialised routing** — XPUB/XSUB topic-based intent filtering via Thalamus proxy. Each lobe subscribes only to its relevant intents at the ZMQ transport layer — messages that don't match never leave the Thalamus. Shared `routing.hpp` header provides `publish()`, `subscribe()`, `subscribe_all()`, `receive()` for all 20+ binaries. Monitoring lobes (Statistics, Visualizer, MetaCognition, Amygdala) subscribe to all traffic
 - [x] **Model specialisation** — multi-slot ModelManager with named adapter routing. SynapticController auto-loads specialist GGUFs (Qwen-Coder → "coder" slot, critic model → "critic" slot) with graceful fallback to base model. FrontalExecutive uses "coder" adapter for command generation. CriticLobe Tier 2 LLM validation sends non-safe commands through "critic" adapter with GBNF-constrained safety verdict, 10s fail-open timeout
-- [ ] **REM fine-tuning** — LoRA fine-tune on accumulated successful execution traces
+- [x] **REM fine-tuning** — REM Engine exports successful reality-mode execution traces as chat-template training data and spawns `llama-finetune` (CPU-only, no VRAM conflict) to produce specialised GGUFs. ModelManager supports LoRA adapter loading via `llama_adapter_lora_init` for externally-trained adapters, with per-inference activation/deactivation. SynapticController auto-loads fine-tuned models from `models/finetuned/` and LoRA adapters from `models/lora/` at startup
+- [x] **Self-preservation** — CerebralMatrix monitors all child processes via `waitpid(WNOHANG)`, detects crashes with signal/exit-code analysis, auto-restarts with exponential backoff (2s→4s→8s→16s), marks lobes permanently dead after 5 consecutive failures. Orphaned processes from previous sessions cleaned up at startup via `/proc` scan. FrontalExecutive reaps zombie spike workers in idle loop
+- [x] **Neurogenesis pipeline** — BasalGanglia detects chronic domain failure (<30% over 20+ attempts) and generates specialist lobes from parameterised C++ templates. MotorLobe compiles as standalone executables. CerebralMatrix validates binaries and injects via `fork()`/`exec()`. Specialists monitor their domain, publish advice and periodic reports. Apoptosis via `lobe_terminate` allows pruning of unneeded specialists
+- [x] **Academic dashboard** — VOSviewer-inspired 2D Canvas network graph replacing Three.js 3D mesh. Clean white theme with Inter/IBM Plex Mono typography. 16 core lobe nodes with cluster density clouds, curved bezier edges. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker with chronological task entries. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events
 
 ---
 

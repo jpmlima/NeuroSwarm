@@ -15,6 +15,7 @@
 #include <regex>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/wait.h>
 
 using json = nlohmann::json;
 
@@ -31,7 +32,7 @@ public:
             "stimulus", "visual_stimulus", "execution_result",
             "high_stress_alert", "homeostatic_pulse", "prompt_update",
             "time_pulse", "search_result", "critic_result",
-            "intrinsic_goal", "polecat_ready", "polecat_done",
+            "intrinsic_goal", "spike_ready", "spike_done",
             "inference_result", "metabolic_alert"
         });
 
@@ -65,6 +66,8 @@ public:
                         }
                     }
                 }
+                // Reap any zombie spike workers (child may exit after sending spike_done)
+                reap_zombies();
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
@@ -130,11 +133,11 @@ public:
                 else if (origin == "basal_ganglia" && intent == "intrinsic_goal") {
                     handle_intrinsic_goal(j);
                 }
-                else if (origin == "polecat_worker" && intent == "polecat_ready") {
-                    handle_polecat_ready(j);
+                else if (origin == "spike_worker" && intent == "spike_ready") {
+                    handle_spike_ready(j);
                 }
-                else if (origin == "polecat_worker" && intent == "polecat_done") {
-                    handle_polecat_done(j);
+                else if (origin == "spike_worker" && intent == "spike_done") {
+                    handle_spike_done(j);
                 }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
                     std::string adapter = j.value("adapter", "");
@@ -168,7 +171,7 @@ private:
         std::vector<std::string> plan;
         int retries = 0;
         int critic_rejections = 0;
-        int total_thought_cycles = 0; // Total inference cycles — detects oscillating loops (matches PolecatWorker)
+        int total_thought_cycles = 0; // Total inference cycles — detects oscillating loops (matches SpikeWorker)
         bool active = false;
         std::string last_raw_thought;
         std::string last_cmd;
@@ -197,22 +200,37 @@ private:
     int total_successes = 0;
     static constexpr int REM_TRIGGER_INTERVAL = 5;
 
-    // Polecat worker management
+    // Spike worker management
     int active_workers = 0;
-    static constexpr int MAX_POLECAT_WORKERS = 2;
-    std::map<std::string, json> pending_polecat_assignments; // worker_id → assignment payload
+    static constexpr int MAX_SPIKE_WORKERS = 2;
+    std::map<std::string, json> pending_spike_assignments; // worker_id → assignment payload
     std::map<std::string, std::string> worker_cid_map;       // worker_id → CID (presence = worker alive)
-    int polecat_counter = 0;
+    std::map<std::string, pid_t> worker_pid_map;              // worker_id → PID (for reaping zombies)
+    int spike_counter = 0;
 
-    void spawn_polecat(const std::string& cid, const GoalState& state) {
-        std::string worker_id = "pw_" + std::to_string(++polecat_counter) + "_" + std::to_string(std::time(nullptr));
+    void reap_zombies() {
+        int status;
+        pid_t pid;
+        while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+            // Remove from pid map
+            for (auto it = worker_pid_map.begin(); it != worker_pid_map.end(); ++it) {
+                if (it->second == pid) {
+                    worker_pid_map.erase(it);
+                    break;
+                }
+            }
+        }
+    }
+
+    void spawn_spike(const std::string& cid, const GoalState& state) {
+        std::string worker_id = "sp_" + std::to_string(++spike_counter) + "_" + std::to_string(std::time(nullptr));
 
         // Each worker gets its own unique CID to avoid cross-talk
-        std::string worker_cid = cid + "_" + std::to_string(polecat_counter);
+        std::string worker_cid = cid + "_" + std::to_string(spike_counter);
 
         // Prepare assignment payload — will be sent when the worker announces readiness
         json assignment = {
-            {"cid", worker_cid}, {"origin", "frontal_executive"}, {"intent", "polecat_assign"},
+            {"cid", worker_cid}, {"origin", "frontal_executive"}, {"intent", "spike_assign"},
             {"worker_id", worker_id},
             {"text", state.goal},
             {"task_id", state.task_id},
@@ -220,40 +238,41 @@ private:
             {"fitness_score", state.fitness_score},
             {"is_intrinsic", state.is_intrinsic}
         };
-        pending_polecat_assignments[worker_id] = assignment;
+        pending_spike_assignments[worker_id] = assignment;
         worker_cid_map[worker_id] = worker_cid;
 
-        // Fork + exec the polecat_worker binary
+        // Fork + exec the spike_worker binary
         pid_t pid = fork();
         if (pid == 0) {
-            // Child process — exec polecat_worker
+            // Child process — exec spike_worker
             signal(SIGCHLD, SIG_DFL);
-            std::string bin = "./build/polecat_worker";
-            execl(bin.c_str(), "polecat_worker", worker_id.c_str(), nullptr);
+            std::string bin = "./build/spike_worker";
+            execl(bin.c_str(), "spike_worker", worker_id.c_str(), nullptr);
             // If exec fails, exit immediately
             _exit(1);
         } else if (pid > 0) {
             active_workers++;
-            std::cout << "[EXECUTIVE] Spawned Polecat worker " << worker_id
+            worker_pid_map[worker_id] = pid;
+            std::cout << "[EXECUTIVE] Spawned Spike worker " << worker_id
                       << " (pid=" << pid << ") for CID " << worker_cid << std::endl;
         } else {
-            std::cerr << "[EXECUTIVE] Failed to fork Polecat worker." << std::endl;
-            pending_polecat_assignments.erase(worker_id);
+            std::cerr << "[EXECUTIVE] Failed to fork Spike worker." << std::endl;
+            pending_spike_assignments.erase(worker_id);
             worker_cid_map.erase(worker_id);
         }
     }
 
-    void handle_polecat_ready(const json& data) {
+    void handle_spike_ready(const json& data) {
         std::string worker_id = data.value("worker_id", "");
-        auto it = pending_polecat_assignments.find(worker_id);
-        if (it == pending_polecat_assignments.end()) return;
+        auto it = pending_spike_assignments.find(worker_id);
+        if (it == pending_spike_assignments.end()) return;
 
-        std::cout << "[EXECUTIVE] Polecat " << worker_id << " ready. Dispatching assignment." << std::endl;
+        std::cout << "[EXECUTIVE] Spike " << worker_id << " ready. Dispatching assignment." << std::endl;
         dispatch_to_all(it->second);
-        pending_polecat_assignments.erase(it);
+        pending_spike_assignments.erase(it);
     }
 
-    void handle_polecat_done(const json& data) {
+    void handle_spike_done(const json& data) {
         std::string worker_id = data.value("worker_id", "");
 
         // Dedup guard — ignore if worker already finished (PUB/SUB can deliver duplicates)
@@ -266,7 +285,14 @@ private:
         active_workers = std::max(0, active_workers - 1);
         worker_cid_map.erase(worker_id);
 
-        std::cout << "[EXECUTIVE] Polecat " << worker_id << " finished: "
+        // Reap the child process to prevent zombies
+        auto pit = worker_pid_map.find(worker_id);
+        if (pit != worker_pid_map.end()) {
+            waitpid(pit->second, nullptr, WNOHANG);
+            worker_pid_map.erase(pit);
+        }
+
+        std::cout << "[EXECUTIVE] Spike " << worker_id << " finished: "
                   << (success ? "SUCCESS" : "FAILURE") << std::endl;
 
         // If this was a Ralph task, mark it complete
@@ -291,6 +317,12 @@ private:
             };
             dispatch_to_all(result);
         }
+
+        // Clean up goal state so the idle timer can trigger the next cycle
+        if (!cid.empty()) {
+            active_goals.erase(cid);
+        }
+        broadcast_idle_if_empty();
     }
 
     void handle_critic_feedback(const json& data) {
@@ -393,10 +425,10 @@ private:
         bool is_user_stimulus = (data.value("origin", "") == "broca_terminal" ||
                                  data.value("origin", "") == "user_terminal");
 
-        // Delegate to Polecat worker if capacity allows and not a user stimulus
-        if (!is_user_stimulus && active_workers < MAX_POLECAT_WORKERS) {
-            std::cout << "[EXECUTIVE] Delegating goal to Polecat worker: " << goal.substr(0, 80) << " [CID: " << cid << "]" << std::endl;
-            spawn_polecat(cid, state);
+        // Delegate to Spike worker if capacity allows and not a user stimulus
+        if (!is_user_stimulus && active_workers < MAX_SPIKE_WORKERS) {
+            std::cout << "[EXECUTIVE] Delegating goal to Spike worker: " << goal.substr(0, 80) << " [CID: " << cid << "]" << std::endl;
+            spawn_spike(cid, state);
             return;
         }
 
@@ -574,9 +606,9 @@ private:
 
                     std::cout << "[EXECUTIVE] Ralph Loop — starting task [" << task_id << "]: " << title << std::endl;
 
-                    // Delegate to Polecat worker if capacity allows
-                    if (active_workers < MAX_POLECAT_WORKERS) {
-                        spawn_polecat(cid, state);
+                    // Delegate to Spike worker if capacity allows
+                    if (active_workers < MAX_SPIKE_WORKERS) {
+                        spawn_spike(cid, state);
                         return;
                     }
 
@@ -651,9 +683,9 @@ private:
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
 
-        // Delegate to Polecat worker if capacity allows
-        if (active_workers < MAX_POLECAT_WORKERS) {
-            spawn_polecat(cid, state);
+        // Delegate to Spike worker if capacity allows
+        if (active_workers < MAX_SPIKE_WORKERS) {
+            spawn_spike(cid, state);
             return;
         }
 

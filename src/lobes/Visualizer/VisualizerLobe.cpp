@@ -69,18 +69,23 @@ private:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NEUROSWARM // NEURAL CORTEX v2.1</title>
+<title>NeuroSwarm — Cognitive Architecture Dashboard</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 :root {
-    --bg: #06060c;
-    --panel-bg: rgba(8,8,16,0.95);
-    --panel-border: rgba(255,255,255,0.06);
-    --accent: #00d4ff;
-    --accent-dim: rgba(0,212,255,0.12);
-    --text: #c8d8e8;
-    --text-dim: #3a4a5a;
-    --font: 'JetBrains Mono','Courier New',monospace;
+    --bg: #f8fafc;
+    --panel-bg: #ffffff;
+    --panel-border: #e2e8f0;
+    --canvas-bg: #f1f5f9;
+    --text: #1e293b;
+    --text-mid: #475569;
+    --text-dim: #94a3b8;
+    --accent: #2563eb;
+    --success: #059669;
+    --warning: #d97706;
+    --danger: #dc2626;
+    --font: 'Inter','Helvetica Neue',Arial,sans-serif;
+    --mono: 'IBM Plex Mono','Menlo',monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -88,230 +93,255 @@ body {
     color: var(--text);
     font-family: var(--font);
     display: grid;
-    grid-template-columns: 280px 1fr 300px;
+    grid-template-columns: 250px 1fr 290px;
     height: 100vh;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
 }
-::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
 
-/* ── LEFT PANEL ── */
+/* LEFT PANEL */
 #left-panel {
     background: var(--panel-bg);
     border-right: 1px solid var(--panel-border);
-    display: flex;
-    flex-direction: column;
-    padding: 18px 14px;
-    gap: 14px;
+    display: flex; flex-direction: column;
+    padding: 20px 16px; gap: 16px;
     overflow-y: auto;
-    z-index: 10;
 }
-.logo-block { text-align: center; padding-bottom: 14px; border-bottom: 1px solid var(--panel-border); }
-.logo-title {
-    font-size: 22px; font-weight: 800; letter-spacing: 3px;
-    color: var(--accent);
-    text-shadow: 0 0 18px rgba(0,212,255,0.8), 0 0 40px rgba(0,212,255,0.3);
-}
-.logo-sub { font-size: 9px; color: var(--text-dim); letter-spacing: 4px; margin-top: 4px; text-transform: uppercase; }
-
 .section-label {
-    font-size: 9px; font-weight: 700; letter-spacing: 3px;
+    font-size: 10px; font-weight: 600; letter-spacing: 1.5px;
     color: var(--text-dim); text-transform: uppercase;
     margin-bottom: 8px;
 }
-
-/* Lobe list */
-#lobe-list { display: flex; flex-direction: column; gap: 5px; }
+#lobe-list { display: flex; flex-direction: column; gap: 2px; }
 .lobe-row {
     display: flex; align-items: center; gap: 8px;
-    padding: 6px 8px; border-radius: 4px;
-    background: rgba(255,255,255,0.02);
-    border: 1px solid rgba(255,255,255,0.03);
-    transition: background 0.3s;
-    position: relative; overflow: hidden;
+    padding: 6px 8px; border-radius: 6px;
+    transition: background 0.2s;
+    cursor: default;
 }
-.lobe-row.active { background: rgba(0,212,255,0.05); border-color: rgba(0,212,255,0.15); }
+.lobe-row:hover { background: #f1f5f9; }
+.lobe-row.active { background: #eff6ff; }
 .lobe-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-    transition: box-shadow 0.3s;
+    border: 1.5px solid currentColor;
+    transition: all 0.3s;
 }
-.lobe-dot.pulse { animation: dotPulse 0.8s ease-out; }
-@keyframes dotPulse {
-    0%   { transform: scale(1); }
-    50%  { transform: scale(1.8); }
-    100% { transform: scale(1); }
-}
+.lobe-dot.filled { background: currentColor; }
+.lobe-dot.pulse { animation: dotPulse 0.5s ease-out; }
+@keyframes dotPulse { 0%{transform:scale(1)} 50%{transform:scale(1.6)} 100%{transform:scale(1)} }
 .lobe-info { flex: 1; min-width: 0; }
-.lobe-name { font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lobe-desc { font-size: 8px; color: var(--text-dim); }
-.lobe-status { font-size: 8px; font-weight: 700; letter-spacing: 1px; }
+.lobe-name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.lobe-desc { font-size: 9px; color: var(--text-dim); font-weight: 400; }
+.lobe-status { font-size: 9px; font-weight: 600; letter-spacing: 0.5px; }
 .lobe-status.idle { color: var(--text-dim); }
-.lobe-status.active { color: var(--accent); text-shadow: 0 0 6px var(--accent); }
-.pulse-ring {
-    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-    width: 12px; height: 12px; border-radius: 50%;
-    border: 1px solid currentColor; opacity: 0;
-}
-.lobe-row.active .pulse-ring { animation: ringPulse 1s infinite; }
-@keyframes ringPulse {
-    0%   { transform: translateY(-50%) scale(0.8); opacity: 0.8; }
-    100% { transform: translateY(-50%) scale(2.0); opacity: 0; }
-}
+.lobe-status.active { color: var(--accent); }
 
-/* Bottom stats */
+/* Drive indicator */
+.drive-box {
+    background: var(--bg); border: 1px solid var(--panel-border);
+    border-radius: 8px; padding: 10px 12px; text-align: center;
+    margin-bottom: 4px;
+}
+.drive-level {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    letter-spacing: 1.5px; color: var(--accent);
+}
+.drive-domain {
+    font-size: 10px; color: var(--text-dim); margin-top: 2px;
+}
+/* Neurogenesis stats row */
+.neuro-stat {
+    flex: 1; text-align: center; padding: 6px 4px;
+    background: var(--bg); border: 1px solid var(--panel-border);
+    border-radius: 6px;
+}
+.neuro-val { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); display: block; }
+.neuro-lbl { font-size: 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat-box {
-    background: rgba(0,0,0,0.4); border: 1px solid var(--panel-border);
-    border-radius: 4px; padding: 8px; text-align: center;
+    background: var(--bg); border: 1px solid var(--panel-border);
+    border-radius: 8px; padding: 10px; text-align: center;
 }
-.stat-val { font-size: 18px; font-weight: 800; color: var(--accent); text-shadow: 0 0 10px rgba(0,212,255,0.5); }
-.stat-lbl { font-size: 8px; color: var(--text-dim); letter-spacing: 1px; text-transform: uppercase; margin-top: 2px; }
+.stat-val { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--text); }
+.stat-lbl { font-size: 9px; color: var(--text-dim); letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; font-weight: 500; }
+.bar-fill { border-radius: 2px; transition: width 0.5s, background 0.5s; }
 
-.stress-bar-wrap { margin-top: 2px; }
-.bar-track { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; margin-top: 4px; }
-.bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s, background 0.5s; }
-
-/* ── CENTER VIEWPORT ── */
-#center { position: relative; overflow: hidden; background: #06060c; }
+/* CENTER */
+#center { position: relative; overflow: hidden; background: var(--canvas-bg); }
 #brain-canvas { display: block; width: 100%; height: 100%; }
-
-/* Scanline overlay */
-#scanlines {
-    position: absolute; inset: 0; pointer-events: none; z-index: 5;
-    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+#tooltip {
+    position: absolute; pointer-events: none; z-index: 20;
+    font-family: var(--font); font-size: 11px;
+    padding: 8px 14px; border-radius: 8px;
+    background: #ffffff; border: 1px solid var(--panel-border);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    color: var(--text); white-space: nowrap;
+    display: none; transform: translate(-50%, -100%); margin-top: -14px;
 }
-/* Radial vignette */
-#vignette {
-    position: absolute; inset: 0; pointer-events: none; z-index: 4;
-    background: radial-gradient(ellipse 70% 65% at 50% 50%, transparent 40%, rgba(6,6,12,0.6) 100%);
-}
-
-/* 2D lobe labels */
-.lobe-label-3d {
-    position: absolute; pointer-events: none; z-index: 6;
-    font-family: var(--font); font-size: 9px; font-weight: 700;
-    letter-spacing: 1px; text-transform: uppercase;
-    padding: 3px 6px; border-radius: 2px;
-    background: rgba(6,6,12,0.75); border: 1px solid rgba(255,255,255,0.08);
-    white-space: nowrap; transition: opacity 0.4s;
-    transform: translate(-50%, -50%);
-}
-
-/* Bottom HUD */
-#bottom-hud {
+#tooltip .tt-name { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
+#tooltip .tt-desc { color: var(--text-dim); font-size: 10px; font-weight: 400; }
+#task-bar {
     position: absolute; bottom: 0; left: 0; right: 0;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 20px;
-    background: linear-gradient(to top, rgba(6,6,12,0.9), transparent);
-    z-index: 8; pointer-events: none;
+    display: flex; align-items: center; gap: 0;
+    background: rgba(255,255,255,0.90);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--panel-border);
+    z-index: 8; font-size: 11px; color: var(--text-mid);
+    overflow: hidden; height: 36px;
 }
-.hud-item { font-size: 10px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
-.hud-live { color: var(--accent); display: flex; align-items: center; gap: 6px; }
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: livePulse 1.2s infinite; }
-@keyframes livePulse { 0%,100% { opacity:1; box-shadow:0 0 4px var(--accent); } 50% { opacity:0.3; box-shadow:none; } }
-.hud-mode { color: #a0b0c0; text-align: center; }
-.hud-mode span { color: var(--accent); }
-.hud-rate { color: var(--text-dim); }
+.tb-label {
+    flex-shrink: 0; padding: 0 14px;
+    font-size: 10px; font-weight: 600; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--text-dim);
+    border-right: 1px solid var(--panel-border);
+    height: 100%; display: flex; align-items: center;
+}
+#task-ticker {
+    flex: 1; display: flex; align-items: center; gap: 0;
+    overflow-x: auto; padding: 0 8px; height: 100%;
+    scroll-behavior: smooth;
+}
+#task-ticker::-webkit-scrollbar { height: 0; }
+.tick-item {
+    flex-shrink: 0; display: flex; align-items: center; gap: 5px;
+    padding: 4px 12px; font-family: var(--mono); font-size: 10px;
+    border-right: 1px solid #f1f5f9; white-space: nowrap;
+    animation: tickIn 0.3s ease-out;
+}
+@keyframes tickIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+.tick-item .tick-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.tick-item.done { color: var(--success); }
+.tick-item.done .tick-dot { background: var(--success); }
+.tick-item.fail { color: var(--danger); }
+.tick-item.fail .tick-dot { background: var(--danger); }
+.tick-item.running { color: var(--accent); }
+.tick-item.running .tick-dot { background: var(--accent); animation: sbPulse 1.5s infinite; }
+@keyframes sbPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.tb-brand {
+    flex-shrink: 0; margin-left: auto; padding: 0 16px;
+    font-size: 11px; font-weight: 600; letter-spacing: 1px;
+    color: #cbd5e1;
+    height: 100%; display: flex; align-items: center; gap: 6px;
+    border-left: 1px solid var(--panel-border);
+    user-select: none;
+}
+.tb-brand span { color: #94a3b8; font-weight: 400; font-size: 10px; letter-spacing: 0; }
 
-/* ── RIGHT PANEL ── */
+/* RIGHT PANEL */
 #right-panel {
     background: var(--panel-bg);
     border-left: 1px solid var(--panel-border);
     display: flex; flex-direction: column;
-    padding: 18px 14px; gap: 14px;
-    overflow-y: auto; z-index: 10;
+    padding: 20px 16px; gap: 16px;
+    overflow-y: auto;
 }
 .r-section { display: flex; flex-direction: column; gap: 6px; }
 .focus-text {
-    font-size: 11px; color: #00ffaa; line-height: 1.4;
-    padding: 8px; background: rgba(0,255,170,0.04);
-    border-left: 2px solid #00ffaa; border-radius: 2px;
-    min-height: 36px;
+    font-size: 12px; color: var(--text); line-height: 1.5;
+    padding: 10px 12px; background: #f0fdf4;
+    border-left: 3px solid var(--success); border-radius: 4px;
+    min-height: 36px; font-weight: 500;
 }
 .thought-text {
-    font-size: 10px; color: #888; font-style: italic; line-height: 1.5;
-    padding: 8px; background: rgba(255,255,255,0.02);
-    border-left: 2px solid rgba(255,255,255,0.1); border-radius: 2px;
+    font-size: 11px; color: var(--text-mid); font-style: italic; line-height: 1.5;
+    padding: 10px 12px; background: var(--bg);
+    border-left: 3px solid #e2e8f0; border-radius: 4px;
     min-height: 36px;
 }
-
-/* Neural stream */
-#neural-stream { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; min-height: 0; }
+#neural-stream { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 .stream-entry {
-    display: flex; align-items: flex-start; gap: 6px;
-    padding: 4px 6px; border-radius: 3px;
-    background: rgba(255,255,255,0.015);
-    animation: streamIn 0.25s ease-out;
-    font-size: 9px;
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 5px 8px; border-radius: 4px;
+    animation: streamIn 0.2s ease-out;
+    font-size: 10px;
 }
-@keyframes streamIn { from { opacity:0; transform:translateX(10px); } to { opacity:1; transform:none; } }
-.stream-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink:0; margin-top:3px; }
+.stream-entry:hover { background: #f8fafc; }
+@keyframes streamIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+.stream-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink:0; margin-top:4px; }
 .stream-body { flex:1; min-width:0; }
-.stream-route { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stream-time { color: var(--text-dim); font-size: 8px; flex-shrink:0; }
-
-/* Tasks */
-#ralph-tasks { display: flex; flex-direction: column; gap: 4px; max-height: 100px; overflow-y: auto; }
-.task-entry {
-    font-size: 9px; padding: 4px 8px; border-radius: 3px;
-    background: rgba(255,255,255,0.02); border-left: 2px solid var(--text-dim);
-}
-.task-entry.done { border-left-color: #00ffaa; color: #00ffaa; }
-.task-entry.fail { border-left-color: #ef4444; color: #ef4444; }
+.stream-route { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.stream-intent { color: var(--text-dim); font-size: 9px; font-family: var(--mono); }
+.stream-time { color: var(--text-dim); font-size: 9px; flex-shrink:0; font-family: var(--mono); }
 </style>
 </head>
 <body>
 
 <!-- LEFT PANEL -->
 <div id="left-panel">
-    <div class="logo-block">
-        <div class="logo-title">NEUROSWARM</div>
-        <div class="logo-sub">Neural Cortex v2.1</div>
-    </div>
-
     <div>
-        <div class="section-label">Cortical Activity</div>
+        <div class="section-label">Active Lobes</div>
         <div id="lobe-list"></div>
     </div>
-
     <div style="margin-top:auto;">
-        <div class="section-label">System Vitals</div>
+        <!-- Drive Level -->
+        <div class="section-label">Active Drive</div>
+        <div id="drive-indicator" class="drive-box">
+            <div class="drive-level" id="drive-level">—</div>
+            <div class="drive-domain" id="drive-domain">awaiting goal</div>
+        </div>
+
+        <!-- Core Metrics: 2x2 grid -->
+        <div class="section-label" style="margin-top:14px;">System Metrics</div>
         <div class="stat-grid">
             <div class="stat-box">
-                <div class="stat-val" id="stat-bus">0</div>
-                <div class="stat-lbl">msg/s</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val" id="stat-rem">0</div>
-                <div class="stat-lbl">REM cycles</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-val" id="stat-success" style="color:#00ffaa;text-shadow:0 0 10px rgba(0,255,170,0.5)">—</div>
+                <div class="stat-val" id="stat-success" style="color:var(--success)">—</div>
                 <div class="stat-lbl">Success Rate</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val" id="stat-stress" style="color:#ef4444;text-shadow:0 0 10px rgba(239,68,68,0.5)">—</div>
-                <div class="stat-lbl">Stress</div>
+                <div class="stat-val" id="stat-stamina" style="color:var(--accent)">—</div>
+                <div class="stat-lbl">Stamina</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val" id="stat-tasks">0</div>
+                <div class="stat-lbl">Tasks Done</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-val" id="stat-rem">0</div>
+                <div class="stat-lbl">REM Cycles</div>
             </div>
         </div>
-        <div class="stress-bar-wrap" style="margin-top:10px;">
-            <div class="section-label" style="margin-bottom:4px;">Cognitive Load</div>
-            <div class="bar-track"><div class="bar-fill" id="stress-bar" style="width:0%;background:#ef4444;"></div></div>
+
+        <!-- Neurogenesis Stats -->
+        <div style="margin-top:10px;display:flex;gap:8px;">
+            <div class="neuro-stat">
+                <span class="neuro-val" id="stat-specialists">0</span>
+                <span class="neuro-lbl">Specialists</span>
+            </div>
+            <div class="neuro-stat">
+                <span class="neuro-val" id="stat-genesis">0</span>
+                <span class="neuro-lbl">Genesis</span>
+            </div>
+            <div class="neuro-stat">
+                <span class="neuro-val" id="stat-apoptosis">0</span>
+                <span class="neuro-lbl">Apoptosis</span>
+            </div>
+        </div>
+
+        <!-- Learning Curve -->
+        <div style="margin-top:14px;">
+            <div class="section-label" style="margin-bottom:4px;">Learning Curve</div>
+            <canvas id="learning-chart" width="240" height="80" style="width:100%;height:80px;border-radius:8px;background:var(--bg);border:1px solid var(--panel-border);"></canvas>
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);margin-top:3px;">
+                <span id="lc-time-start">—</span>
+                <span style="color:var(--success);font-weight:500;">success rate %</span>
+                <span id="lc-time-end">now</span>
+            </div>
         </div>
     </div>
 </div>
 
-<!-- CENTER: 3D BRAIN -->
+<!-- CENTER: NETWORK GRAPH -->
 <div id="center">
     <canvas id="brain-canvas"></canvas>
-    <div id="scanlines"></div>
-    <div id="vignette"></div>
-    <div id="label-container"></div>
-    <div id="bottom-hud">
-        <div class="hud-item hud-live"><div class="live-dot"></div>BUS LIVE</div>
-        <div class="hud-item hud-mode">MODE: <span id="hud-mode-val">REALITY</span></div>
-        <div class="hud-item hud-rate"><span id="hud-rate-val">0</span> MSG/S</div>
+    <div id="tooltip"><div class="tt-name"></div><div class="tt-desc"></div></div>
+    <div id="task-bar">
+        <div class="tb-label">Spike Tasks</div>
+        <div id="task-ticker"></div>
+        <div class="tb-brand">NeuroSwarm <span>v2.2</span></div>
     </div>
 </div>
 
@@ -326,377 +356,404 @@ body {
         <div class="thought-text" id="last-thought">Standby.</div>
     </div>
     <div class="r-section" style="flex:1;min-height:0;display:flex;flex-direction:column;">
-        <div class="section-label">Neural Stream</div>
+        <div class="section-label">Event Stream</div>
         <div id="neural-stream"></div>
-    </div>
-    <div class="r-section">
-        <div class="section-label">Ralph Tasks</div>
-        <div id="ralph-tasks"><div style="color:var(--text-dim);font-size:9px;">No tasks yet.</div></div>
     </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 'use strict';
 
 /* ═══════════════════════════════════════════════════════
-   LOBE DEFINITIONS
+   NODE DEFINITIONS — All 16 core lobes
+   Academic color palette — muted, professional
 ═══════════════════════════════════════════════════════ */
-const LOBES = {
-    frontal:    { name:"Frontal Executive",  component:"frontal_executive",   color:0x00d4ff, hex:"#00d4ff", pos:[0,1.8,2.8],    scale:[2.2,1.8,2.0], desc:"Planning & Goals" },
-    parietal:   { name:"Synaptic Cortex",    component:"synaptic_controller", color:0xa855f7, hex:"#a855f7", pos:[0,3.1,0],      scale:[2.5,1.2,2.0], desc:"LLM Inference" },
-    temporal_l: { name:"Hippocampus",        component:"hippocampus",         color:0xf97316, hex:"#f97316", pos:[-3.5,0,0.5],   scale:[1.2,1.3,2.2], desc:"Semantic Memory" },
-    temporal_r: { name:"Wernicke Cortex",    component:"wernicke_lobe",       color:0xfb923c, hex:"#fb923c", pos:[3.5,0,0.5],    scale:[1.2,1.3,2.2], desc:"Language NLU" },
-    occipital:  { name:"Visual Cortex",      component:"visual_lobe",         color:0x14b8a6, hex:"#14b8a6", pos:[0,0.8,-3.5],   scale:[2.2,1.8,1.2], desc:"Visual Input" },
-    cerebellum: { name:"Motor Cortex",       component:"motor_cortex",        color:0x22c55e, hex:"#22c55e", pos:[0,-2.5,-2.2],  scale:[2.0,1.0,1.6], desc:"Execution" },
-    brainstem:  { name:"Thalamus",           component:"thalamus",            color:0x6366f1, hex:"#6366f1", pos:[0,-3.2,-0.3],  scale:[0.8,1.8,0.8], desc:"Neural Relay" },
-    cingulate:  { name:"Critic Lobe",        component:"critic_lobe",         color:0xf59e0b, hex:"#f59e0b", pos:[0,2.5,0.5],    scale:[1.5,0.7,2.8], desc:"Safety Check" },
-    broca:      { name:"Broca Area",         component:"broca_terminal",      color:0x84cc16, hex:"#84cc16", pos:[-2.2,0.5,2.5], scale:[1.0,1.0,1.0], desc:"User Interface" },
-    autonomic:  { name:"Homeostasis",        component:"homeostasis",         color:0xef4444, hex:"#ef4444", pos:[1.5,-1.5,0.5], scale:[1.2,1.2,1.2], desc:"Stress Monitor" }
+const NODES = {
+    frontal:     { name:"Frontal Executive",  component:"frontal_executive",   color:"#2563eb", x:0.50, y:0.28, r:28, desc:"Planning & Goal Orchestration",   cluster:"executive" },
+    synaptic:    { name:"Synaptic Cortex",    component:"synaptic_controller", color:"#7c3aed", x:0.30, y:0.18, r:24, desc:"LLM Inference Engine",            cluster:"inference" },
+    metacog:     { name:"MetaCognition",      component:"metacognition",       color:"#8b5cf6", x:0.20, y:0.30, r:12, desc:"Self-Observation Layer",          cluster:"inference" },
+    hippocampus: { name:"Hippocampus",        component:"hippocampus",         color:"#c2410c", x:0.16, y:0.48, r:20, desc:"Episodic & Semantic Memory",      cluster:"memory" },
+    rem:         { name:"REM Engine",         component:"rem_engine",          color:"#d97706", x:0.10, y:0.60, r:15, desc:"Sleep & Consolidation",           cluster:"memory" },
+    wernicke:    { name:"Wernicke Cortex",    component:"wernicke_lobe",       color:"#059669", x:0.73, y:0.18, r:15, desc:"Natural Language Understanding",  cluster:"language" },
+    critic:      { name:"Critic Lobe",        component:"critic_lobe",         color:"#ea580c", x:0.76, y:0.34, r:17, desc:"Adversarial Safety Validation",   cluster:"safety" },
+    amygdala:    { name:"Amygdala",           component:"amygdala",            color:"#dc2626", x:0.85, y:0.44, r:14, desc:"Threat Detection & Response",     cluster:"safety" },
+    visual:      { name:"Visual Cortex",      component:"visual_lobe",         color:"#0891b2", x:0.12, y:0.38, r:14, desc:"Filesystem Monitoring (inotify)", cluster:"perception" },
+    motor:       { name:"Motor Cortex",       component:"motor_cortex",        color:"#16a34a", x:0.80, y:0.56, r:21, desc:"Command Execution Engine",        cluster:"motor" },
+    thalamus:    { name:"Thalamus",           component:"thalamus",            color:"#4f46e5", x:0.50, y:0.48, r:23, desc:"ZMQ XPUB/XSUB Message Relay",    cluster:"infra" },
+    basal:       { name:"Basal Ganglia",      component:"basal_ganglia",       color:"#db2777", x:0.58, y:0.66, r:19, desc:"Drive Hierarchy & Neurogenesis",  cluster:"motivation" },
+    homeostasis: { name:"Homeostasis",        component:"homeostasis",         color:"#e11d48", x:0.28, y:0.72, r:15, desc:"Autonomic Stress Regulation",     cluster:"autonomic" },
+    chronos:     { name:"Chronos Lobe",       component:"chronos_lobe",        color:"#f43f5e", x:0.38, y:0.80, r:12, desc:"Circadian & Temporal Awareness",  cluster:"autonomic" },
+    statistics:  { name:"Statistics",         component:"statistics_lobe",     color:"#6366f1", x:0.70, y:0.76, r:11, desc:"Performance Telemetry",           cluster:"infra" },
+    visualizer:  { name:"Visualizer",         component:"visualizer",          color:"#818cf8", x:0.86, y:0.68, r:10, desc:"This Dashboard",                  cluster:"infra" }
 };
 
-const ORIGIN_LOBE = {
-    'frontal_executive':'frontal', 'synaptic_controller':'parietal',
-    'motor_cortex':'cerebellum',   'critic_lobe':'cingulate',
-    'hippocampus':'temporal_l',    'rem_engine':'parietal',
-    'homeostasis':'autonomic',     'visual_lobe':'occipital',
-    'broca_terminal':'broca',      'user_terminal':'broca',
-    'thalamus':'brainstem',        'wernicke_lobe':'temporal_r',
-    'metacognition':'parietal',    'amygdala':'autonomic'
+const EDGES = [
+    {s:'frontal',t:'synaptic'},    {s:'frontal',t:'hippocampus'},
+    {s:'frontal',t:'critic'},      {s:'frontal',t:'motor'},
+    {s:'frontal',t:'thalamus'},    {s:'frontal',t:'basal'},
+    {s:'wernicke',t:'frontal'},    {s:'visual',t:'frontal'},
+    {s:'amygdala',t:'frontal'},    {s:'homeostasis',t:'frontal'},
+    {s:'metacog',t:'frontal'},     {s:'homeostasis',t:'chronos'},
+    {s:'rem',t:'hippocampus'},     {s:'rem',t:'synaptic'},
+    {s:'basal',t:'motor'},         {s:'basal',t:'homeostasis'},
+    {s:'metacog',t:'synaptic'},    {s:'statistics',t:'thalamus'},
+    {s:'critic',t:'amygdala'},     {s:'thalamus',t:'motor'},
+    {s:'thalamus',t:'synaptic'},   {s:'basal',t:'thalamus'}
+];
+
+const CLUSTERS = {
+    executive:  { color:'#2563eb', nodes:['frontal'] },
+    inference:  { color:'#7c3aed', nodes:['synaptic','metacog'] },
+    memory:     { color:'#c2410c', nodes:['hippocampus','rem'] },
+    language:   { color:'#059669', nodes:['wernicke'] },
+    safety:     { color:'#ea580c', nodes:['critic','amygdala'] },
+    perception: { color:'#0891b2', nodes:['visual'] },
+    motor:      { color:'#16a34a', nodes:['motor'] },
+    infra:      { color:'#4f46e5', nodes:['thalamus','statistics','visualizer'] },
+    motivation: { color:'#db2777', nodes:['basal'] },
+    autonomic:  { color:'#e11d48', nodes:['homeostasis','chronos'] }
+};
+
+const ORIGIN_NODE = {
+    'frontal_executive':'frontal', 'synaptic_controller':'synaptic',
+    'motor_cortex':'motor',        'critic_lobe':'critic',
+    'hippocampus':'hippocampus',   'rem_engine':'rem',
+    'homeostasis':'homeostasis',   'visual_lobe':'visual',
+    'thalamus':'thalamus',         'wernicke_lobe':'wernicke',
+    'metacognition':'metacog',     'amygdala':'amygdala',
+    'basal_ganglia':'basal',       'chronos_lobe':'chronos',
+    'statistics_lobe':'statistics','visualizer':'visualizer',
+    'spike_worker':'frontal',      'cerebral_matrix':'thalamus',
+    'broca_terminal':'wernicke',   'user_terminal':'wernicke'
 };
 const INTENT_TARGET = {
-    'inference_request':'parietal',    'execution_request':'cerebellum',
-    'execution_result':'frontal',      'critic_validate':'cingulate',
-    'critic_result':'frontal',         'search_memory':'temporal_l',
-    'search_result':'frontal',         'homeostatic_pulse':'frontal',
-    'embedding_request':'temporal_l',  'visual_stimulus':'frontal',
-    'stimulus':'frontal',              'prompt_update':'frontal',
+    'inference_request':'synaptic',  'inference_result':'frontal',
+    'execution_request':'motor',     'execution_result':'frontal',
+    'critic_validate':'critic',      'critic_result':'frontal',
+    'search_memory':'hippocampus',   'search_result':'frontal',
+    'embedding_request':'hippocampus','homeostatic_pulse':'homeostasis',
+    'visual_stimulus':'frontal',     'stimulus':'frontal',
+    'intrinsic_goal':'frontal',      'intrinsic_goal_request':'basal',
+    'genesis_request':'motor',       'genesis_result':'basal',
+    'inject_lobe':'thalamus',        'lobe_injected':'thalamus',
+    'lobe_terminated':'thalamus',    'lobe_crash':'thalamus',
+    'sleep_cycle_complete':'rem',    'spike_assign':'motor',
+    'spike_ready':'frontal',         'spike_done':'frontal',
+    'specialist_advice':'motor',     'specialist_report':'basal',
+    'threat_assessment':'amygdala',  'metacognitive_report':'metacog'
 };
 
 /* ═══════════════════════════════════════════════════════
    BUILD LEFT PANEL LOBE LIST
 ═══════════════════════════════════════════════════════ */
 const lobeListEl = document.getElementById('lobe-list');
-const lobeRowEls = {};
-Object.entries(LOBES).forEach(([key, L]) => {
+Object.entries(NODES).forEach(([key, N]) => {
     const row = document.createElement('div');
     row.className = 'lobe-row';
     row.id = 'lobe-row-' + key;
     row.innerHTML = `
-        <div class="lobe-dot" id="dot-${key}" style="background:${L.hex};box-shadow:0 0 4px ${L.hex}44;"></div>
+        <div class="lobe-dot" id="dot-${key}" style="color:${N.color};"></div>
         <div class="lobe-info">
-            <div class="lobe-name" style="color:${L.hex}">${L.name}</div>
-            <div class="lobe-desc">${L.desc}</div>
+            <div class="lobe-name">${N.name}</div>
+            <div class="lobe-desc">${N.desc}</div>
         </div>
         <div class="lobe-status idle" id="status-${key}">IDLE</div>
-        <div class="pulse-ring" style="color:${L.hex};border-color:${L.hex};"></div>
     `;
     lobeListEl.appendChild(row);
-    lobeRowEls[key] = row;
 });
 
 /* ═══════════════════════════════════════════════════════
-   THREE.JS SETUP
+   CANVAS SETUP
 ═══════════════════════════════════════════════════════ */
 const canvas = document.getElementById('brain-canvas');
-const center = document.getElementById('center');
+const ctx2 = canvas.getContext('2d');
+const centerEl = document.getElementById('center');
+const tooltip = document.getElementById('tooltip');
+let W = 0, H = 0;
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x06060c, 1);
-
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x06060c, 0.035);
-
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
-camera.position.set(0, 2, 18);
-camera.lookAt(0, 0, 0);
-
-function resizeRenderer() {
-    const w = center.clientWidth, h = center.clientHeight;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+function resize() {
+    W = centerEl.clientWidth;
+    H = centerEl.clientHeight;
+    canvas.width = W * devicePixelRatio;
+    canvas.height = H * devicePixelRatio;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx2.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
 }
-resizeRenderer();
-window.addEventListener('resize', resizeRenderer);
+resize();
+window.addEventListener('resize', resize);
 
-/* ── Lighting ── */
-scene.add(new THREE.AmbientLight(0x112233, 0.6));
-const keyLight = new THREE.PointLight(0x00d4ff, 1.2, 30);
-keyLight.position.set(6, 8, 10);
-scene.add(keyLight);
-const fillLight = new THREE.PointLight(0xa855f7, 0.6, 30);
-fillLight.position.set(-8, -4, -6);
-scene.add(fillLight);
-const rimLight = new THREE.PointLight(0x14b8a6, 0.4, 25);
-rimLight.position.set(0, -6, -8);
-scene.add(rimLight);
+/* ═══════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════ */
+const activity = {};
+const edgeTraffic = {};
+const particles = [];
+let hoveredNode = null;
+let dynamicNodes = {};
+let specialistCount = 0;
 
-/* ── OrbitControls (inline minimal implementation) ── */
-let isDragging = false, lastMouse = {x:0,y:0};
-let spherical = {theta: 0.3, phi: 1.3, r: 18};
-let autoRotate = true, userInteractTimer = null;
-const brainGroup = new THREE.Group();
-scene.add(brainGroup);
+Object.keys(NODES).forEach(k => {
+    activity[k] = { intensity: 0, phase: Math.random() * Math.PI * 2 };
+});
+EDGES.forEach(e => {
+    edgeTraffic[e.s+'|'+e.t] = { intensity: 0, total: 0 };
+    edgeTraffic[e.t+'|'+e.s] = { intensity: 0, total: 0 };
+});
 
-canvas.addEventListener('mousedown', e => {
-    isDragging = true; lastMouse = {x:e.clientX, y:e.clientY};
-    autoRotate = false;
-    clearTimeout(userInteractTimer);
-});
-canvas.addEventListener('mousemove', e => {
-    if (!isDragging) return;
-    const dx = e.clientX - lastMouse.x, dy = e.clientY - lastMouse.y;
-    spherical.theta -= dx * 0.008;
-    spherical.phi   = Math.max(0.3, Math.min(Math.PI - 0.3, spherical.phi + dy * 0.008));
-    lastMouse = {x:e.clientX, y:e.clientY};
-});
-canvas.addEventListener('mouseup', () => {
-    isDragging = false;
-    userInteractTimer = setTimeout(() => { autoRotate = true; }, 3000);
-});
-canvas.addEventListener('mouseleave', () => {
-    isDragging = false;
-    userInteractTimer = setTimeout(() => { autoRotate = true; }, 3000);
-});
-canvas.addEventListener('wheel', e => {
-    spherical.r = Math.max(8, Math.min(35, spherical.r + e.deltaY * 0.04));
-    autoRotate = false;
-    clearTimeout(userInteractTimer);
-    userInteractTimer = setTimeout(() => { autoRotate = true; }, 3000);
-}, {passive:true});
-
-function updateCamera() {
-    const x = spherical.r * Math.sin(spherical.phi) * Math.sin(spherical.theta);
-    const y = spherical.r * Math.cos(spherical.phi);
-    const z = spherical.r * Math.sin(spherical.phi) * Math.cos(spherical.theta);
-    camera.position.set(x, y, z);
-    camera.lookAt(0, 0, 0);
+/* ═══════════════════════════════════════════════════════
+   COLOR UTILITIES
+═══════════════════════════════════════════════════════ */
+function hexToRGB(hex) {
+    return { r:parseInt(hex.slice(1,3),16), g:parseInt(hex.slice(3,5),16), b:parseInt(hex.slice(5,7),16) };
+}
+function rgba(hex, a) {
+    const {r,g,b} = hexToRGB(hex);
+    return 'rgba('+r+','+g+','+b+','+a+')';
 }
 
 /* ═══════════════════════════════════════════════════════
-   BUILD 3D BRAIN
+   POSITION HELPERS
 ═══════════════════════════════════════════════════════ */
-
-/* Outer shell */
-(function buildShell() {
-    const geo = new THREE.SphereGeometry(1, 128, 128);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-        const n = 1 + 0.04*Math.sin(x*2.3) + 0.04*Math.cos(y*1.7) + 0.04*Math.sin(z*2.1);
-        pos.setXYZ(i, x*n, y*n, z*n);
-    }
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
-    geo.scale(4.5, 3.8, 4.0);
-
-    const shellMat = new THREE.MeshPhysicalMaterial({
-        color: 0x112233, transparent: true, opacity: 0.07,
-        roughness: 0.8, metalness: 0.0, side: THREE.DoubleSide
-    });
-    brainGroup.add(new THREE.Mesh(geo, shellMat));
-
-    const wireMat = new THREE.MeshBasicMaterial({
-        color: 0x00d4ff, wireframe: true, transparent: true, opacity: 0.04
-    });
-    brainGroup.add(new THREE.Mesh(geo.clone(), wireMat));
-})();
-
-/* Lobe meshes */
-const lobeMeshes  = {};
-const lobeGlows   = {};
-const lobeActivity= {};   // { intensity, decay }
-const lobeVec3    = {};   // cached THREE.Vector3 for arc spawning
-
-Object.entries(LOBES).forEach(([key, L]) => {
-    const geo = new THREE.SphereGeometry(1, 32, 32);
-
-    const mesh = new THREE.Mesh(geo, new THREE.MeshPhysicalMaterial({
-        color: L.color, emissive: L.color, emissiveIntensity: 0,
-        transparent: true, opacity: 0.22,
-        roughness: 0.5, metalness: 0.1
-    }));
-    mesh.position.set(...L.pos);
-    mesh.scale.set(...L.scale);
-    brainGroup.add(mesh);
-    lobeMeshes[key] = mesh;
-
-    const glow = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({
-        color: L.color, transparent: true, opacity: 0,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.FrontSide
-    }));
-    glow.position.set(...L.pos);
-    glow.scale.set(L.scale[0]*1.5, L.scale[1]*1.5, L.scale[2]*1.5);
-    brainGroup.add(glow);
-    lobeGlows[key] = glow;
-
-    lobeActivity[key] = { intensity: 0 };
-    lobeVec3[key] = new THREE.Vector3(...L.pos);
-});
-
-/* ── Particle field (ambient neural dust) ── */
-(function buildDust() {
-    const count = 800;
-    const verts = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-        verts[i*3]   = (Math.random()-0.5)*16;
-        verts[i*3+1] = (Math.random()-0.5)*13;
-        verts[i*3+2] = (Math.random()-0.5)*13;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-    const mat = new THREE.PointsMaterial({ color:0x00d4ff, size:0.04, transparent:true, opacity:0.25 });
-    scene.add(new THREE.Points(geo, mat));
-})();
+function nx(node) {
+    const n = NODES[node] || dynamicNodes[node];
+    return n ? n.x * W : 0;
+}
+function ny(node) {
+    const n = NODES[node] || dynamicNodes[node];
+    return n ? n.y * H : 0;
+}
 
 /* ═══════════════════════════════════════════════════════
-   LOBE ACTIVATION
+   EDGE GEOMETRY
 ═══════════════════════════════════════════════════════ */
-function activateLobe(key) {
-    if (!lobeMeshes[key]) return;
-    lobeActivity[key].intensity = 1.0;
+function edgeCP(x1,y1,x2,y2,idx) {
+    const mx=(x1+x2)/2, my=(y1+y2)/2;
+    const dx=x2-x1, dy=y2-y1;
+    const len = Math.sqrt(dx*dx+dy*dy) || 1;
+    const dir = (idx%2===0) ? 1 : -1;
+    const off = Math.min(len * 0.15, 50) * dir;
+    return { x: mx + (-dy/len)*off, y: my + (dx/len)*off };
+}
+function quadBez(t,x0,y0,cx,cy,x1,y1) {
+    const u=1-t;
+    return { x: u*u*x0+2*u*t*cx+t*t*x1, y: u*u*y0+2*u*t*cy+t*t*y1 };
+}
 
-    // Left panel update
-    const row    = document.getElementById('lobe-row-' + key);
-    const dot    = document.getElementById('dot-' + key);
+/* ═══════════════════════════════════════════════════════
+   RENDERING — Clean Academic Style
+═══════════════════════════════════════════════════════ */
+
+function drawDensityClouds() {
+    Object.values(CLUSTERS).forEach(cl => {
+        if (!cl.nodes.length) return;
+        let cx=0, cy=0;
+        cl.nodes.forEach(k => { cx += nx(k); cy += ny(k); });
+        cx /= cl.nodes.length; cy /= cl.nodes.length;
+
+        let spread = 70;
+        cl.nodes.forEach(k => {
+            const dx=nx(k)-cx, dy=ny(k)-cy;
+            spread = Math.max(spread, Math.sqrt(dx*dx+dy*dy) + 50);
+        });
+        const cloudR = spread * 2.0;
+
+        const grad = ctx2.createRadialGradient(cx,cy,0,cx,cy,cloudR);
+        grad.addColorStop(0, rgba(cl.color, 0.06));
+        grad.addColorStop(0.5, rgba(cl.color, 0.025));
+        grad.addColorStop(1, rgba(cl.color, 0));
+        ctx2.fillStyle = grad;
+        ctx2.beginPath();
+        ctx2.arc(cx,cy,cloudR,0,Math.PI*2);
+        ctx2.fill();
+    });
+}
+
+function drawEdges() {
+    const allEdges = [...EDGES];
+    Object.keys(dynamicNodes).forEach(dk => {
+        allEdges.push({s:'basal',t:dk});
+        allEdges.push({s:'motor',t:dk});
+    });
+
+    allEdges.forEach((e,i) => {
+        const n1 = NODES[e.s] || dynamicNodes[e.s];
+        const n2 = NODES[e.t] || dynamicNodes[e.t];
+        if (!n1 || !n2) return;
+
+        const x1=nx(e.s), y1=ny(e.s), x2=nx(e.t), y2=ny(e.t);
+        const cp = edgeCP(x1,y1,x2,y2,i);
+
+        const key = e.s+'|'+e.t;
+        const traffic = edgeTraffic[key] || {intensity:0, total:0};
+        const isHov = hoveredNode && (e.s===hoveredNode || e.t===hoveredNode);
+
+        let alpha = 0.08 + Math.min(0.1, traffic.total * 0.002) + traffic.intensity * 0.25;
+        let width = 1 + traffic.intensity * 1.2;
+        let color = '#94a3b8';
+
+        if (isHov) { alpha = 0.4; width = 2; color = n1.color; }
+        if (traffic.intensity > 0.1) color = n1.color;
+
+        ctx2.beginPath();
+        ctx2.moveTo(x1,y1);
+        ctx2.quadraticCurveTo(cp.x,cp.y,x2,y2);
+        ctx2.strokeStyle = rgba(color, alpha);
+        ctx2.lineWidth = width;
+        ctx2.stroke();
+    });
+}
+
+function drawParticles() {
+    particles.forEach(p => {
+        const t = p.t / p.duration;
+        const pos = quadBez(t, p.sx,p.sy, p.cpx,p.cpy, p.tx,p.ty);
+
+        // Subtle trail
+        for (let i = 1; i <= 3; i++) {
+            const tt = Math.max(0, t - i * 0.05);
+            const tp = quadBez(tt, p.sx,p.sy, p.cpx,p.cpy, p.tx,p.ty);
+            ctx2.beginPath();
+            ctx2.arc(tp.x, tp.y, 3 - i*0.6, 0, Math.PI*2);
+            ctx2.fillStyle = rgba(p.color, 0.15 - i*0.04);
+            ctx2.fill();
+        }
+
+        // Head dot
+        ctx2.beginPath();
+        ctx2.arc(pos.x, pos.y, 3.5, 0, Math.PI*2);
+        ctx2.fillStyle = rgba(p.color, 0.7);
+        ctx2.fill();
+    });
+}
+
+function drawNodes() {
+    const allNodes = {...NODES, ...dynamicNodes};
+
+    ctx2.save();
+    Object.entries(allNodes).forEach(([key, N]) => {
+        const x=nx(key), y=ny(key);
+        const act = (activity[key] || {intensity:0}).intensity;
+        const r = N.r * (1 + act * 0.08);
+        const isHov = (key === hoveredNode);
+
+        // Drop shadow
+        ctx2.shadowColor = rgba(N.color, isHov ? 0.25 : 0.1 + act * 0.15);
+        ctx2.shadowBlur = isHov ? 16 : (6 + act * 10);
+        ctx2.shadowOffsetX = 0;
+        ctx2.shadowOffsetY = 2;
+
+        // Node body — solid fill with subtle gradient for depth
+        const bodyGrad = ctx2.createRadialGradient(x - r*0.2, y - r*0.2, 0, x, y, r);
+        const {r:cr,g:cg,b:cb} = hexToRGB(N.color);
+        const lighten = isHov ? 40 : 20;
+        bodyGrad.addColorStop(0, `rgba(${Math.min(255,cr+lighten)},${Math.min(255,cg+lighten)},${Math.min(255,cb+lighten)},0.92)`);
+        bodyGrad.addColorStop(1, rgba(N.color, 0.85));
+        ctx2.fillStyle = bodyGrad;
+        ctx2.beginPath();
+        ctx2.arc(x, y, r, 0, Math.PI*2);
+        ctx2.fill();
+
+        // Clean border
+        ctx2.shadowColor = 'transparent';
+        ctx2.shadowBlur = 0;
+        ctx2.shadowOffsetY = 0;
+        ctx2.strokeStyle = rgba(N.color, isHov ? 0.9 : 0.5);
+        ctx2.lineWidth = isHov ? 2 : 1.5;
+        ctx2.stroke();
+
+        // Activity ring
+        if (act > 0.1) {
+            ctx2.beginPath();
+            ctx2.arc(x, y, r + 4, 0, Math.PI*2);
+            ctx2.strokeStyle = rgba(N.color, act * 0.3);
+            ctx2.lineWidth = 1.5;
+            ctx2.stroke();
+        }
+    });
+    ctx2.restore();
+}
+
+function drawLabels() {
+    const allNodes = {...NODES, ...dynamicNodes};
+    ctx2.textAlign = 'center';
+    ctx2.textBaseline = 'top';
+
+    Object.entries(allNodes).forEach(([key, N]) => {
+        const x=nx(key), y=ny(key);
+        const act = (activity[key] || {intensity:0}).intensity;
+        const isHov = (key === hoveredNode);
+
+        const fontSize = Math.max(8, Math.min(11, N.r * 0.38));
+        ctx2.font = `600 ${fontSize}px 'Inter',sans-serif`;
+
+        const alpha = isHov ? 0.95 : (0.45 + act * 0.5);
+        ctx2.fillStyle = rgba('#1e293b', alpha);
+        ctx2.fillText(N.name, x, y + N.r + 6);
+    });
+}
+
+/* ═══════════════════════════════════════════════════════
+   MAIN RENDER
+═══════════════════════════════════════════════════════ */
+function render(time) {
+    ctx2.clearRect(0,0,W,H);
+
+    // Clean light background
+    ctx2.fillStyle = '#f1f5f9';
+    ctx2.fillRect(0,0,W,H);
+
+    // Subtle grid pattern
+    ctx2.strokeStyle = 'rgba(0,0,0,0.03)';
+    ctx2.lineWidth = 0.5;
+    const gridSize = 40;
+    for (let x = gridSize; x < W; x += gridSize) {
+        ctx2.beginPath(); ctx2.moveTo(x,0); ctx2.lineTo(x,H); ctx2.stroke();
+    }
+    for (let y = gridSize; y < H; y += gridSize) {
+        ctx2.beginPath(); ctx2.moveTo(0,y); ctx2.lineTo(W,y); ctx2.stroke();
+    }
+
+    drawDensityClouds();
+    drawEdges();
+    drawParticles();
+    drawNodes();
+    drawLabels();
+}
+
+/* ═══════════════════════════════════════════════════════
+   ACTIVATION & PARTICLES
+═══════════════════════════════════════════════════════ */
+function activateNode(key) {
+    if (!activity[key]) activity[key] = { intensity: 0, phase: Math.random()*Math.PI*2 };
+    activity[key].intensity = 1.0;
+
+    const row = document.getElementById('lobe-row-' + key);
+    const dot = document.getElementById('dot-' + key);
     const status = document.getElementById('status-' + key);
-    if (row)    { row.classList.add('active'); }
-    if (dot)    { dot.classList.remove('pulse'); void dot.offsetWidth; dot.classList.add('pulse'); }
+    if (row) row.classList.add('active');
+    if (dot) { dot.classList.add('filled'); dot.classList.remove('pulse'); void dot.offsetWidth; dot.classList.add('pulse'); }
     if (status) { status.textContent = 'ACTIVE'; status.className = 'lobe-status active'; }
 }
 
-function decayLobes(dt) {
-    const DECAY = dt / 2500;  // 2.5 s
-    Object.entries(lobeActivity).forEach(([key, act]) => {
-        if (act.intensity <= 0) return;
-        act.intensity = Math.max(0, act.intensity - DECAY);
-        const t = act.intensity;
+function spawnParticle(srcKey, dstKey) {
+    const n1 = NODES[srcKey] || dynamicNodes[srcKey];
+    const n2 = NODES[dstKey] || dynamicNodes[dstKey];
+    if (!n1 || !n2) return;
 
-        lobeMeshes[key].material.emissiveIntensity = t;
-        lobeGlows[key].material.opacity = t * 0.3;
+    const x1=nx(srcKey), y1=ny(srcKey), x2=nx(dstKey), y2=ny(dstKey);
+    const cp = edgeCP(x1,y1,x2,y2,particles.length);
 
-        if (t <= 0) {
-            const row    = document.getElementById('lobe-row-' + key);
-            const status = document.getElementById('status-' + key);
-            if (row)    row.classList.remove('active');
-            if (status) { status.textContent = 'IDLE'; status.className = 'lobe-status idle'; }
-        }
+    particles.push({
+        sx:x1, sy:y1, tx:x2, ty:y2, cpx:cp.x, cpy:cp.y,
+        t:0, duration:600+Math.random()*200,
+        color: n1.color
     });
-}
 
-/* ═══════════════════════════════════════════════════════
-   NEURAL ARC PARTICLES
-═══════════════════════════════════════════════════════ */
-const arcGroup = new THREE.Group();
-scene.add(arcGroup);
-const activeArcs = [];
-
-function spawnArc(srcKey, dstKey) {
-    if (!lobeVec3[srcKey] || !lobeVec3[dstKey]) return;
-    const src = lobeVec3[srcKey].clone();
-    const dst = lobeVec3[dstKey].clone();
-    const mid = src.clone().lerp(dst, 0.5).add(new THREE.Vector3(
-        (Math.random()-0.5)*2, Math.random()*3+2, (Math.random()-0.5)*2
-    ));
-
-    const curve = new THREE.QuadraticBezierCurve3(src, mid, dst);
-    const color = LOBES[srcKey] ? LOBES[srcKey].color : 0x00d4ff;
-    const particleCount = 8;
-    const particles = [];
-
-    for (let i = 0; i < particleCount; i++) {
-        const geo = new THREE.SphereGeometry(0.09, 6, 6);
-        const mat = new THREE.MeshBasicMaterial({
-            color, transparent: true, opacity: 0.9,
-            blending: THREE.AdditiveBlending, depthWrite: false
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        arcGroup.add(mesh);
-        particles.push({ mesh, offset: i / particleCount });
-    }
-
-    activeArcs.push({ curve, particles, t: 0, duration: 700, color });
-}
-
-function updateArcs(dt) {
-    for (let i = activeArcs.length - 1; i >= 0; i--) {
-        const arc = activeArcs[i];
-        arc.t += dt;
-        const progress = Math.min(arc.t / arc.duration, 1);
-
-        arc.particles.forEach(({ mesh, offset }) => {
-            const p = (progress + offset) % 1;
-            const pt = arc.curve.getPoint(p);
-            mesh.position.copy(pt);
-            const fade = Math.sin(p * Math.PI);
-            mesh.material.opacity = fade * 0.9;
-        });
-
-        if (progress >= 1) {
-            arc.particles.forEach(({ mesh }) => { arcGroup.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); });
-            activeArcs.splice(i, 1);
-        }
-    }
-}
-
-/* ═══════════════════════════════════════════════════════
-   2D LABEL OVERLAY
-═══════════════════════════════════════════════════════ */
-const labelContainer = document.getElementById('label-container');
-const labelEls = {};
-const projVec = new THREE.Vector3();
-
-Object.entries(LOBES).forEach(([key, L]) => {
-    const el = document.createElement('div');
-    el.className = 'lobe-label-3d';
-    el.textContent = L.name;
-    el.style.color = L.hex;
-    el.style.borderColor = L.hex + '33';
-    el.style.opacity = '0';
-    labelContainer.appendChild(el);
-    labelEls[key] = el;
-});
-
-function updateLabels() {
-    const w = center.clientWidth, h = center.clientHeight;
-    Object.entries(LOBES).forEach(([key, L]) => {
-        projVec.set(...L.pos);
-        // apply brainGroup rotation
-        projVec.applyMatrix4(brainGroup.matrixWorld);
-        projVec.project(camera);
-
-        const x = (projVec.x * 0.5 + 0.5) * w;
-        const y = (-(projVec.y) * 0.5 + 0.5) * h;
-        const el = labelEls[key];
-        el.style.left = x + 'px';
-        el.style.top  = y + 'px';
-
-        // fade in when lobe is active, dim otherwise
-        const act = lobeActivity[key].intensity;
-        el.style.opacity = (0.3 + act * 0.7).toFixed(2);
-        el.style.textShadow = act > 0.1 ? `0 0 8px ${L.hex}` : 'none';
-
-        // hide if behind camera
-        el.style.display = projVec.z < 1 ? 'block' : 'none';
-    });
-}
-
-/* ═══════════════════════════════════════════════════════
-   IDLE NEURAL SPARKS
-═══════════════════════════════════════════════════════ */
-let idleSparkTimer = 0;
-function tickIdleSparks(dt) {
-    idleSparkTimer += dt;
-    if (idleSparkTimer > 3000 + Math.random()*2000) {
-        idleSparkTimer = 0;
-        const keys = Object.keys(LOBES);
-        const a = keys[Math.floor(Math.random()*keys.length)];
-        let b = keys[Math.floor(Math.random()*keys.length)];
-        if (b === a) b = keys[(keys.indexOf(a)+1) % keys.length];
-        spawnArc(a, b);
-    }
+    const eKey = srcKey+'|'+dstKey;
+    if (!edgeTraffic[eKey]) edgeTraffic[eKey] = {intensity:0, total:0};
+    edgeTraffic[eKey].intensity = 1.0;
+    edgeTraffic[eKey].total++;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -707,154 +764,365 @@ function animate(now) {
     requestAnimationFrame(animate);
     const dt = now - lastTime;
     lastTime = now;
-    if (dt > 200) return;   // tab was hidden
+    if (dt > 200) return;
 
-    if (autoRotate) spherical.theta += 0.003;
-    updateCamera();
+    // Decay activity
+    Object.entries(activity).forEach(([k,a]) => {
+        if (a.intensity > 0) {
+            a.intensity = Math.max(0, a.intensity - dt / 2500);
+            if (a.intensity <= 0) {
+                const row = document.getElementById('lobe-row-' + k);
+                const dot = document.getElementById('dot-' + k);
+                const status = document.getElementById('status-' + k);
+                if (row) row.classList.remove('active');
+                if (dot) dot.classList.remove('filled');
+                if (status) { status.textContent = 'IDLE'; status.className = 'lobe-status idle'; }
+            }
+        }
+    });
 
-    brainGroup.updateMatrixWorld();
-    decayLobes(dt);
-    updateArcs(dt);
-    tickIdleSparks(dt);
-    updateLabels();
+    // Decay edge traffic
+    Object.values(edgeTraffic).forEach(et => {
+        if (et.intensity > 0) et.intensity = Math.max(0, et.intensity - dt / 2000);
+    });
 
-    // gentle pulsing on the key light
-    keyLight.intensity = 1.2 + 0.15 * Math.sin(now * 0.001);
+    // Update particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].t += dt;
+        if (particles[i].t >= particles[i].duration) particles.splice(i,1);
+    }
 
-    renderer.render(scene, camera);
+    render(now);
 }
 requestAnimationFrame(animate);
 
 /* ═══════════════════════════════════════════════════════
-   EVENT POLLING & STATE
+   MOUSE INTERACTION
+═══════════════════════════════════════════════════════ */
+canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+    let found = null;
+    const allNodes = {...NODES, ...dynamicNodes};
+    Object.entries(allNodes).forEach(([key, N]) => {
+        const dx = mx - nx(key), dy = my - ny(key);
+        if (dx*dx+dy*dy < (N.r+6)*(N.r+6)) found = key;
+    });
+
+    hoveredNode = found;
+    if (found) {
+        const N = allNodes[found];
+        tooltip.style.display = 'block';
+        tooltip.style.left = mx + 'px';
+        tooltip.style.top = my + 'px';
+        tooltip.querySelector('.tt-name').textContent = N.name;
+        tooltip.querySelector('.tt-name').style.color = N.color;
+        tooltip.querySelector('.tt-desc').textContent = N.desc;
+        canvas.style.cursor = 'pointer';
+    } else {
+        tooltip.style.display = 'none';
+        canvas.style.cursor = 'default';
+    }
+});
+canvas.addEventListener('mouseleave', () => {
+    hoveredNode = null;
+    tooltip.style.display = 'none';
+});
+
+/* ═══════════════════════════════════════════════════════
+   IDLE SPARKS — Occasional ambient activity
+═══════════════════════════════════════════════════════ */
+setInterval(() => {
+    const keys = Object.keys(NODES);
+    const a = keys[Math.floor(Math.random()*keys.length)];
+    let b = keys[Math.floor(Math.random()*keys.length)];
+    if (b === a) b = keys[(keys.indexOf(a)+1)%keys.length];
+    if (EDGES.some(e => (e.s===a&&e.t===b)||(e.s===b&&e.t===a))) spawnParticle(a, b);
+}, 5000);
+
+/* ═══════════════════════════════════════════════════════
+   DYNAMIC SPECIALIST NODES
+═══════════════════════════════════════════════════════ */
+function addSpecialistNode(name) {
+    const key = name.toLowerCase();
+    if (NODES[key] || dynamicNodes[key]) return;
+
+    specialistCount++;
+    const angle = specialistCount * 1.2;
+    const dist = 0.07 + specialistCount * 0.025;
+    const bx = NODES.basal.x, by = NODES.basal.y;
+
+    dynamicNodes[key] = {
+        name: name.replace(/_/g,' '),
+        component: name.toLowerCase(),
+        color: '#a855f7',
+        x: Math.min(0.92, Math.max(0.08, bx + Math.cos(angle) * dist)),
+        y: Math.min(0.92, Math.max(0.08, by + Math.sin(angle) * dist)),
+        r: 10, desc: 'Generated Specialist Lobe', cluster: 'motivation'
+    };
+    activity[key] = { intensity: 1.0, phase: Math.random()*Math.PI*2 };
+
+    const row = document.createElement('div');
+    row.className = 'lobe-row active';
+    row.id = 'lobe-row-' + key;
+    row.innerHTML = `
+        <div class="lobe-dot filled pulse" id="dot-${key}" style="color:#a855f7;"></div>
+        <div class="lobe-info">
+            <div class="lobe-name">${dynamicNodes[key].name}</div>
+            <div class="lobe-desc">Specialist</div>
+        </div>
+        <div class="lobe-status active" id="status-${key}">ACTIVE</div>
+    `;
+    lobeListEl.appendChild(row);
+    if (CLUSTERS.motivation) CLUSTERS.motivation.nodes.push(key);
+}
+
+function removeSpecialistNode(name) {
+    const key = name.toLowerCase();
+    if (!dynamicNodes[key]) return;
+    delete dynamicNodes[key]; delete activity[key];
+    const row = document.getElementById('lobe-row-' + key);
+    if (row) row.remove();
+    const idx = CLUSTERS.motivation.nodes.indexOf(key);
+    if (idx >= 0) CLUSTERS.motivation.nodes.splice(idx,1);
+}
+
+/* ═══════════════════════════════════════════════════════
+   EVENT POLLING & PROCESSING
 ═══════════════════════════════════════════════════════ */
 let lastSeenTs = 0;
 let msgCount = 0, msgWindowStart = Date.now(), busRate = 0;
 let remCycles = 0;
+let tasksDone = 0;
+let genesisCount = 0;
+let apoptosisCount = 0;
+let activeSpecialists = 0;
+const LC_MAX = 120;
+const lcData = [];
 
-function hexFromLobe(key) { return LOBES[key] ? LOBES[key].hex : '#888'; }
+function hexFromNode(key) { return (NODES[key]||dynamicNodes[key]||{}).color || '#94a3b8'; }
 
 function addStreamEntry(srcKey, intent, dstKey) {
     const stream = document.getElementById('neural-stream');
     const entry = document.createElement('div');
     entry.className = 'stream-entry';
-    const color = hexFromLobe(srcKey || 'frontal');
-    const srcName = srcKey ? LOBES[srcKey].name : (intent || '?');
-    const dstName = dstKey ? LOBES[dstKey].name : '?';
-    const ts = new Date().toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const allN = {...NODES, ...dynamicNodes};
+    const color = hexFromNode(srcKey || 'frontal');
+    const srcName = srcKey && allN[srcKey] ? allN[srcKey].name : '—';
+    const dstName = dstKey && allN[dstKey] ? allN[dstKey].name : '—';
+    const ts = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
     entry.innerHTML = `
         <div class="stream-dot" style="background:${color}"></div>
         <div class="stream-body">
-            <div class="stream-route" style="color:${color}">${srcName} → ${dstName}</div>
-            <div style="color:var(--text-dim);font-size:8px;">${intent}</div>
+            <div class="stream-route">${srcName} → ${dstName}</div>
+            <div class="stream-intent">${intent}</div>
         </div>
         <div class="stream-time">${ts}</div>
     `;
     stream.prepend(entry);
-    while (stream.children.length > 20) stream.removeChild(stream.lastChild);
+    while (stream.children.length > 25) stream.removeChild(stream.lastChild);
 }
 
 function processEvent(ev) {
     msgCount++;
-    const origin  = ev.origin  || '';
-    const intent  = ev.intent  || '';
-    const adapter = ev.adapter || '';
+    const origin = ev.origin || '', intent = ev.intent || '', adapter = ev.adapter || '';
 
-    const srcKey = ORIGIN_LOBE[origin] || null;
-
+    const srcKey = ORIGIN_NODE[origin] || null;
     let dstKey = null;
     if (intent === 'inference_result') {
-        dstKey = adapter === 'critic' ? 'cingulate' : 'frontal';
+        dstKey = adapter === 'critic' ? 'critic' : 'frontal';
     } else {
         dstKey = INTENT_TARGET[intent] || null;
     }
 
-    if (srcKey) activateLobe(srcKey);
-    if (dstKey) activateLobe(dstKey);
-    if (srcKey && dstKey && srcKey !== dstKey) spawnArc(srcKey, dstKey);
+    if (srcKey) activateNode(srcKey);
+    if (dstKey) activateNode(dstKey);
+    if (srcKey && dstKey && srcKey !== dstKey) spawnParticle(srcKey, dstKey);
 
     addStreamEntry(srcKey, intent, dstKey);
 
-    /* Right panel updates */
     if (intent === 'inference_request') {
-        const goalMatch = (ev.text||'').match(/GOAL:\s*(.*)/);
-        if (goalMatch) document.getElementById('active-goal').textContent = goalMatch[1].trim();
+        const m = (ev.text||'').match(/GOAL:\s*(.*)/);
+        if (m) document.getElementById('active-goal').textContent = m[1].trim();
+    }
+    if (intent === 'cognitive_idle') {
+        document.getElementById('active-goal').textContent = 'Idle \u2014 awaiting directive...';
+        document.getElementById('last-thought').textContent = 'Standby.';
     }
     if (intent === 'inference_result' && adapter !== 'critic') {
         try {
             const m = (ev.text||'').match(/"thought"\s*:\s*"([^"]+)"/);
             if (m) document.getElementById('last-thought').textContent = m[1];
-        } catch(e) {}
+        } catch(e){}
     }
     if (intent === 'homeostatic_pulse') {
         const sr = Math.max(0, ev.success_rate || 0);
-        const st = 1 - sr;
+        const stamina = ev.stamina != null ? ev.stamina : -1;
         document.getElementById('stat-success').textContent = (sr*100).toFixed(0)+'%';
-        document.getElementById('stat-stress').textContent  = (st*100).toFixed(0)+'%';
-        document.getElementById('stress-bar').style.width   = (st*100).toFixed(0)+'%';
-        document.getElementById('stress-bar').style.background = st > 0.5 ? '#ef4444' : '#f59e0b';
+
+        // Stamina
+        if (stamina >= 0) {
+            document.getElementById('stat-stamina').textContent = stamina.toFixed(0)+'%';
+            const stColor = stamina < 30 ? 'var(--danger)' : stamina < 60 ? 'var(--warning)' : 'var(--accent)';
+            document.getElementById('stat-stamina').style.color = stColor;
+        }
+
+        lcData.push({t:Date.now(), sr:sr});
+        while (lcData.length > LC_MAX) lcData.shift();
+        drawLearningCurve();
     }
+
+    // Drive level from BasalGanglia
+    if (intent === 'intrinsic_goal') {
+        const drive = ev.drive_level || ev.context && ev.context.match(/Drive: (\w+)/) && RegExp.$1 || '';
+        const domain = ev.domain || '';
+        if (drive) {
+            const driveEl = document.getElementById('drive-level');
+            driveEl.textContent = drive;
+            const driveColors = {
+                'SURVIVAL':'#dc2626','HOMEOSTASIS':'#d97706',
+                'EXPLORATION':'#2563eb','MASTERY':'#7c3aed','SELF_MODIFY':'#db2777'
+            };
+            driveEl.style.color = driveColors[drive] || 'var(--accent)';
+            document.getElementById('drive-indicator').style.borderColor = (driveColors[drive] || 'var(--panel-border)') + '33';
+        }
+        if (domain) {
+            document.getElementById('drive-domain').textContent = domain.replace(/_/g,' ');
+        }
+    }
+
     if (intent === 'sleep_cycle_complete') {
         remCycles++;
         document.getElementById('stat-rem').textContent = remCycles;
     }
 
-    // DREAM / SURGERY / REALITY mode
-    if (intent.includes('dream') || origin.includes('rem')) {
-        document.getElementById('hud-mode-val').textContent = 'DREAM';
-    } else if (intent.includes('surgery') || intent.includes('patch')) {
-        document.getElementById('hud-mode-val').textContent = 'SURGERY';
-    } else {
-        document.getElementById('hud-mode-val').textContent = 'REALITY';
+    // Track task completions
+    if (intent === 'execution_result') {
+        tasksDone++;
+        document.getElementById('stat-tasks').textContent = tasksDone;
     }
 
-    // Ralph tasks
-    if ((ev.cid||'').startsWith('ralph_') || (ev.task_id||'').startsWith('ralph_')) {
-        updateRalphTask(ev.cid || ev.task_id, intent, ev.status);
+    // Neurogenesis / Apoptosis tracking
+    if (intent === 'lobe_injected' && ev.lobe_name) {
+        addSpecialistNode(ev.lobe_name);
+        genesisCount++;
+        activeSpecialists++;
+        document.getElementById('stat-genesis').textContent = genesisCount;
+        document.getElementById('stat-specialists').textContent = activeSpecialists;
+    }
+    if (intent === 'lobe_terminated' && ev.lobe_name) {
+        removeSpecialistNode(ev.lobe_name);
+        apoptosisCount++;
+        activeSpecialists = Math.max(0, activeSpecialists - 1);
+        document.getElementById('stat-apoptosis').textContent = apoptosisCount;
+        document.getElementById('stat-specialists').textContent = activeSpecialists;
+    }
+
+    if ((ev.cid||'').startsWith('intrinsic_') || intent === 'spike_done' || intent === 'spike_assign') {
+        const domain = (ev.text||'').match(/'([^']+)' domain/) ? RegExp.$1 : (ev.domain||intent);
+        updateSpikeTask(ev.cid || ev.task_id || '', intent, ev.status, domain);
     }
 }
 
-const ralphTaskMap = {};
-function updateRalphTask(id, intent, status) {
-    const container = document.getElementById('ralph-tasks');
-    if (container.querySelector('div[style]')) container.innerHTML = '';
-    if (!ralphTaskMap[id]) {
+const spikeTaskMap = {};
+function updateSpikeTask(id, intent, status, domain) {
+    if (!id) return;
+    const ticker = document.getElementById('task-ticker');
+    const shortId = id.length > 20 ? id.slice(-8) : id;
+    const label = domain || intent || shortId;
+
+    if (!spikeTaskMap[id]) {
         const el = document.createElement('div');
-        el.className = 'task-entry';
-        el.id = 'task-' + id;
-        el.textContent = id + ': ' + intent;
-        container.prepend(el);
-        ralphTaskMap[id] = el;
+        el.className = 'tick-item running';
+        el.innerHTML = '<div class="tick-dot"></div>' + label;
+        el.id = 'tick-' + id.replace(/[^a-z0-9]/gi,'_');
+        ticker.appendChild(el);
+        spikeTaskMap[id] = el;
+        // Keep max 30 items, remove oldest
+        while (ticker.children.length > 30) ticker.removeChild(ticker.firstChild);
+        // Auto-scroll to latest
+        ticker.scrollLeft = ticker.scrollWidth;
     }
-    const el = ralphTaskMap[id];
-    if (status === 'success') { el.classList.add('done'); el.textContent = id + ': done'; }
-    if (status === 'fail'   ) { el.classList.add('fail'); el.textContent = id + ': FAILED'; }
+    const el = spikeTaskMap[id];
+    if (status === 'success') {
+        el.className = 'tick-item done';
+        el.innerHTML = '<div class="tick-dot"></div>' + label + ' ✓';
+    }
+    if (status === 'failure' || status === 'fail') {
+        el.className = 'tick-item fail';
+        el.innerHTML = '<div class="tick-dot"></div>' + label + ' ✗';
+    }
 }
 
-/* Bus rate counter */
+/* ═══════════════════════════════════════════════════════
+   LEARNING CURVE
+═══════════════════════════════════════════════════════ */
+function drawLearningCurve() {
+    const cvs = document.getElementById('learning-chart');
+    if (!cvs || lcData.length < 2) return;
+    const c = cvs.getContext('2d');
+    const CW = cvs.width, CH = cvs.height;
+    const pad = {t:8,b:14,l:4,r:4};
+    const gW = CW-pad.l-pad.r, gH = CH-pad.t-pad.b;
+    c.clearRect(0,0,CW,CH);
+
+    c.strokeStyle = '#e2e8f0'; c.lineWidth = 0.5;
+    [0.25,0.5,0.75].forEach(v => {
+        const y = pad.t + gH*(1-v);
+        c.beginPath(); c.moveTo(pad.l,y); c.lineTo(pad.l+gW,y); c.stroke();
+    });
+
+    const grad = c.createLinearGradient(0,pad.t,0,pad.t+gH);
+    grad.addColorStop(0,'rgba(5,150,105,0.15)');
+    grad.addColorStop(1,'rgba(5,150,105,0.02)');
+    c.beginPath(); c.moveTo(pad.l,pad.t+gH);
+    for (let i=0;i<lcData.length;i++) {
+        c.lineTo(pad.l+(i/(LC_MAX-1))*gW, pad.t+gH*(1-lcData[i].sr));
+    }
+    c.lineTo(pad.l+((lcData.length-1)/(LC_MAX-1))*gW, pad.t+gH);
+    c.closePath(); c.fillStyle = grad; c.fill();
+
+    c.beginPath();
+    for (let i=0;i<lcData.length;i++) {
+        const x = pad.l+(i/(LC_MAX-1))*gW, y = pad.t+gH*(1-lcData[i].sr);
+        i===0 ? c.moveTo(x,y) : c.lineTo(x,y);
+    }
+    c.strokeStyle = '#059669'; c.lineWidth = 1.5; c.stroke();
+
+    if (lcData.length > 0) {
+        const lx = pad.l+((lcData.length-1)/(LC_MAX-1))*gW;
+        const ly = pad.t+gH*(1-lcData[lcData.length-1].sr);
+        c.beginPath(); c.arc(lx,ly,3,0,Math.PI*2);
+        c.fillStyle = '#059669'; c.fill();
+        c.strokeStyle = '#ffffff'; c.lineWidth = 1.5; c.stroke();
+    }
+    if (lcData.length > 1) {
+        const ago = Math.round((Date.now()-lcData[0].t)/1000);
+        document.getElementById('lc-time-start').textContent = ago>60 ? Math.round(ago/60)+'m ago' : ago+'s ago';
+    }
+}
+
+/* Bus rate */
 setInterval(() => {
     const now = Date.now();
-    const elapsed = (now - msgWindowStart) / 1000;
-    busRate = elapsed > 0 ? (msgCount / elapsed) : 0;
-    document.getElementById('stat-bus').textContent    = busRate.toFixed(1);
-    document.getElementById('hud-rate-val').textContent = busRate.toFixed(1);
+    const elapsed = (now-msgWindowStart)/1000;
+    busRate = elapsed > 0 ? (msgCount/elapsed) : 0;
     msgCount = 0; msgWindowStart = now;
 }, 2000);
 
+/* Polling */
 async function poll() {
     try {
         const res = await fetch('/events');
         if (!res.ok) return;
         const events = await res.json();
         if (!Array.isArray(events) || events.length === 0) return;
-
         const newEvs = events.filter(e => (e.ui_ts||0) > lastSeenTs);
         if (newEvs.length === 0) return;
         lastSeenTs = Math.max(...newEvs.map(e => e.ui_ts||0));
-
-        // Process oldest-first
         newEvs.slice().reverse().forEach(processEvent);
-    } catch(e) {}
+    } catch(e){}
 }
 setInterval(poll, 500);
 </script>
