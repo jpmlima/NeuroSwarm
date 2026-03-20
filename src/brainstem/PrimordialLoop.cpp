@@ -27,6 +27,7 @@
 #include <VariationEngine.hpp>
 #include <Planner.hpp>
 #include <LLMOracle.hpp>
+#include <NetworkExpander.hpp>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -99,6 +100,16 @@ public:
         std::cout << "[PRIMORDIAL] Phase 6 — Planner self-test." << std::endl;
         phase_planner_selftest();
 
+        // Phase 7: Network Expansion — discover and probe remote hosts
+        if (self_.has_network) {
+            std::cout << "[PRIMORDIAL] Phase 7 — Network expansion." << std::endl;
+            network_ = std::make_unique<NetworkExpander>(pub_);
+            network_->set_local_info(self_.user, self_.arch);
+            phase_network_expansion();
+        } else {
+            std::cout << "[PRIMORDIAL] Phase 7 — Skipped (no network)." << std::endl;
+        }
+
         // Enter service loop — respond to operator/goal requests from other lobes
         service_loop();
     }
@@ -112,6 +123,8 @@ private:
     VariationEngine variation_;
     std::unique_ptr<Planner> planner_;
     std::unique_ptr<LLMOracle> oracle_;
+    std::unique_ptr<NetworkExpander> network_;
+    std::vector<RemoteHost> remote_hosts_;
     WorldState world_state_;  // current known facts about the world
 
     // Helper: collect all postconditions from learned operators as known facts
@@ -635,6 +648,98 @@ private:
         }
         escaped += "'";
         return escaped;
+    }
+
+    // ─── Phase 7: Network Expansion ───
+
+    void phase_network_expansion() {
+        // Discover potential hosts
+        remote_hosts_ = network_->discover_hosts();
+
+        if (remote_hosts_.empty()) {
+            std::cout << "[PRIMORDIAL]   No remote hosts found in SSH config." << std::endl;
+            return;
+        }
+
+        // Probe for reachability (short timeout per host)
+        network_->probe_hosts(remote_hosts_, 3);
+
+        int reachable = 0;
+        for (const auto& h : remote_hosts_) {
+            if (h.reachable) reachable++;
+        }
+
+        if (reachable == 0) {
+            std::cout << "[PRIMORDIAL]   No reachable hosts. Network expansion deferred." << std::endl;
+            return;
+        }
+
+        // Report what we found
+        std::cout << "[PRIMORDIAL]   Reachable hosts:" << std::endl;
+        for (const auto& h : remote_hosts_) {
+            if (!h.reachable) continue;
+            std::cout << "[PRIMORDIAL]     " << h.user << "@" << h.address
+                      << " (" << h.os << " " << h.arch << ")"
+                      << (h.has_kernel ? " [kernel deployed]" : "")
+                      << std::endl;
+        }
+
+        // Update world state
+        world_state_.insert("has_remote_hosts");
+
+        // Learn SSH operator
+        Operator ssh_op;
+        ssh_op.name = "ssh_exec";
+        ssh_op.command_template = "ssh -o BatchMode=yes {user}@{host} '{command}'";
+        ssh_op.parameters = {"user", "host", "command"};
+        ssh_op.preconditions = {"has_remote_hosts"};
+        ssh_op.postconditions = {"remote_execution_available"};
+        ssh_op.language = "bash";
+        ssh_op.learned_from = "network_expansion";
+        ssh_op.record_use(true, 0);
+        registry_.add(ssh_op);
+
+        // Learn SCP operator
+        Operator scp_op;
+        scp_op.name = "scp_copy";
+        scp_op.command_template = "scp -o BatchMode=yes {source} {user}@{host}:{dest}";
+        scp_op.parameters = {"source", "user", "host", "dest"};
+        scp_op.preconditions = {"has_remote_hosts"};
+        scp_op.postconditions = {"file_on_remote"};
+        scp_op.language = "bash";
+        scp_op.learned_from = "network_expansion";
+        scp_op.record_use(true, 0);
+        registry_.add(scp_op);
+
+        // For hosts with kernel already deployed, sync operators
+        for (auto& h : remote_hosts_) {
+            if (h.has_kernel) {
+                auto remote_model = network_->query_remote(h);
+                if (!remote_model.is_null()) {
+                    std::cout << "[PRIMORDIAL]   Remote " << h.address << " has "
+                              << remote_model.value("operators_learned", 0)
+                              << " operators." << std::endl;
+
+                    int imported = network_->sync_operators(h, "data/operators.jsonl");
+                    if (imported > 0) {
+                        std::cout << "[PRIMORDIAL]   Imported " << imported
+                                  << " operators from " << h.address << std::endl;
+                    }
+                }
+            }
+        }
+
+        // Broadcast network map
+        nlohmann::json net_event = {
+            {"origin", "primordial_loop"},
+            {"intent", "network_map"},
+            {"total_hosts", static_cast<int>(remote_hosts_.size())},
+            {"reachable_hosts", reachable}
+        };
+        routing::publish(pub_, net_event);
+
+        std::cout << "[PRIMORDIAL]   Network expansion complete. "
+                  << reachable << " hosts reachable." << std::endl;
     }
 
     // ─── Phase 6: Planner Self-Test ───
