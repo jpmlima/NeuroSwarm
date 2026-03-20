@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <climits>
 #include <regex>
+#include <set>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -33,7 +34,7 @@ public:
             "high_stress_alert", "homeostatic_pulse", "prompt_update",
             "time_pulse", "search_result", "critic_result",
             "intrinsic_goal", "spike_ready", "spike_done",
-            "inference_result", "metabolic_alert"
+            "inference_result", "metabolic_alert", "goal_plan"
         });
 
         load_system_knowledge();
@@ -132,6 +133,9 @@ public:
                 }
                 else if (origin == "basal_ganglia" && intent == "intrinsic_goal") {
                     handle_intrinsic_goal(j);
+                }
+                else if (origin == "primordial_loop" && intent == "goal_plan") {
+                    handle_goal_plan(j);
                 }
                 else if (origin == "spike_worker" && intent == "spike_ready") {
                     handle_spike_ready(j);
@@ -494,6 +498,19 @@ private:
             if (mode == "dream") {
                 std::cout << "[EXECUTIVE] Dream simulation SUCCESS. Collapsing to reality..." << std::endl;
                 commit_to_reality(cid);
+            } else if (!state.plan.empty()) {
+                // Planner has more steps queued — execute next
+                std::string next_cmd = state.plan.front();
+                state.plan.erase(state.plan.begin());
+                state.last_cmd = next_cmd;
+                state.history += "\n[PLANNER] Next operator: " + next_cmd;
+                std::cout << "[EXECUTIVE] Planner step OK. Next: " << next_cmd
+                          << " (" << state.plan.size() << " remaining)" << std::endl;
+                json exec_req = {
+                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                    {"command", next_cmd}, {"mode", "reality"}
+                };
+                dispatch_to_all(exec_req);
             } else {
                 std::cout << "[EXECUTIVE] Reality Check: SUCCESS." << std::endl;
                 if (state.last_mode == "neuro_surgery") {
@@ -683,18 +700,133 @@ private:
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
 
-        // Delegate to Spike worker if capacity allows
+        active_goals[cid] = state;
+
+        // Autopoiesis: try Planner first — use learned operators before LLM
+        if (!domain.empty() && domain != "unknown") {
+            try_planner_first(cid, domain);
+            return;
+        }
+
+        // No domain or unknown — fall back to Spike/LLM
         if (active_workers < MAX_SPIKE_WORKERS) {
+            active_goals.erase(cid);
             spawn_spike(cid, state);
             return;
         }
 
-        active_goals[cid] = state;
-
-        // Query Hippocampus for context, same flow as all goals
         json mem_req = {
             {"cid", cid}, {"origin", "frontal_executive"},
             {"intent", "search_memory"}, {"query", goal}
+        };
+        dispatch_to_all(mem_req);
+    }
+
+    // ─── Autopoiesis: Planner-first execution ───
+    // Before using LLM, ask PrimordialLoop if a plan exists from learned operators.
+    // Maps domain to postcondition, sends goal_request, handles plan response.
+
+    std::set<std::string> pending_plans;  // CIDs awaiting goal_plan response
+
+    void try_planner_first(const std::string& cid, const std::string& domain) {
+        // Map domain to postcondition for the Planner
+        static const std::map<std::string, std::string> domain_goals = {
+            {"file_write",          "can_write_file"},
+            {"file_read",           "can_read_file"},
+            {"file_search",         "can_search_files"},
+            {"process_inspection",  "can_see_processes"},
+            {"network_diagnostics", "network_info_available"},
+            {"source_modification", "can_modify_source"},
+            {"compilation",         "can_create_tool"},
+            {"git_operations",      "know_git_state"},
+            {"system_monitoring",   "know_system_state"},
+            {"data_analysis",       "can_analyse_data"},
+            {"script_creation",     "can_create_script"},
+            {"self_inspection",     "know_self_state"},
+            {"memory_analysis",     "can_analyse_memory"},
+            {"log_analysis",        "can_analyse_logs"}
+        };
+
+        auto it = domain_goals.find(domain);
+        if (it == domain_goals.end()) return;  // unknown domain, skip planner
+
+        pending_plans.insert(cid);
+
+        json req = {
+            {"origin", "frontal_executive"},
+            {"intent", "goal_request"},
+            {"cid", cid},
+            {"goals", json::array({it->second})},
+            {"auto_execute", false},
+            {"auto_generate", false}
+        };
+        dispatch_to_all(req);
+
+        std::cout << "[EXECUTIVE] Planner query sent: domain='" << domain
+                  << "' goal='" << it->second << "' [CID: " << cid << "]" << std::endl;
+    }
+
+    void handle_goal_plan(const json& data) {
+        std::string cid = data.value("cid", "");
+        if (!pending_plans.count(cid)) return;
+        pending_plans.erase(cid);
+
+        auto it = active_goals.find(cid);
+        if (it == active_goals.end()) return;
+        auto& state = it->second;
+
+        bool success = data.value("success", false);
+        auto steps = data.value("steps", json::array());
+
+        if (success && !steps.empty()) {
+            // Plan found — execute steps directly via MotorLobe, no LLM needed
+            std::cout << "[EXECUTIVE] PLANNER HIT: " << steps.size()
+                      << " operator steps for domain '" << state.domain << "'. Executing without LLM." << std::endl;
+
+            // Execute the first step (chained via process_observation on success)
+            auto& step = steps[0];
+            std::string cmd = step.value("command", "");
+            if (cmd.empty()) {
+                std::cout << "[EXECUTIVE] Planner step has no command. Falling back to LLM." << std::endl;
+                fallback_to_llm(cid);
+                return;
+            }
+
+            // Store remaining steps in plan for sequential execution
+            state.plan.clear();
+            for (size_t i = 1; i < steps.size(); i++) {
+                std::string step_cmd = steps[i].value("command", "");
+                if (!step_cmd.empty()) state.plan.push_back(step_cmd);
+            }
+
+            state.last_cmd = cmd;
+            state.last_mode = "reality";
+            state.history += "\n[PLANNER] Executing learned operator: " + cmd;
+
+            json exec_req = {
+                {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                {"command", cmd}, {"mode", "reality"}
+            };
+            dispatch_to_all(exec_req);
+        } else {
+            // No plan — fall back to LLM inference
+            auto gaps = data.value("gaps", json::array());
+            std::cout << "[EXECUTIVE] PLANNER MISS: no plan for domain '" << state.domain << "'";
+            if (!gaps.empty()) std::cout << " (gaps: " << gaps.dump() << ")";
+            std::cout << ". Falling back to LLM." << std::endl;
+            fallback_to_llm(cid);
+        }
+    }
+
+    void fallback_to_llm(const std::string& cid) {
+        auto it = active_goals.find(cid);
+        if (it == active_goals.end()) return;
+        auto& state = it->second;
+
+        // Proceed with normal LLM-based flow: memory search → inference
+        json mem_req = {
+            {"cid", cid}, {"origin", "frontal_executive"},
+            {"intent", "search_memory"}, {"query", state.goal}
         };
         dispatch_to_all(mem_req);
     }
