@@ -437,26 +437,29 @@ private:
         dispatch_to_all(real_req);
     }
 
-    // Detect conversational queries that don't need bash commands
+    // Detect whether user input is an actionable goal (needs bash) or conversation
     bool is_conversational(const std::string& text) {
         std::string lower = text;
         for (auto& c : lower) c = std::tolower(c);
-        static const std::vector<std::string> patterns = {
-            "who are you", "what are you", "what is your name", "what's your name",
-            "quem es tu", "qual e o teu nome", "como te chamas",
-            "hello", "hi ", "hey ", "ola", "olá", "bom dia", "boa tarde", "boa noite",
-            "how are you", "como estas", "como estás",
-            "what can you do", "o que consegues fazer", "o que sabes fazer",
-            "help", "ajuda",
-            "tell me about yourself", "fala sobre ti", "descreve-te",
-            "thank", "obrigad",
+
+        // Actionable keywords — if present, treat as a goal for the bash pipeline
+        static const std::vector<std::string> action_words = {
+            "create ", "build ", "compile ", "install ", "run ", "execute ",
+            "find ", "search ", "delete ", "remove ", "move ", "copy ",
+            "make ", "write ", "read ", "open ", "close ", "start ", "stop ",
+            "list ", "show me ", "download ", "upload ", "deploy ", "test ",
+            "fix ", "update ", "modify ", "change ", "edit ", "add ",
+            "cria ", "compila ", "instala ", "corre ", "executa ",
+            "apaga ", "remove ", "move ", "copia ", "faz ", "escreve ",
+            "git ", "cmake ", "npm ", "pip ", "docker ", "ssh ",
+            "cat ", "grep ", "ls ", "cd ", "mkdir ", "rm ", "cp ", "mv ",
         };
-        for (const auto& p : patterns) {
-            if (lower.find(p) != std::string::npos) return true;
+        for (const auto& w : action_words) {
+            if (lower.find(w) != std::string::npos) return false;
         }
-        // Short messages ending with ? are likely questions about the system
-        if (lower.size() < 60 && lower.back() == '?') return true;
-        return false;
+
+        // Everything else from a user terminal is conversational
+        return true;
     }
 
     void handle_conversational(const std::string& cid, const std::string& text) {
