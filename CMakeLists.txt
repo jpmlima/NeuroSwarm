@@ -76,6 +76,9 @@ target_link_libraries(statistics_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
 add_executable(basal_ganglia src/lobes/BasalGanglia/BasalGangliaLobe.cpp)
 target_link_libraries(basal_ganglia PRIVATE zmq nlohmann_json::nlohmann_json)
 
+add_executable(concept_lobe src/lobes/ConceptLobe/ConceptLobe.cpp)
+target_link_libraries(concept_lobe PRIVATE zmq nlohmann_json::nlohmann_json)
+
 # 5. Spike Workers (Ephemeral)
 add_executable(spike_worker src/workers/SpikeWorker.cpp)
 target_link_libraries(spike_worker PRIVATE zmq nlohmann_json::nlohmann_json)

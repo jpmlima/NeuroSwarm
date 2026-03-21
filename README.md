@@ -75,6 +75,10 @@ graph TD
         BG[BasalGanglia — Intrinsic Motivation\nFitness F · Dopamine · RLAIF\nGenome · Meta-Templates\nNeurogenesis · Lateral Inhibition]
     end
 
+    subgraph REPRESENTATION ["Internal Representations"]
+        CX[ConceptLobe — Concept Space\nOnline Clustering · Abstraction\nPattern Extraction · Transfer]
+    end
+
     subgraph AUTONOMIC ["Autonomic Regulation"]
         HM[Homeostasis — Telemetry · Stamina]
         MC[MetaCognition — Reflective Diary]
@@ -113,6 +117,9 @@ graph TD
     TH --> VZ
     TH --> BG
     MT -->|execution_result| PL
+    MT -->|execution_result| CX
+    CX -->|concept_update| TH
+    CX -->|concept_response| FE
 ```
 
 ---
@@ -249,6 +256,7 @@ This enables structural adaptation without system restart — analogous to adult
 | **ChronosLobe** | `chronos_lobe` | Temporal awareness — time_pulse with ISO timestamp, uptime, circadian phase |
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — per-cycle metrics to `data/metrics/` in JSONL |
 | **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, neurogenesis trigger |
+| **ConceptLobe** | `concept_lobe` | Learned internal representations — online clustering over embeddings, emergent abstractions, parameterised patterns |
 | **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
 | *Specialists* | `build/{domain}_specialist` | Runtime-generated lobes for chronically failing domains (via neurogenesis) |
 
@@ -310,6 +318,9 @@ Core intents:
 | `kernel_deployed` | NE → | Remote kernel binary deployed via SSH |
 | `remote_kernel_started` | NE → | Remote PrimordialLoop instance started |
 | `rlaif_reinforce` | FE → BG | Reinforcement signal with executed command chain and magnitude |
+| `concept_query` | → CL | Query concept space for similar operations |
+| `concept_response` | CL → | Nearest concepts with abstractions, patterns, success rates |
+| `concept_update` | CL → | Periodic broadcast of cluster state changes |
 | `operators_synced` | NE → | Novel operators imported from remote instance |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
@@ -403,6 +414,18 @@ xdg-open http://localhost:8080
 - [x] **Meta-templates** — specialist C++ template evolves genetically. Population of parameter variants (report interval, cache size, keyword count) with crossover and mutation. Fitness feedback from specialist reports drives selection
 - [x] **Runtime assertions** — `NS_ASSERT`, `NS_PRECONDITION`, `NS_POSTCONDITION`, `NS_INVARIANT` macros with JSONL logging to `data/assertions.jsonl`. `ScopedRollback` RAII guard for neuro-surgery. Compilable out with `-DNS_NO_ASSERTIONS`
 - [x] **Full system test** — end-to-end test suite (`full_system_test`) verifying Thalamus connectivity, bus round-trip, intrinsic goal cycle, execution pipeline, dopamine signal flow, self-model persistence, and RLAIF reinforcement delivery
+
+---
+
+## XII. AGI Roadmap — Open Problems
+
+These are the fundamental capability gaps between the current system and general intelligence. Each is a research-grade problem with no known complete solution.
+
+- [ ] **1. Internal representations** — Replace hardcoded domain labels with learned vector representations. Each execution is embedded into a concept space. Similar operations cluster together. The system discovers its own abstractions (e.g., `cat /etc/hostname` and `cat /etc/os-release` are recognised as the same operation — `read_content` — with different parameters). *Status: ConceptLobe implemented — online clustering over Nomic embeddings with automatic abstraction inference, pattern extraction, and parameter discovery.*
+- [ ] **2. Causal world model** — Maintain a learned graph of cause-effect relationships from executions. "When I did X, Y changed." Enables prediction ("if I do X, what will happen?"), counterfactual reasoning ("if I hadn't done X, would Y have happened?"), and planning with foresight rather than operator chaining.
+- [ ] **3. Abstraction hierarchy** — Discover multi-level abstractions autonomously. Not just `cat <path>` = `read_content`, but `read_content` + `search_content` = `information_retrieval`. Compositional concept formation that builds upward from primitives without human-defined taxonomies.
+- [ ] **4. Semantic compositionality** — Compose *concepts*, not just commands. "Backup" = "copy" + "before modification" + "to safe location". The system should invent new composite operations from the meaning of their parts, not from syntactic concatenation.
+- [ ] **5. Recursive meta-cognition** — Model its own knowledge gaps structurally: "I cannot solve X → because I lack operator with precondition Y → I should explore situations where Y is achievable." Self-directed learning that targets specific deficiencies rather than random exploration.
 
 ---
 
