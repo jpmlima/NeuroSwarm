@@ -72,7 +72,7 @@ graph TD
     end
 
     subgraph MOTIVATION ["Motivation and Evolution"]
-        BG[BasalGanglia — Intrinsic Motivation\nFitness F · Dopamine · RLAIF\nGenome · Meta-Templates\nNeurogenesis · Lateral Inhibition]
+        BG[BasalGanglia — Intrinsic Motivation\nFitness F · Dopamine · RLAIF\nGenome · BK-tree Validation\nNeurogenesis · Lateral Inhibition]
     end
 
     subgraph REPRESENTATION ["Internal Representations"]
@@ -82,7 +82,7 @@ graph TD
 
     subgraph AUTONOMIC ["Autonomic Regulation"]
         HM[Homeostasis — Telemetry · Stamina]
-        MC[MetaCognition — Reflective Diary]
+        MC[MetaCognition — Knowledge Gaps\nError Classification · Preconditions]
         CH[Chronos — Temporal Awareness]
         ST[Statistics — Metrics Aggregation]
     end
@@ -102,6 +102,7 @@ graph TD
     FE --> CL --> FE
     FE --> MT --> FE
     FE -->|rlaif_reinforce| BG
+    FE -->|validate_command| BG
     FE -.->|fork+exec| SW
     HP <--> FE
     REM --> FE
@@ -140,13 +141,16 @@ The system runs a continuous autonomous loop with no external prompting:
                learned operators. If a plan exists, execute steps sequentially via MotorLobe
       Tier 2 — Suggested Commands: try BasalGanglia's domain-specific command templates
       Tier 3 — LLM Oracle: structured prompt → local inference → grammar-constrained output
-3. CriticLobe validates the action (pattern blacklist + scope check + adversarial LLM)
-4. MotorLobe executes (reality / dream / neuro-surgery mode)
-5. PrimordialLoop learns: successful command → new operator with inferred postconditions
-6. BasalGanglia updates domain statistics and prediction errors
-7. Hippocampus stores the execution as an episodic engram
-8. If stamina low → REM Engine consolidates memories, fine-tunes local model
-9. If domain chronically failing → domain resolution → variation → neurogenesis
+3. Command validation gate: local filter (blacklist, prose detection) + async BK-tree
+   fuzzy matching (Levenshtein distance to known-good commands). Rejects garbage.
+4. CriticLobe validates the action (pattern blacklist + scope check + adversarial LLM)
+5. MotorLobe executes (reality / dream / neuro-surgery mode)
+6. PrimordialLoop learns: successful command → new operator with inferred postconditions
+7. BasalGanglia updates domain statistics, prediction errors, and BK-tree
+8. MetaCognition classifies errors, updates knowledge gap graph, infers precondition chains
+9. Hippocampus stores the execution as an episodic engram
+10. If stamina low → REM Engine consolidates memories, fine-tunes local model
+11. If domain chronically failing → domain resolution → variation → neurogenesis
 ```
 
 The three-tier pipeline ensures the LLM is a **last resort**. As the operator registry grows, Tier 1 resolves an increasing fraction of goals without any LLM call.
@@ -254,13 +258,13 @@ This enables structural adaptation without system restart — analogous to adult
 | **Homeostasis** | `homeostasis` | System telemetry — CPU/RAM/GPU monitoring, stamina management, stress signalling |
 | **WernickeLobe** | `wernicke_lobe` | Natural language understanding — intent classification, entity extraction |
 | **Amygdala** | `amygdala` | Emotional gating — priority assignment and stress tagging |
-| **MetaCognition** | `metacognition` | Self-reflective diary — internal state narration |
+| **MetaCognition** | `metacognition` | Recursive meta-cognition — error classification, knowledge gap graph, precondition chains, exploration targets |
 | **VisualLobe** | `visual_lobe` | Filesystem watcher — detects environmental state changes |
 | **AuditoryLobe** | `auditory_lobe` | Voice input pipeline via Whisper.cpp |
 | **Visualizer** | `visualizer` | 2D network graph dashboard (Canvas, port 8080) |
 | **ChronosLobe** | `chronos_lobe` | Temporal awareness — time_pulse with ISO timestamp, uptime, circadian phase |
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — per-cycle metrics to `data/metrics/` in JSONL |
-| **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, neurogenesis trigger |
+| **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, neurogenesis trigger, BK-tree command validation |
 | **ConceptLobe** | `concept_lobe` | Learned internal representations — online clustering over embeddings, emergent abstractions, parameterised patterns |
 | **CausalLobe** | `causal_lobe` | Learned causal world model — temporal correlation of actions→effects, Bayesian confidence, causal lift, prediction queries |
 | **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
@@ -328,6 +332,12 @@ Core intents:
 | `concept_response` | CL → | Nearest concepts with abstractions, patterns, success rates |
 | `concept_update` | CL → | Periodic broadcast of cluster state changes |
 | `operators_synced` | NE → | Novel operators imported from remote instance |
+| `validate_command` | FE → BG | Request BK-tree fuzzy validation of a command before execution |
+| `command_validated` | BG → FE | Validation result: valid/invalid, Levenshtein distance, nearest alternative |
+| `exploration_target` | MC → | Deepest actionable knowledge gap for directed learning |
+| `knowledge_gap` | MC → | Summary of structural knowledge gaps with precondition chains |
+| `causal_prediction` | CA → FE | Predicted effects of a proposed command with confidence scores |
+| `causal_update` | CA → | Causal graph state changes (new edges, strengthened links) |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
@@ -420,6 +430,8 @@ xdg-open http://localhost:8080
 - [x] **Meta-templates** — specialist C++ template evolves genetically. Population of parameter variants (report interval, cache size, keyword count) with crossover and mutation. Fitness feedback from specialist reports drives selection
 - [x] **Runtime assertions** — `NS_ASSERT`, `NS_PRECONDITION`, `NS_POSTCONDITION`, `NS_INVARIANT` macros with JSONL logging to `data/assertions.jsonl`. `ScopedRollback` RAII guard for neuro-surgery. Compilable out with `-DNS_NO_ASSERTIONS`
 - [x] **Full system test** — end-to-end test suite (`full_system_test`) verifying Thalamus connectivity, bus round-trip, intrinsic goal cycle, execution pipeline, dopamine signal flow, self-model persistence, and RLAIF reinforcement delivery
+- [x] **BK-tree command validation** — Burkhard-Keller tree indexes all successful commands in the genome using Levenshtein distance. Three uses: (1) **validation gate** — FrontalExecutive rejects LLM-generated commands that are too far from any known-good command (adaptive threshold: `max(4, 20% of length)`, capped at 15); (2) **fuzzy genome retrieval** — `nearest(cmd, k)` finds the closest successful commands for suggestions; (3) **genome compaction** — clusters commands within distance 3 and keeps only the fittest representative, preventing near-duplicate bloat. Local fast filter catches placeholder patterns (`/path/to/`, `REAL_BASH_CMD`), prose masquerading as commands, and over-long strings. Async BK-tree validation via `validate_command`/`command_validated` intents provides distance metrics and alternative suggestions
+- [x] **Recursive meta-cognition (enhanced)** — MetaCognition now classifies commands locally (mirroring BasalGanglia's keyword rules) to populate domain fields that motor_cortex doesn't include. 16 error pattern types, knowledge gap graph with precondition chain inference, periodic exploration target publication. Gaps auto-resolve when domain success exceeds 70%
 
 ---
 

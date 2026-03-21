@@ -36,7 +36,8 @@ public:
             "intrinsic_goal", "spike_ready", "spike_done",
             "inference_result", "metabolic_alert", "goal_plan",
             "primordial_ready", "dopamine_signal",
-            "concept_transfer", "concept_response"
+            "concept_transfer", "concept_response",
+            "command_validated"
         });
 
         load_system_knowledge();
@@ -159,6 +160,10 @@ public:
                 }
                 else if (origin == "concept_lobe" && intent == "concept_response") {
                     handle_concept_response(j);
+                }
+                // BK-tree validation response from BasalGanglia (async feedback)
+                else if (origin == "basal_ganglia" && intent == "command_validated") {
+                    handle_command_validated(j);
                 }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
                     std::string adapter = j.value("adapter", "");
@@ -421,11 +426,8 @@ private:
         state.last_cmd  = cmd;
         state.last_mode = mode;
 
-        json dream_req = {
-            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-            {"command", cmd}, {"mode", "dream"}
-        };
-        dispatch_to_all(dream_req);
+        // Validate LLM-generated command before dream execution
+        dispatch_validated_execution(cid, cmd, "dream");
     }
 
     void commit_to_reality(const std::string& cid) {
@@ -1224,6 +1226,139 @@ private:
         };
         dispatch_to_all(idle);
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Command validation — local fast filter + async BK-tree feedback
+    // ──────────────────────────────────────────────────────────────────────
+
+    // Local fast validation: catches obvious garbage before execution
+    // Returns empty string if valid, rejection reason otherwise
+    std::string validate_command_local(const std::string& cmd) {
+        if (cmd.empty()) return "empty";
+        if (cmd.size() > 500) return "too_long";
+
+        // Placeholder/template patterns that LLMs love to hallucinate
+        static const std::vector<std::string> blacklist = {
+            "/path/to/", "REAL_BASH_CMD", "your_file", "example_",
+            "<file>", "<path>", "<command>", "<url>", "<directory>",
+            "INSERT_", "TODO_", "${VARIABLE}", "placeholder",
+            "REPLACE_THIS", "your_command", "some_file",
+            "/home/user/", "my_project/", "your_project/"
+        };
+        for (auto& pat : blacklist) {
+            if (cmd.find(pat) != std::string::npos)
+                return "blacklisted:" + pat;
+        }
+
+        // Detect commands that are just prose (no valid command structure)
+        // Valid commands start with a word that could be a binary
+        if (cmd.size() > 5) {
+            int spaces_before_first_slash_or_alpha = 0;
+            bool has_valid_start = false;
+            for (char c : cmd) {
+                if (c == ' ') { spaces_before_first_slash_or_alpha++; continue; }
+                if (std::isalpha(c) || c == '/' || c == '.' || c == '~') {
+                    has_valid_start = true;
+                }
+                break;
+            }
+            if (!has_valid_start) return "invalid_start";
+
+            // Reject if it looks like English prose (>50% spaces and common words)
+            int space_count = 0;
+            for (char c : cmd) if (c == ' ') space_count++;
+            float space_ratio = (float)space_count / cmd.size();
+
+            // Commands with >40% spaces and no pipe/redirect/semicolon are likely prose
+            if (space_ratio > 0.40f &&
+                cmd.find('|') == std::string::npos &&
+                cmd.find('>') == std::string::npos &&
+                cmd.find(';') == std::string::npos &&
+                cmd.find('&') == std::string::npos) {
+                // Check for common English sentence starters
+                std::string lower = cmd.substr(0, 20);
+                for (auto& c : lower) c = std::tolower(c);
+                static const std::vector<std::string> prose_starts = {
+                    "i will ", "i need ", "let me ", "please ", "the ", "this ",
+                    "we should ", "you can ", "it seems ", "try to ", "we need "
+                };
+                for (auto& ps : prose_starts) {
+                    if (lower.find(ps) == 0) return "prose_detected";
+                }
+            }
+        }
+
+        return "";  // valid
+    }
+
+    // Wrap execution_request dispatch with validation gate
+    void dispatch_validated_execution(const std::string& cid, const std::string& cmd,
+                                       const std::string& mode) {
+        // Local fast validation
+        std::string rejection = validate_command_local(cmd);
+        if (!rejection.empty()) {
+            std::cout << "[EXECUTIVE] COMMAND REJECTED (local): " << rejection
+                      << " cmd='" << cmd.substr(0, 60) << "'" << std::endl;
+
+            // Treat as failure — skip execution entirely
+            if (active_goals.count(cid)) {
+                auto& state = active_goals[cid];
+                state.history += "\n[VALIDATION FAILED] " + rejection + ": " + cmd.substr(0, 100);
+                state.retries++;
+
+                if (!state.suggested_commands.empty()) {
+                    // Try next suggested command
+                    try_suggested_commands(cid);
+                } else if (state.retries < 8) {
+                    request_thought(cid, "Your previous command was REJECTED by validation (" + rejection
+                                   + "): '" + cmd.substr(0, 100) + "'. Provide a REAL bash command. "
+                                   "No placeholders, no prose. Just a working command.");
+                } else {
+                    publish_intrinsic_result(cid, false);
+                    active_goals.erase(cid);
+                    broadcast_idle_if_empty();
+                }
+            }
+            return;
+        }
+
+        // Command passes local validation — execute it
+        json exec_req = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+            {"command", cmd}, {"mode", mode}
+        };
+        dispatch_to_all(exec_req);
+
+        // Also send async BK-tree validation for metrics/learning
+        json validate_req = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "validate_command"},
+            {"command", cmd}
+        };
+        dispatch_to_all(validate_req);
+    }
+
+    // Handle async BK-tree validation response (for learning, not blocking)
+    void handle_command_validated(const json& j) {
+        bool valid = j.value("valid", true);
+        std::string cmd = j.value("command", "");
+        int distance = j.value("distance", 0);
+        std::string reason = j.value("reason", "");
+
+        if (!valid) {
+            // Log for observability — future: could interrupt execution
+            std::cout << "[EXECUTIVE] BK-TREE: command distant from known-good (dist="
+                      << distance << " reason=" << reason << ")" << std::endl;
+
+            // Track rejected commands for genome feedback
+            bk_rejections++;
+            if (j.contains("suggestion")) {
+                std::string suggestion = j.value("suggestion", "");
+                std::cout << "[EXECUTIVE] BK-TREE SUGGESTION: " << suggestion.substr(0, 80) << std::endl;
+            }
+        }
+    }
+
+    int bk_rejections = 0;  // counter for observability
 
     void dispatch_to_all(const json& data) {
         routing::publish(pub, data);

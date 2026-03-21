@@ -205,6 +205,10 @@ private:
         std::string cid = event.value("cid", "");
         bool success = (status == "success");
 
+        // motor_cortex doesn't include domain — classify locally
+        if (domain.empty() && !cmd.empty()) {
+            domain = classify_domain(cmd);
+        }
         if (domain.empty()) return;
 
         if (success) {
@@ -626,6 +630,55 @@ private:
         } catch (const std::exception& e) {
             std::cerr << "[META-COGNITION] Failed to load state: " << e.what() << std::endl;
         }
+    }
+    // ─── Lightweight Domain Classifier ───────────────────────
+    // Mirrors BasalGanglia's classification_rules so MetaCognition
+    // can classify commands from motor_cortex (which doesn't include domain)
+
+    std::string classify_domain(const std::string& cmd) {
+        // Strip shell wrappers
+        std::string stripped = cmd;
+        for (const auto& prefix : {"/bin/bash -c ", "/bin/sh -c ", "bash -c ", "sh -c "}) {
+            std::string p(prefix);
+            if (stripped.find(p) == 0) {
+                stripped = stripped.substr(p.size());
+                if (stripped.size() >= 2) {
+                    char q = stripped.front();
+                    if ((q == '"' || q == '\'') && stripped.back() == q)
+                        stripped = stripped.substr(1, stripped.size() - 2);
+                }
+                break;
+            }
+        }
+
+        std::string lower = stripped;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+        // Same ordered rules as BasalGanglia — most specific first
+        struct Rule { std::string domain; std::vector<std::string> keywords; };
+        static const std::vector<Rule> rules = {
+            {"self_inspection",     {"self_model", "neuroswarm", "du -s"}},
+            {"memory_analysis",     {"engram", "memory_index", "system_knowledge", "data/engrams"}},
+            {"git_operations",      {"git "}},
+            {"compilation",         {"cmake", "make ", "make\t", "gcc ", "g++ ", "clang "}},
+            {"network_diagnostics", {"ss ", "netstat", "nc ", "curl ", "wget ", "ping "}},
+            {"process_inspection",  {"ps ", "pgrep", "top ", "htop", "pidof", "kill ", "/proc/"}},
+            {"system_monitoring",   {"uptime", "free ", "df ", "vmstat", "iostat", "sensors", "uname"}},
+            {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}},
+            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model"}},
+            {"source_modification", {"sed ", "patch ", "diff ", "nano ", "vim "}},
+            {"script_creation",     {"#!/", "chmod +x"}},
+            {"file_search",         {"find ", "grep ", "locate ", "which ", "whereis ", "fd ", "rg "}},
+            {"file_write",          {"tee ", "cp ", "mv ", "touch ", "mkdir ", ">>"}},
+            {"file_read",           {"cat ", "less ", "more ", "wc -l", "file ", "stat "}}
+        };
+
+        for (auto& rule : rules) {
+            for (auto& kw : rule.keywords) {
+                if (lower.find(kw) != std::string::npos) return rule.domain;
+            }
+        }
+        return "";
     }
 };
 

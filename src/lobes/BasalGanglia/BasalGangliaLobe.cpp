@@ -15,10 +15,167 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <cstdlib>
+#include <memory>
+#include <numeric>
 
 using json = nlohmann::json;
 
 namespace neuroswarm {
+
+// ──────────────────────────────────────────────────────────────────────
+// BK-tree: metric tree for fuzzy string matching via Levenshtein distance
+// Used for: command validation, genome dedup, fuzzy retrieval
+// ──────────────────────────────────────────────────────────────────────
+
+class BKTree {
+public:
+    // Levenshtein distance — O(n*m) but commands are short strings
+    static int levenshtein(const std::string& a, const std::string& b) {
+        int n = a.size(), m = b.size();
+        if (n == 0) return m;
+        if (m == 0) return n;
+
+        // Optimisation: skip common prefix/suffix
+        int prefix = 0;
+        while (prefix < n && prefix < m && a[prefix] == b[prefix]) prefix++;
+        int suffix = 0;
+        while (suffix < (n - prefix) && suffix < (m - prefix) &&
+               a[n - 1 - suffix] == b[m - 1 - suffix]) suffix++;
+
+        int an = n - prefix - suffix;
+        int bm = m - prefix - suffix;
+        if (an == 0) return bm;
+        if (bm == 0) return an;
+
+        // Single-row DP
+        std::vector<int> row(bm + 1);
+        std::iota(row.begin(), row.end(), 0);
+
+        for (int i = 1; i <= an; i++) {
+            int prev = row[0];
+            row[0] = i;
+            for (int j = 1; j <= bm; j++) {
+                int cost = (a[prefix + i - 1] == b[prefix + j - 1]) ? 0 : 1;
+                int temp = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1, prev + cost});
+                prev = temp;
+            }
+        }
+        return row[bm];
+    }
+
+    struct Entry {
+        std::string cmd;
+        float fitness;
+        std::string domain;
+    };
+
+    void insert(const std::string& cmd, float fitness = 0.5f, const std::string& domain = "") {
+        if (cmd.empty()) return;
+        if (!root) {
+            root = std::make_unique<Node>(Entry{cmd, fitness, domain});
+            size_++;
+            return;
+        }
+        Node* cur = root.get();
+        while (true) {
+            int d = levenshtein(cur->entry.cmd, cmd);
+            if (d == 0) {
+                // Exact match — update fitness if higher
+                if (fitness > cur->entry.fitness) cur->entry.fitness = fitness;
+                return;
+            }
+            auto it = cur->children.find(d);
+            if (it == cur->children.end()) {
+                cur->children[d] = std::make_unique<Node>(Entry{cmd, fitness, domain});
+                size_++;
+                return;
+            }
+            cur = it->second.get();
+        }
+    }
+
+    // Find all entries within max_dist of query
+    std::vector<std::pair<Entry, int>> find_within(const std::string& query, int max_dist) const {
+        std::vector<std::pair<Entry, int>> results;
+        if (!root) return results;
+        search(root.get(), query, max_dist, results);
+        return results;
+    }
+
+    // Find the k nearest entries to query
+    std::vector<std::pair<Entry, int>> nearest(const std::string& query, int k) const {
+        // Iterative widening: start narrow, expand until we have k results
+        for (int radius = 2; radius <= 50; radius += 3) {
+            auto results = find_within(query, radius);
+            if ((int)results.size() >= k) {
+                std::sort(results.begin(), results.end(),
+                    [](const auto& a, const auto& b) { return a.second < b.second; });
+                results.resize(k);
+                return results;
+            }
+        }
+        auto results = find_within(query, 50);
+        std::sort(results.begin(), results.end(),
+            [](const auto& a, const auto& b) { return a.second < b.second; });
+        if ((int)results.size() > k) results.resize(k);
+        return results;
+    }
+
+    // Minimum distance to any entry in the tree
+    int min_distance(const std::string& query) const {
+        if (!root) return 9999;
+        int best = 9999;
+        min_dist_search(root.get(), query, best);
+        return best;
+    }
+
+    int size() const { return size_; }
+
+    void clear() {
+        root.reset();
+        size_ = 0;
+    }
+
+private:
+    struct Node {
+        Entry entry;
+        std::map<int, std::unique_ptr<Node>> children;
+        Node(Entry e) : entry(std::move(e)) {}
+    };
+
+    std::unique_ptr<Node> root;
+    int size_ = 0;
+
+    void search(const Node* node, const std::string& query, int max_dist,
+                std::vector<std::pair<Entry, int>>& results) const {
+        int d = levenshtein(node->entry.cmd, query);
+        if (d <= max_dist) {
+            results.push_back({node->entry, d});
+        }
+        // BK-tree pruning: only visit children with keys in [d-max_dist, d+max_dist]
+        int lo = d - max_dist;
+        int hi = d + max_dist;
+        for (auto& [key, child] : node->children) {
+            if (key >= lo && key <= hi) {
+                search(child.get(), query, max_dist, results);
+            }
+        }
+    }
+
+    void min_dist_search(const Node* node, const std::string& query, int& best) const {
+        int d = levenshtein(node->entry.cmd, query);
+        if (d < best) best = d;
+        if (best == 0) return;  // can't do better
+        for (auto& [key, child] : node->children) {
+            if (key >= d - best && key <= d + best) {
+                min_dist_search(child.get(), query, best);
+            }
+        }
+    }
+};
+
+// ──────────────────────────────────────────────────────────────────────
 
 // BasalGangliaLobe — intrinsic motivation engine.
 //
@@ -53,7 +210,8 @@ public:
             "genesis_result", "specialist_report", "lobe_injected",
             "lobe_terminated", "domain_resolve_result",
             "rlaif_reinforce",
-            "concept_update", "concept_response"
+            "concept_update", "concept_response",
+            "validate_command"
         });
 
         mkdir("./data", 0755);
@@ -64,7 +222,8 @@ public:
 
         std::cout << "[BASAL_GANGLIA] Intrinsic motivation engine online. "
                   << domains.size() << " capability domains tracked."
-                  << " Active specialists: " << active_specialists.size() << std::endl;
+                  << " Active specialists: " << active_specialists.size()
+                  << " BK-tree: " << bk_tree.size() << " commands indexed." << std::endl;
     }
 
     void start() {
@@ -359,6 +518,10 @@ public:
                 else if (origin == "concept_lobe" && intent == "concept_response") {
                     handle_concept_response(j);
                 }
+                // BK-tree: command validation request from FrontalExecutive
+                else if (intent == "validate_command") {
+                    handle_validate_command(j);
+                }
             } catch (...) {}
         }
     }
@@ -575,22 +738,25 @@ private:
         };
 
         // Classification rules: keyword → domain
-        // Order matters: more specific domains first, generic I/O (file_read/write) last
+        // Order matters: most specific first.  The FIRST keyword match wins.
+        // Rules: (1) match on the primary verb/tool, not on pipe suffixes
+        //        (2) "bash -c" / "sh -c" are wrappers, not domains — removed
+        //        (3) pipe ops (| head, | tail, | sort) are NOT domain indicators
         classification_rules = {
             {"self_inspection",     {"self_model", "neuroswarm", "du -s"}},
             {"memory_analysis",     {"engram", "memory_index", "system_knowledge", "data/engrams"}},
-            {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}},
-            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model", "sort ", "uniq ", "awk ", "cut ", "| wc", "| sort", "| head", "| tail", "xargs", "column "}},
             {"git_operations",      {"git "}},
-            {"compilation",         {"cmake", "make ", "gcc", "g++"}},
+            {"compilation",         {"cmake", "make ", "make\t", "gcc ", "g++ ", "clang ", "rustc ", "cargo "}},
             {"network_diagnostics", {"ss ", "netstat", "nc ", "curl ", "wget ", "ping ", "nmap ", "ip addr", "ifconfig"}},
             {"process_inspection",  {"ps ", "pgrep", "top ", "htop", "pidof", "kill ", "/proc/"}},
-            {"source_modification", {"sed ", "patch ", "diff ", "src/"}},
-            {"script_creation",     {"#!/", "chmod +x", "bash -c", "sh -c"}},
             {"system_monitoring",   {"uptime", "free ", "df ", "vmstat", "iostat", "sensors", "nvidia-smi", "lscpu", "uname"}},
+            {"log_analysis",        {"progress.txt", "metrics/", "journal", "syslog", "dmesg"}},
+            {"data_analysis",       {"python3", "jq ", "data/metrics", "data/self_model"}},
+            {"source_modification", {"sed ", "patch ", "diff ", "nano ", "vim "}},
+            {"script_creation",     {"#!/", "chmod +x"}},
             {"file_search",         {"find ", "grep ", "locate ", "which ", "whereis ", "fd ", "rg "}},
-            {"file_write",          {"echo ", "tee ", "cp ", "mv ", "touch ", "mkdir ", ">>", "> "}},
-            {"file_read",           {"cat ", "head ", "tail ", "less ", "more ", "wc -l", "file ", "stat ", "md5sum", "sha256sum", "readlink"}}
+            {"file_write",          {"tee ", "cp ", "mv ", "touch ", "mkdir ", ">>"}},
+            {"file_read",           {"cat ", "less ", "more ", "wc -l", "file ", "stat ", "md5sum", "sha256sum", "readlink"}}
         };
     }
 
@@ -601,8 +767,25 @@ private:
             if (!concept_domain.empty()) return concept_domain;
         }
 
-        // Fallback: regex keyword classification
-        std::string cmd_lower = cmd;
+        // Strip shell wrappers to classify the REAL command inside
+        std::string stripped = cmd;
+        // Remove /bin/bash -c "..." or /bin/sh -c '...' wrappers
+        for (const auto& prefix : {"/bin/bash -c ", "/bin/sh -c ", "bash -c ", "sh -c "}) {
+            std::string p(prefix);
+            if (stripped.find(p) == 0) {
+                stripped = stripped.substr(p.size());
+                // Remove surrounding quotes
+                if (stripped.size() >= 2) {
+                    char q = stripped.front();
+                    if ((q == '"' || q == '\'') && stripped.back() == q)
+                        stripped = stripped.substr(1, stripped.size() - 2);
+                }
+                break;
+            }
+        }
+
+        // Lowercase for matching
+        std::string cmd_lower = stripped;
         std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(), ::tolower);
 
         for (auto& rule : classification_rules) {
@@ -1225,6 +1408,12 @@ private:
     std::map<std::string, std::vector<CommandTemplate>> command_genome;
     static constexpr const char* GENOME_PATH = "./data/command_genome.json";
 
+    // BK-tree: indexes ALL successful commands across all domains
+    // for fuzzy matching, validation, and deduplication
+    BKTree bk_tree;
+    int bk_tree_compaction_counter = 0;
+    static constexpr int COMPACTION_INTERVAL = 100;  // compact every N new commands
+
     void load_genome() {
         std::ifstream f(GENOME_PATH);
         if (!f.is_open()) return;
@@ -1302,12 +1491,24 @@ private:
             ct.generation = max_gen + 1;
             templates.push_back(ct);
 
+            // Insert into BK-tree if successful
+            if (success) {
+                bk_tree.insert(cmd, ct.fitness, domain);
+            }
+
             // Cap at 20 templates per domain
             if (templates.size() > 20) {
                 // Remove lowest fitness
                 auto worst = std::min_element(templates.begin(), templates.end(),
                     [](const CommandTemplate& a, const CommandTemplate& b) { return a.fitness < b.fitness; });
                 templates.erase(worst);
+            }
+
+            // Periodic genome compaction
+            bk_tree_compaction_counter++;
+            if (bk_tree_compaction_counter >= COMPACTION_INTERVAL) {
+                bk_tree_compaction_counter = 0;
+                compact_genome();
             }
         }
 
@@ -1937,6 +2138,20 @@ int main() {
             for (auto& c : domain_commands[domain]) cmds.push_back(c);
         }
 
+        // BK-tree fuzzy retrieval: if genome gave few results, supplement with similar commands
+        if (cmds.size() < 3 && !domain_commands[domain].empty()) {
+            // Use first static command as anchor for fuzzy search
+            auto fuzzy = bk_tree.nearest(domain_commands[domain][0], 3);
+            for (auto& [entry, dist] : fuzzy) {
+                if (dist <= 8 && entry.fitness >= 0.5f) {
+                    // Avoid duplicates
+                    bool dup = false;
+                    for (auto& c : cmds) if (c == entry.cmd) { dup = true; break; }
+                    if (!dup) cmds.push_back(entry.cmd);
+                }
+            }
+        }
+
         // For concept-derived dynamic domains: pull example commands from concept clusters
         if (cmds.empty() && concept_space_available) {
             for (auto& [cname, cinfo] : concept_clusters) {
@@ -2004,6 +2219,197 @@ int main() {
 
         // Phase 4: Load command genome
         load_genome();
+
+        // Build BK-tree from genome (successful commands = fitness > 0.5)
+        build_bk_tree();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // BK-tree operations: build, validate, compact, fuzzy retrieve
+    // ──────────────────────────────────────────────────────────────────────
+
+    void build_bk_tree() {
+        bk_tree.clear();
+        int inserted = 0;
+        for (auto& [domain, templates] : command_genome) {
+            for (auto& t : templates) {
+                if (t.fitness >= 0.4f) {  // only index commands with reasonable fitness
+                    bk_tree.insert(t.cmd, t.fitness, domain);
+                    inserted++;
+                }
+            }
+        }
+        // Also index static domain_commands as known-good baselines
+        for (auto& [domain, cmds] : domain_commands) {
+            for (auto& cmd : cmds) {
+                bk_tree.insert(cmd, 0.7f, domain);
+                inserted++;
+            }
+        }
+        std::cout << "[BASAL_GANGLIA] BK-tree built: " << bk_tree.size()
+                  << " unique commands indexed (" << inserted << " attempted)" << std::endl;
+    }
+
+    // Validate a command against the BK-tree
+    // Returns: {valid, distance, nearest_cmd, reason}
+    struct ValidationResult {
+        bool valid = false;
+        int distance = 9999;
+        std::string nearest_cmd;
+        std::string reason;
+    };
+
+    ValidationResult validate_command_bk(const std::string& cmd) {
+        ValidationResult result;
+
+        if (cmd.empty()) {
+            result.reason = "empty_command";
+            return result;
+        }
+
+        // Hardcoded rejection patterns (always invalid regardless of distance)
+        static const std::vector<std::string> blacklist = {
+            "/path/to/", "REAL_BASH_CMD", "your_", "example_",
+            "<file>", "<path>", "<command>", "INSERT_", "TODO_",
+            "placeholder", "${VARIABLE}"
+        };
+        for (auto& pat : blacklist) {
+            if (cmd.find(pat) != std::string::npos) {
+                result.reason = "blacklisted_pattern:" + pat;
+                return result;
+            }
+        }
+
+        // If tree is empty (cold start), allow everything
+        if (bk_tree.size() == 0) {
+            result.valid = true;
+            result.distance = 0;
+            result.reason = "cold_start_allow";
+            return result;
+        }
+
+        // Find minimum distance to any known command
+        int min_dist = bk_tree.min_distance(cmd);
+        result.distance = min_dist;
+
+        // Adaptive threshold: max(4, 20% of command length)
+        // Short commands (ls, ps) need near-exact; long commands allow more variance
+        int threshold = std::max(4, (int)(cmd.size() * 0.20));
+
+        // Cap at 15 — anything beyond that is definitely alien
+        threshold = std::min(threshold, 15);
+
+        if (min_dist <= threshold) {
+            result.valid = true;
+            result.reason = "within_threshold";
+        } else {
+            result.reason = "too_distant:" + std::to_string(min_dist) + ">" + std::to_string(threshold);
+        }
+
+        // Get nearest for context
+        auto nearest = bk_tree.nearest(cmd, 1);
+        if (!nearest.empty()) {
+            result.nearest_cmd = nearest[0].first.cmd;
+        }
+
+        return result;
+    }
+
+    // Handle validate_command requests from FrontalExecutive
+    void handle_validate_command(const json& j) {
+        std::string cmd = j.value("command", "");
+        std::string cid = j.value("cid", "");
+
+        auto result = validate_command_bk(cmd);
+
+        json response = {
+            {"origin", "basal_ganglia"},
+            {"intent", "command_validated"},
+            {"cid", cid},
+            {"command", cmd},
+            {"valid", result.valid},
+            {"distance", result.distance},
+            {"nearest_cmd", result.nearest_cmd},
+            {"reason", result.reason}
+        };
+
+        // If invalid, suggest nearest alternative
+        if (!result.valid && !result.nearest_cmd.empty()) {
+            response["suggestion"] = result.nearest_cmd;
+        }
+
+        // Also provide top-3 nearest successful commands as alternatives
+        auto alternatives = bk_tree.nearest(cmd, 3);
+        json alts = json::array();
+        for (auto& [entry, dist] : alternatives) {
+            if (entry.fitness >= 0.5f) {
+                alts.push_back({{"cmd", entry.cmd}, {"fitness", entry.fitness},
+                                {"distance", dist}, {"domain", entry.domain}});
+            }
+        }
+        response["alternatives"] = alts;
+
+        routing::publish(pub, response);
+
+        if (!result.valid) {
+            std::cout << "[BASAL_GANGLIA] BK-VALIDATION REJECTED: dist=" << result.distance
+                      << " reason=" << result.reason
+                      << " cmd='" << cmd.substr(0, 60) << "'"
+                      << " nearest='" << result.nearest_cmd.substr(0, 60) << "'" << std::endl;
+        }
+    }
+
+    // Genome compaction: cluster near-duplicate commands, keep only the fittest
+    void compact_genome() {
+        int total_removed = 0;
+
+        for (auto& [domain, templates] : command_genome) {
+            if (templates.size() < 5) continue;
+
+            // Sort by fitness descending
+            std::sort(templates.begin(), templates.end(),
+                [](const CommandTemplate& a, const CommandTemplate& b) {
+                    return a.fitness > b.fitness;
+                });
+
+            std::vector<CommandTemplate> compacted;
+            std::vector<bool> merged(templates.size(), false);
+
+            for (size_t i = 0; i < templates.size(); i++) {
+                if (merged[i]) continue;
+                compacted.push_back(templates[i]);
+
+                // Absorb any near-duplicates (distance <= 3)
+                for (size_t j = i + 1; j < templates.size(); j++) {
+                    if (merged[j]) continue;
+                    int dist = BKTree::levenshtein(templates[i].cmd, templates[j].cmd);
+                    if (dist <= 3) {
+                        merged[j] = true;
+                        total_removed++;
+                    }
+                }
+            }
+
+            templates = std::move(compacted);
+        }
+
+        if (total_removed > 0) {
+            save_genome();
+            build_bk_tree();  // rebuild after compaction
+            std::cout << "[BASAL_GANGLIA] GENOME COMPACTION: removed " << total_removed
+                      << " near-duplicate templates" << std::endl;
+        }
+    }
+
+    // Fuzzy genome retrieval: find commands similar to a query, across all domains
+    json fuzzy_retrieve(const std::string& query, int k = 5) {
+        auto results = bk_tree.nearest(query, k);
+        json arr = json::array();
+        for (auto& [entry, dist] : results) {
+            arr.push_back({{"cmd", entry.cmd}, {"fitness", entry.fitness},
+                           {"distance", dist}, {"domain", entry.domain}});
+        }
+        return arr;
     }
 
     void save_self_model() {

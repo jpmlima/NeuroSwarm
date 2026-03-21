@@ -32,7 +32,7 @@
 \maketitle
 
 \begin{abstract}
-This dissertation presents NeuroSwarm, a distributed cognitive architecture implemented in C++ that achieves continuous autonomous behaviour through five hardcoded axioms: Execution, Surprise, Associative Memory, Variation, and Self-Reference. The system bootstraps from zero knowledge — discovering its environment, learning operators, and building a world model through direct interaction. It plans using a GOAP (Goal-Oriented Action Planning) backward-chaining planner over learned operators, generates novel operators through genetic variation tested in a sandboxed dream environment, and autonomously spawns new specialist lobes when capability domains chronically fail. Inter-lobe communication uses a ZeroMQ publish-subscribe bus routed through a central Thalamus. Intrinsic motivation is driven by a Basal Ganglia that computes a variational free energy fitness function across 14 capability domains. The architecture runs 17+ concurrent processes, persists state across restarts, and can deploy copies of itself to remote machines via SSH. We detail the implementation of each subsystem, the bootstrap sequence, the three-tier execution pipeline, and the neurogenesis mechanism that allows the system to extend its own anatomy at runtime.
+This dissertation presents NeuroSwarm, a distributed cognitive architecture implemented in C++ that achieves continuous autonomous behaviour through five hardcoded axioms: Execution, Surprise, Associative Memory, Variation, and Self-Reference. The system bootstraps from zero knowledge — discovering its environment, learning operators, and building a world model through direct interaction. It plans using a GOAP (Goal-Oriented Action Planning) backward-chaining planner over learned operators, generates novel operators through genetic variation tested in a sandboxed dream environment, and autonomously spawns new specialist lobes when capability domains chronically fail. Inter-lobe communication uses a ZeroMQ publish-subscribe bus routed through a central Thalamus. Intrinsic motivation is driven by a Basal Ganglia that computes a variational free energy fitness function across 14 capability domains. The architecture runs 20+ concurrent processes, persists state across restarts, and can deploy copies of itself to remote machines via SSH. We detail the implementation of each subsystem, the bootstrap sequence, the three-tier execution pipeline, and the neurogenesis mechanism that allows the system to extend its own anatomy at runtime.
 \end{abstract}
 
 \tableofcontents
@@ -64,7 +64,7 @@ The specific contributions of this work are:
 \chapter{Architecture}
 
 \section{Process Topology}
-NeuroSwarm runs as a constellation of 17+ Unix processes managed by a parent process called the CerebralMatrix. Each process (``lobe'') is a standalone C++ executable that communicates exclusively through a ZeroMQ message bus. The CerebralMatrix fork-execs each lobe at startup, monitors them via \texttt{waitpid()}, and implements crash detection with exponential backoff (up to 5 restarts per lobe, with increasing cooldown periods).
+NeuroSwarm runs as a constellation of 20+ Unix processes managed by a parent process called the CerebralMatrix. Each process (``lobe'') is a standalone C++ executable that communicates exclusively through a ZeroMQ message bus. The CerebralMatrix fork-execs each lobe at startup, monitors them via \texttt{waitpid()}, and implements crash detection with exponential backoff (up to 5 restarts per lobe, with increasing cooldown periods).
 
 The complete lobe inventory at startup:
 
@@ -90,10 +90,12 @@ Visualizer & — & Real-time system state dashboard \\
 REMEngine & REM sleep circuits & Memory consolidation, offline fine-tuning \\
 ChronosLobe & Suprachiasmatic nucleus & Time awareness, scheduling \\
 StatisticsLobe & — & Execution statistics aggregation \\
-BasalGanglia & Basal ganglia + VTA & Intrinsic motivation, neurogenesis \\
+BasalGanglia & Basal ganglia + VTA & Intrinsic motivation, neurogenesis, BK-tree \\
+ConceptLobe & Association cortex & Concept space, abstraction hierarchy \\
+CausalLobe & Temporal cortex & Causal world model, temporal correlation \\
 \bottomrule
 \end{tabular}
-\caption{Core lobe inventory. Additional specialist lobes are generated at runtime.}
+\caption{Core lobe inventory (19 lobes). Additional specialist lobes are generated at runtime.}
 \end{table}
 
 \section{The Thalamic Bus}
@@ -192,7 +194,9 @@ When the FrontalExecutive receives a goal (from the Basal Ganglia's intrinsic mo
 
 \textbf{Tier 3 — LLM Oracle.} If both deterministic tiers fail, the system constructs a structured prompt containing: the goal, the environment summary, known operators (for context), and failed attempts (to avoid repetition). The prompt is sent to the local SynapticController, which runs inference on a quantised model with grammar-constrained output (JSON schema). A successful LLM-generated command is decomposed into fragments and registered as a new operator, reducing future LLM dependency.
 
-This cascade ensures the LLM is a last resort, not the default execution engine. As the operator registry grows, Tier 1 resolves an increasing fraction of goals without any LLM call.
+\textbf{Validation Gate.} All LLM-generated commands pass through a two-stage validation gate before execution. A synchronous local filter catches placeholder patterns, prose, and over-length strings. An asynchronous BK-tree query measures Levenshtein distance to the nearest known-good command in the genome; commands beyond an adaptive threshold are rejected with feedback to the LLM. This prevents the degenerative cycle where bad LLM outputs pollute the genome and produce worse future suggestions.
+
+This cascade ensures the LLM is a last resort, not the default execution engine. As the operator registry grows, Tier 1 resolves an increasing fraction of goals without any LLM call, and the BK-tree validation ensures that the commands that do reach execution are structurally plausible.
 
 \section{The GOAP Planner}
 The Planner implements backward-chaining search over the operator registry. Given a set of goal conditions and the current world state:
@@ -232,21 +236,21 @@ The Basal Ganglia tracks 14 capability domains, each with independent success/fa
 \midrule
 \texttt{file\_read} & Reading file contents \\
 \texttt{file\_write} & Creating and writing files \\
+\texttt{file\_search} & Finding files in the filesystem \\
 \texttt{process\_inspection} & Querying running processes \\
 \texttt{network\_diagnostics} & Network connectivity and analysis \\
-\texttt{system\_info} & OS, hardware, and environment queries \\
-\texttt{text\_processing} & grep, sed, awk, sort, etc. \\
-\texttt{compilation} & Compiling source code \\
-\texttt{script\_creation} & Generating and executing scripts \\
-\texttt{memory\_analysis} & Inspecting system memory \\
-\texttt{package\_management} & Querying installed packages \\
-\texttt{user\_management} & User/group operations \\
 \texttt{source\_modification} & Modifying source code files \\
-\texttt{file\_search} & Finding files in the filesystem \\
-\texttt{service\_management} & Querying system services \\
+\texttt{compilation} & Compiling source code (cmake, make, g++) \\
+\texttt{git\_operations} & Version control operations \\
+\texttt{system\_monitoring} & OS, hardware, and environment queries \\
+\texttt{data\_analysis} & Data processing (python3, jq, metrics) \\
+\texttt{script\_creation} & Generating and executing scripts \\
+\texttt{self\_inspection} & Querying own self-model and structure \\
+\texttt{memory\_analysis} & Inspecting engrams and knowledge \\
+\texttt{log\_analysis} & Parsing execution and system logs \\
 \bottomrule
 \end{tabular}
-\caption{The 14 capability domains tracked by the Basal Ganglia.}
+\caption{The 14 capability domains tracked by the Basal Ganglia. Additional dynamic domains may emerge from the ConceptLobe's clustering.}
 \end{table}
 
 \section{The Fitness Function}
@@ -279,6 +283,55 @@ Goals are filtered through a Maslow-inspired priority stack:
 \end{enumerate}
 
 Higher-priority drives preempt lower ones. The system only attempts self-modification when survival, homeostasis, and basic exploration are stable.
+
+\section{BK-tree Command Validation}
+The Basal Ganglia maintains a Burkhard-Keller tree (BK-tree) indexed by Levenshtein edit distance over all successful commands in the genome. The BK-tree is a metric tree that exploits the triangle inequality to prune search: given a query string $q$ and a node $n$ at distance $d = \text{lev}(q, n)$, only children with keys in $[d - r, d + r]$ need be visited (where $r$ is the search radius). This reduces average query time from $O(|V|)$ to $O(|V|^{\alpha})$ where $\alpha \approx 0.1$--$0.3$ for natural language strings.
+
+The Levenshtein distance implementation uses single-row dynamic programming with common prefix/suffix optimisation:
+
+\begin{equation}
+\text{lev}(a, b) = \text{DP}(a[\text{prefix}..\text{len}-\text{suffix}],\ b[\text{prefix}..\text{len}-\text{suffix}])
+\end{equation}
+
+The tree serves three functions:
+
+\textbf{Command Validation Gate.} Before executing an LLM-generated command, the FrontalExecutive applies a two-stage filter:
+
+\begin{enumerate}
+    \item \emph{Local fast filter} (synchronous): rejects empty commands, commands exceeding 500 characters, placeholder patterns (\texttt{/path/to/}, \texttt{REAL\_BASH\_CMD}, \texttt{<file>}), and prose masquerading as commands (detected via space ratio $> 0.40$ combined with sentence-starter patterns and absence of shell operators).
+    \item \emph{BK-tree fuzzy validation} (asynchronous): queries the tree for the minimum distance to any known-good command. An adaptive threshold $\tau = \min(15, \max(4, 0.20 \cdot |\text{cmd}|))$ accepts commands within $\tau$ edits of the nearest successful command. Rejected commands trigger re-prompting with explicit feedback.
+\end{enumerate}
+
+This replaces brittle hardcoded validation rules with an \emph{adaptive} filter that improves as the genome grows: the more successful commands the system has seen, the more precisely it can distinguish valid commands from LLM hallucinations.
+
+\textbf{Fuzzy Genome Retrieval.} When the Basal Ganglia selects suggested commands for a domain, the BK-tree supplements genome templates with nearest-neighbor results. A query \texttt{nearest(cmd, k)} returns the $k$ closest successful commands by iterative radius widening (starting at 2, expanding by 3 until $\geq k$ results). This turns approximate LLM output into actionable commands: the LLM produces the general structure, the BK-tree corrects it to a known-good neighbour.
+
+\textbf{Genome Compaction.} Every 100 new command insertions, a compaction pass clusters all templates within Levenshtein distance $\leq 3$ and retains only the highest-fitness representative per cluster. This prevents the genome from accumulating near-duplicate variants of the same command (e.g., \texttt{ls /tmp}, \texttt{ls /var}, \texttt{ls /home} collapsing to the fittest). After compaction, the BK-tree is rebuilt.
+
+\section{Recursive Meta-Cognition}
+The MetaCognition lobe has been expanded from a reflective diary into a structural error analysis engine. It subscribes to all bus traffic and classifies every failed \texttt{execution\_result} into one of 16 error types:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Error Type} & \textbf{Pattern} & \textbf{Missing Capability} \\
+\midrule
+\texttt{missing\_file} & ``No such file or directory'' & filesystem navigation \\
+\texttt{permission\_denied} & ``Permission denied'' & access control \\
+\texttt{missing\_tool} & ``command not found'' & tool discovery \\
+\texttt{link\_error} & ``undefined reference'' & build dependencies \\
+\texttt{syntax\_error} & ``syntax error'' & language syntax \\
+\texttt{timeout} & ``timed out'' & timeout handling \\
+\bottomrule
+\end{tabular}
+\caption{Selected error classifications (6 of 16). Each maps to a missing capability and exploration strategy.}
+\end{table}
+
+Classified errors populate a \emph{knowledge gap graph}: each gap records its domain, error pattern, root cause, occurrence count, and importance (occurrence $\times$ recency). Precondition chain inference builds dependency links: ``\texttt{file\_write} fails $\to$ needs \texttt{filesystem\_navigation} $\to$ requires \texttt{resource\_discovery}''. Every 5 minutes, \texttt{analyze\_gaps()} walks the chain to the deepest actionable target and publishes an \texttt{exploration\_target} intent, directing the system's learning toward structural root causes rather than surface symptoms.
+
+Since the MotorLobe's \texttt{execution\_result} does not include a \texttt{domain} field, MetaCognition maintains a lightweight keyword classifier mirroring the Basal Ganglia's classification rules, ensuring domain statistics are populated correctly.
 
 \chapter{Synthetic Dreaming and Variation}
 
@@ -451,6 +504,8 @@ Several behaviours emerge from the interaction of subsystems without being expli
     \item \textbf{Learned helplessness}: When a domain fails repeatedly and the Basal Ganglia enters cooldown, the system temporarily avoids that domain — analogous to the psychological phenomenon of learned helplessness after repeated failure.
     \item \textbf{Skill transfer}: Operators learned in one domain become available to the Planner for goals in other domains. A \texttt{find} operator learned during \texttt{file\_search} exploration can satisfy preconditions for \texttt{script\_creation} goals.
     \item \textbf{Self-healing}: Crash detection + restart + neurogenesis means the system can recover from component failures and generate replacements for chronically dysfunctional subsystems.
+    \item \textbf{Adaptive immune system}: The BK-tree command validation acts as a learned immune response. Initially permissive (cold start allows all commands), it becomes increasingly selective as the genome grows. Commands that are far from any previously successful command are rejected — analogous to the adaptive immune system recognising ``non-self'' molecules. The threshold adapts to command length, preventing both false positives (rejecting valid novel commands) and false negatives (accepting garbage).
+    \item \textbf{Structural self-diagnosis}: MetaCognition's knowledge gap graph creates a recursive model of the system's own limitations. The precondition chain inference (``to write files, I need filesystem navigation, which requires resource discovery'') is a form of meta-level reasoning about capability dependencies — the system knows \emph{why} it fails, not just \emph{that} it fails.
 \end{itemize}
 
 \section{LLM Dependency Trajectory}
@@ -478,9 +533,13 @@ The system also instantiates a computational form of Friston's Free Energy Princ
 
 NeuroSwarm demonstrates that an autonomous cognitive architecture can be built from five axioms and a message bus. The system bootstraps from zero knowledge, learns operators through direct environmental interaction, plans using deterministic graph search, generates novel solutions through genetic variation, and extends its own anatomy when existing structures fail. The three-tier execution pipeline ensures that LLM inference is a last resort rather than the default mode of operation, and runtime learning continuously reduces LLM dependency.
 
-The neurogenesis mechanism — where the Basal Ganglia writes C++ source, the MotorLobe compiles it, and the CerebralMatrix injects it as a live process — represents a concrete implementation of computational autopoiesis: the system literally produces its own components from within.
+The BK-tree command validation system introduces an adaptive quality gate between the LLM and execution: commands must be within Levenshtein distance of known-good commands to proceed. This filter is empty at birth and grows more discriminating with experience --- a computational analogue of the adaptive immune system. Combined with genome compaction (clustering near-duplicates within distance 3), the system resists the degenerative feedback loop where bad LLM outputs pollute the genome and produce worse suggestions.
 
-The architecture's limitations — lack of sensorimotor grounding, template rigidity, absence of formal verification — point to clear future directions: robotic embodiment, meta-templates that generate templates, and runtime assertion frameworks for self-modifying systems. The question is no longer whether a system can autonomously modify its own structure, but how to reason about the behaviour of one that does.
+The recursive meta-cognition layer adds structural self-diagnosis: the system classifies its own failures into 16 error types, builds a knowledge gap graph with precondition chain inference, and directs exploration toward root causes. This transforms reactive error handling (``retry the same thing'') into proactive capability development (``learn filesystem navigation because that's why file writes fail'').
+
+The neurogenesis mechanism --- where the Basal Ganglia writes C++ source, the MotorLobe compiles it, and the CerebralMatrix injects it as a live process --- represents a concrete implementation of computational autopoiesis: the system literally produces its own components from within.
+
+The architecture's limitations --- lack of sensorimotor grounding, template rigidity, absence of formal verification --- point to clear future directions: robotic embodiment, meta-templates that generate templates, and runtime assertion frameworks for self-modifying systems. The question is no longer whether a system can autonomously modify its own structure, but how to reason about the behaviour of one that does.
 
 \begin{thebibliography}{99}
 
@@ -543,6 +602,16 @@ Intelligence without representation.
 Pfeifer, R., \& Bongard, J. (2006).
 \textit{How the Body Shapes the Way We Think: A New View of Intelligence}.
 MIT Press.
+
+\bibitem{burkhard1973some}
+Burkhard, W. A., \& Keller, R. M. (1973).
+Some approaches to best-match file searching.
+\textit{Communications of the ACM}, 16(4), 230--236.
+
+\bibitem{levenshtein1966binary}
+Levenshtein, V. I. (1966).
+Binary codes capable of correcting deletions, insertions, and reversals.
+\textit{Soviet Physics Doklady}, 10(8), 707--710.
 
 \end{thebibliography}
 
