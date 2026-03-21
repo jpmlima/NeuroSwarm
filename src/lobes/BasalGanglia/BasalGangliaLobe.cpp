@@ -610,10 +610,31 @@ private:
         return fitness;
     }
 
+    // Semantic validation: reject degenerate commands that "succeed" without doing real work
+    bool is_substantive_success(const std::string& cmd, const std::string& output) {
+        // Pure echo commands — exit 0 but no real work
+        if (cmd.find("echo ") == 0 && cmd.find("&&") == std::string::npos
+            && cmd.find("|") == std::string::npos) return false;
+
+        // Echo-prefixed commands where only the echo part ran (rest is no-op)
+        // e.g. "echo Running 'blah' && make /dev/null"
+        if (cmd.find("echo ") != std::string::npos && cmd.find("/dev/null") != std::string::npos)
+            return false;
+
+        // Commands that produce no output are suspicious
+        if (output.size() < 3) return false;
+
+        // Output is just the echo text — command didn't produce real results
+        // Check: if output starts with "Running" or similar echo patterns
+        if (output.find("Running '") == 0 || output.find("Running \"") == 0)
+            return false;
+
+        return true;
+    }
+
     void handle_execution_result(const json& j) {
         std::string cmd = j.value("command", "");
         if (cmd.empty()) {
-            // Try to extract from proprioception context
             cmd = j.value("original_command", "");
         }
         if (cmd.empty()) return;
@@ -622,7 +643,13 @@ private:
         if (domain.empty()) return;
 
         std::string status = j.value("status", "");
+        std::string output = j.value("proprioception", "");
         bool success = (status == "success");
+
+        // Semantic validation: downgrade degenerate successes
+        if (success && !is_substantive_success(cmd, output)) {
+            success = false;  // treat as failure for learning purposes
+        }
 
         auto& d = self_model[domain];
         int total_before = d.success + d.failure;
@@ -717,11 +744,13 @@ private:
             d.consecutive_failures = 0;
 
             // RLAIF: reinforce all commands from the successful execution chain
+            // Only reinforce substantive commands (filter degenerate echo-only)
             if (j.contains("executed_commands")) {
                 auto cmds = j["executed_commands"];
                 int reinforced = 0;
                 for (auto& cmd_j : cmds) {
                     std::string c = cmd_j.get<std::string>();
+                    if (!is_substantive_success(c, "validated")) continue;
                     update_genome_fitness(domain, c, true);
                     reinforced++;
                 }

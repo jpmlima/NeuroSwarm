@@ -917,7 +917,8 @@ private:
         std::string domain = data.value("domain", "");
         float magnitude = data.value("magnitude", 0.0f);
 
-        // Check recently completed goals for matching domain
+        // Check recently completed goals for matching domain — reinforce once then consume
+        std::vector<std::string> consumed;
         for (auto& [cid, chain] : recent_chains) {
             if (chain.domain == domain && !chain.commands.empty()) {
                 json reinforce = {
@@ -931,8 +932,11 @@ private:
                 std::cout << "[EXECUTIVE] RLAIF: Reinforcing " << chain.commands.size()
                           << " commands in domain '" << domain
                           << "' (magnitude=" << magnitude << ")" << std::endl;
+                consumed.push_back(cid);
             }
         }
+        // Remove consumed chains to prevent duplicate reinforcement
+        for (auto& cid : consumed) recent_chains.erase(cid);
 
         // Prune old chains (>60s)
         auto now = std::chrono::steady_clock::now();
