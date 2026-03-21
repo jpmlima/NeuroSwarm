@@ -92,9 +92,10 @@ public:
             if (stamina >= 30.0f) metabolic_alert_sent = false;  // reset hysteresis
 
             // Trigger a sleep-cycle request after sustained CPU idleness (< 5% load for ~60 s)
+            // Only request sleep if not already sleeping (prevents spam)
             if (state[0] < 0.05f) {
                 idle_ticks++;
-                if (idle_ticks > 60) {
+                if (idle_ticks > 60 && !is_sleeping) {
                     json sleep_req = {
                         {"origin", "homeostasis"},
                         {"intent", "initiate_sleep_cycle"},
@@ -106,6 +107,7 @@ public:
                 }
             } else {
                 idle_ticks = 0;
+                is_sleeping = false;  // CPU active — no longer idle/sleeping
             }
 
             std::this_thread::sleep_for(std::chrono::seconds(1));

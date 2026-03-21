@@ -211,7 +211,8 @@ public:
             "lobe_terminated", "domain_resolve_result",
             "rlaif_reinforce",
             "concept_update", "concept_response",
-            "validate_command"
+            "validate_command",
+            "exploration_target"
         });
 
         mkdir("./data", 0755);
@@ -518,6 +519,10 @@ public:
                 else if (origin == "concept_lobe" && intent == "concept_response") {
                     handle_concept_response(j);
                 }
+                // Directed exploration: MetaCognition sends exploration targets
+                else if (origin == "metacognition" && intent == "exploration_target") {
+                    handle_exploration_target(j);
+                }
                 // BK-tree: command validation request from FrontalExecutive
                 else if (intent == "validate_command") {
                     handle_validate_command(j);
@@ -565,13 +570,18 @@ private:
         if (system_stress > 0.8f) return DriveLevel::HOMEOSTASIS;
 
         // Check overall success rate for SELF_MODIFY eligibility
-        int total_s = 0, total_a = 0;
+        // Requires: >70% success AND majority of domains explored (prevents
+        // premature SELF_MODIFY when only a few domains are saturated)
+        int total_s = 0, total_a = 0, explored_domains = 0;
+        int total_domains = (int)self_model.size();
         for (auto& [d, st] : self_model) {
             total_s += st.success;
             total_a += st.success + st.failure;
+            if (st.success + st.failure >= 3) explored_domains++;
         }
         float overall_rate = total_a > 0 ? (float)total_s / total_a : 0.0f;
-        if (overall_rate > 0.70f) return DriveLevel::SELF_MODIFY;
+        int required_explored = std::max(6, total_domains / 2);  // at least half, min 6
+        if (overall_rate > 0.70f && explored_domains >= required_explored) return DriveLevel::SELF_MODIFY;
 
         // Check if any domain has low success rate for MASTERY
         for (auto& [d, st] : self_model) {
@@ -1082,6 +1092,32 @@ private:
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Directed Exploration: MetaCognition → BasalGanglia priority steering
+    // ──────────────────────────────────────────────────────────────────────
+
+    void handle_exploration_target(const json& j) {
+        exploration_target_domain     = j.value("target_domain", "");
+        exploration_target_capability = j.value("target_capability", "");
+        exploration_target_importance = j.value("importance", 0.0f);
+        exploration_strategy          = j.value("exploration_strategy", "");
+        exploration_gap_error         = j.value("gap_error", "");
+        exploration_root_cause        = j.value("root_cause", "");
+        exploration_target_timestamp  = std::time(nullptr);
+
+        std::cout << "[BASAL_GANGLIA] EXPLORATION TARGET received: domain='"
+                  << exploration_target_domain << "' capability='"
+                  << exploration_target_capability << "' importance="
+                  << exploration_target_importance << " strategy='"
+                  << exploration_strategy << "'" << std::endl;
+    }
+
+    bool has_active_exploration_target() const {
+        if (exploration_target_domain.empty()) return false;
+        long now = std::time(nullptr);
+        return (now - exploration_target_timestamp) < EXPLORATION_TARGET_TTL;
+    }
+
     void handle_goal_request(const json& j) {
         std::string cid = j.value("cid", "");
 
@@ -1178,6 +1214,12 @@ private:
             // Phase 5: Stamina factor — scale non-survival fitness by energy
             f *= (current_stamina / 100.0f);
 
+            // Directed exploration: boost domain targeted by MetaCognition
+            if (has_active_exploration_target() && domain == exploration_target_domain) {
+                float boost = exploration_target_importance * 0.5f;  // up to +0.5
+                f += boost;
+            }
+
             if (f > best_fitness) {
                 best_fitness = f;
                 best_domain = domain;
@@ -1226,6 +1268,19 @@ private:
         context += "Stamina: " + std::to_string((int)current_stamina) + "%. ";
         context += "Stress: " + std::to_string((int)(system_stress * 100)) + "%.";
 
+        // Directed exploration: enrich context with MetaCognition gap info
+        bool is_directed = has_active_exploration_target() && best_domain == exploration_target_domain;
+        if (is_directed) {
+            context += " [DIRECTED EXPLORATION] MetaCognition identified gap: "
+                    + exploration_target_capability + ". ";
+            if (!exploration_gap_error.empty())
+                context += "Error pattern: " + exploration_gap_error + ". ";
+            if (!exploration_root_cause.empty())
+                context += "Root cause: " + exploration_root_cause + ". ";
+            if (!exploration_strategy.empty())
+                context += "Strategy: " + exploration_strategy + ". ";
+        }
+
         // Get suggested commands — Phase 4 genome templates override if available
         auto suggested = get_suggested_commands(best_domain);
 
@@ -1239,6 +1294,13 @@ private:
             {"suggested_commands", suggested},
             {"context", context}
         };
+
+        // Add exploration metadata if directed
+        if (is_directed) {
+            goal["exploration_target"] = exploration_target_capability;
+            goal["exploration_strategy"] = exploration_strategy;
+            goal["exploration_directed"] = true;
+        }
 
         routing::publish(pub, goal);
 
@@ -1520,6 +1582,16 @@ private:
     // ──────────────────────────────────────────────────────────────────────
     std::set<std::string> active_specialists;
     std::set<std::string> pending_resolve;  // domains awaiting autopoiesis resolution
+
+    // Directed exploration: MetaCognition → BasalGanglia exploration target
+    std::string exploration_target_domain;
+    std::string exploration_target_capability;
+    std::string exploration_strategy;
+    std::string exploration_gap_error;
+    std::string exploration_root_cause;
+    float exploration_target_importance = 0.0f;
+    long exploration_target_timestamp = 0;
+    static constexpr int EXPLORATION_TARGET_TTL = 300;  // 5 min expiry
     static constexpr const char* GENESIS_DIR = "./src/lobes/genesis/";
 
     // Apoptosis tracking: domain → consecutive idle/healthy reports + performance delta

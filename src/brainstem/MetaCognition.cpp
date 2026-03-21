@@ -192,6 +192,27 @@ private:
         }
     }
 
+    // ─── Substantive Success Filter (mirrors BasalGanglia) ────────
+
+    bool is_substantive_success(const std::string& cmd, const std::string& output) {
+        // Pure echo commands — exit 0 but no real work
+        if (cmd.find("echo ") == 0 && cmd.find("&&") == std::string::npos
+            && cmd.find("|") == std::string::npos) return false;
+
+        // Echo + /dev/null — degenerate pattern
+        if (cmd.find("echo ") != std::string::npos && cmd.find("/dev/null") != std::string::npos)
+            return false;
+
+        // Commands that produce no output are suspicious
+        if (output.size() < 3) return false;
+
+        // Output is just echo text — command didn't produce real results
+        if (output.find("Running '") == 0 || output.find("Running \"") == 0)
+            return false;
+
+        return true;
+    }
+
     // ─── Execution Result Analysis ──────────────────────────
 
     void handle_execution_result(const json& event) {
@@ -210,6 +231,13 @@ private:
             domain = classify_domain(cmd);
         }
         if (domain.empty()) return;
+
+        // Apply substantive success filter — mirrors BasalGanglia logic
+        // Degenerate commands (echo-only, no output, placeholder text) should
+        // not count as successes; treating them as failures ensures gaps populate
+        if (success && !is_substantive_success(cmd, output)) {
+            success = false;
+        }
 
         if (success) {
             domain_success_counts[domain]++;
