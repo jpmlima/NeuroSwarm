@@ -962,7 +962,14 @@ private:
         if (!it->second.is_intrinsic) return;
 
         // RLAIF: cache completed chain for dopamine reinforcement
+        // Only keep one chain per domain to prevent multiplied reinforcement
         if (success && !it->second.executed_commands.empty()) {
+            // Remove any existing chain for this domain first
+            for (auto rc = recent_chains.begin(); rc != recent_chains.end(); ) {
+                if (rc->second.domain == it->second.domain)
+                    rc = recent_chains.erase(rc);
+                else ++rc;
+            }
             CompletedChain chain;
             chain.domain = it->second.domain;
             chain.commands = it->second.executed_commands;
