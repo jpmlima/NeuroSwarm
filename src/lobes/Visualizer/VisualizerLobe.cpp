@@ -252,11 +252,16 @@ body {
     border-left: 3px solid #e2e8f0; border-radius: 4px;
     min-height: 36px;
 }
-/* Pipeline Step Indicator */
+/* Pipeline Step Indicator — centered overlay on graph */
+#pipeline-overlay {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    z-index: 10; background: rgba(255,255,255,0.92); border-radius: 8px;
+    padding: 6px 14px 8px; border: 1px solid var(--panel-border);
+    backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
 #pipeline-steps {
     display: flex; align-items: center; gap: 0;
-    padding: 8px 10px; background: var(--bg); border-radius: 6px;
-    border: 1px solid var(--panel-border); overflow-x: auto;
+    padding: 4px 6px; border-radius: 6px; overflow-x: auto;
 }
 .pipe-step {
     display: flex; align-items: center; gap: 0; white-space: nowrap;
@@ -299,13 +304,6 @@ body {
         <div id="lobe-list"></div>
     </div>
     <div style="margin-top:auto;">
-        <!-- Drive Level -->
-        <div class="section-label">Active Drive</div>
-        <div id="drive-indicator" class="drive-box">
-            <div class="drive-level" id="drive-level">—</div>
-            <div class="drive-domain" id="drive-domain">awaiting goal</div>
-        </div>
-
         <!-- Core Metrics: 2x2 grid -->
         <div class="section-label" style="margin-top:14px;">System Metrics</div>
         <div class="stat-grid">
@@ -358,6 +356,18 @@ body {
 
 <!-- CENTER: NETWORK GRAPH -->
 <div id="center">
+    <div id="pipeline-overlay">
+        <div class="section-label" style="margin-bottom:4px;text-align:center;">Cognitive Pipeline</div>
+        <div id="pipeline-steps">
+            <div class="pipe-step"><span class="pipe-label" id="pipe-goal">Goal</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-plan">Plan</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-suggest">Suggest</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-llm">LLM</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-critic">Critic</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-dream">Dream</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-exec">Exec</span></div>
+        </div>
+    </div>
     <canvas id="brain-canvas"></canvas>
     <div id="tooltip"><div class="tt-name"></div><div class="tt-desc"></div></div>
     <div id="task-bar">
@@ -374,15 +384,10 @@ body {
         <div class="focus-text" id="active-goal">Idle — awaiting directive...</div>
     </div>
     <div class="r-section">
-        <div class="section-label">Cognitive Pipeline</div>
-        <div id="pipeline-steps">
-            <div class="pipe-step"><span class="pipe-label" id="pipe-goal">Goal</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-plan">Plan</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-suggest">Suggest</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-llm">LLM</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-critic">Critic</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-dream">Dream</span><span class="pipe-arrow">&rsaquo;</span></div>
-            <div class="pipe-step"><span class="pipe-label" id="pipe-exec">Exec</span></div>
+        <div class="section-label">Active Drive</div>
+        <div id="drive-indicator-r" class="drive-box">
+            <div class="drive-level" id="drive-level-r">—</div>
+            <div class="drive-domain" id="drive-domain-r">awaiting goal</div>
         </div>
     </div>
     <div class="r-section">
@@ -418,7 +423,8 @@ const NODES = {
     homeostasis: { name:"Homeostasis",        component:"homeostasis",         color:"#e11d48", x:0.28, y:0.72, r:15, desc:"Autonomic Stress Regulation",     cluster:"autonomic" },
     chronos:     { name:"Chronos Lobe",       component:"chronos_lobe",        color:"#f43f5e", x:0.38, y:0.80, r:12, desc:"Circadian & Temporal Awareness",  cluster:"autonomic" },
     statistics:  { name:"Statistics",         component:"statistics_lobe",     color:"#6366f1", x:0.70, y:0.76, r:11, desc:"Performance Telemetry",           cluster:"infra" },
-    concept:     { name:"Concept Space",     component:"concept_lobe",        color:"#8b5cf6", x:0.86, y:0.68, r:14, desc:"Internal Representations",        cluster:"inference" }
+    concept:     { name:"Concept Space",     component:"concept_lobe",        color:"#8b5cf6", x:0.86, y:0.68, r:14, desc:"Internal Representations",        cluster:"inference" },
+    causal:      { name:"Causal Model",      component:"causal_lobe",         color:"#f59e0b", x:0.40, y:0.60, r:15, desc:"Learned Cause-Effect Graph",       cluster:"inference" }
 };
 
 const EDGES = [
@@ -433,12 +439,13 @@ const EDGES = [
     {s:'metacog',t:'synaptic'},    {s:'statistics',t:'thalamus'},
     {s:'critic',t:'amygdala'},     {s:'thalamus',t:'motor'},
     {s:'thalamus',t:'synaptic'},   {s:'basal',t:'thalamus'},
-    {s:'concept',t:'frontal'},     {s:'concept',t:'basal'}
+    {s:'concept',t:'frontal'},     {s:'concept',t:'basal'},
+    {s:'causal',t:'frontal'},      {s:'causal',t:'motor'}
 ];
 
 const CLUSTERS = {
     executive:  { color:'#2563eb', nodes:['frontal'] },
-    inference:  { color:'#7c3aed', nodes:['synaptic','metacog','concept'] },
+    inference:  { color:'#7c3aed', nodes:['synaptic','metacog','concept','causal'] },
     memory:     { color:'#c2410c', nodes:['hippocampus','rem'] },
     language:   { color:'#059669', nodes:['wernicke'] },
     safety:     { color:'#ea580c', nodes:['critic','amygdala'] },
@@ -457,7 +464,7 @@ const ORIGIN_NODE = {
     'thalamus':'thalamus',         'wernicke_lobe':'wernicke',
     'metacognition':'metacog',     'amygdala':'amygdala',
     'basal_ganglia':'basal',       'chronos_lobe':'chronos',
-    'statistics_lobe':'statistics','concept_lobe':'concept',
+    'statistics_lobe':'statistics','concept_lobe':'concept', 'causal_lobe':'causal',
     'spike_worker':'frontal',      'cerebral_matrix':'thalamus',
     'broca_terminal':'wernicke',   'user_terminal':'wernicke'
 };
@@ -477,7 +484,9 @@ const INTENT_TARGET = {
     'specialist_advice':'motor',     'specialist_report':'basal',
     'threat_assessment':'amygdala',  'metacognitive_report':'metacog',
     'concept_query':'concept',        'concept_response':'frontal',
-    'concept_update':'concept',       'concept_transfer':'frontal'
+    'concept_update':'concept',       'concept_transfer':'frontal',
+    'causal_query':'causal',          'causal_prediction':'frontal',
+    'causal_update':'causal'
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -1045,17 +1054,17 @@ function processEvent(ev) {
         const drive = ev.drive_level || ev.context && ev.context.match(/Drive: (\w+)/) && RegExp.$1 || '';
         const domain = ev.domain || '';
         if (drive) {
-            const driveEl = document.getElementById('drive-level');
+            const driveEl = document.getElementById('drive-level-r');
             driveEl.textContent = drive;
             const driveColors = {
                 'SURVIVAL':'#dc2626','HOMEOSTASIS':'#d97706',
                 'EXPLORATION':'#2563eb','MASTERY':'#7c3aed','SELF_MODIFY':'#db2777'
             };
             driveEl.style.color = driveColors[drive] || 'var(--accent)';
-            document.getElementById('drive-indicator').style.borderColor = (driveColors[drive] || 'var(--panel-border)') + '33';
+            document.getElementById('drive-indicator-r').style.borderColor = (driveColors[drive] || 'var(--panel-border)') + '33';
         }
         if (domain) {
-            document.getElementById('drive-domain').textContent = domain.replace(/_/g,' ');
+            document.getElementById('drive-domain-r').textContent = domain.replace(/_/g,' ');
         }
     }
 

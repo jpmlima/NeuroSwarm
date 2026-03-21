@@ -77,6 +77,7 @@ graph TD
 
     subgraph REPRESENTATION ["Internal Representations"]
         CX[ConceptLobe — Concept Space\nOnline Clustering · Abstraction\nPattern Extraction · Transfer]
+        CA[CausalLobe — World Model\nTemporal Correlation · Bayesian\nCausal Lift · Prediction]
     end
 
     subgraph AUTONOMIC ["Autonomic Regulation"]
@@ -118,6 +119,10 @@ graph TD
     TH --> BG
     MT -->|execution_result| PL
     MT -->|execution_result| CX
+    MT -->|execution_result| CA
+    VL -->|visual_stimulus| CA
+    CA -->|causal_prediction| FE
+    CA -->|causal_update| TH
     CX -->|concept_update| TH
     CX -->|concept_response| FE
 ```
@@ -257,6 +262,7 @@ This enables structural adaptation without system restart — analogous to adult
 | **StatisticsLobe** | `statistics_lobe` | Passive bus observer — per-cycle metrics to `data/metrics/` in JSONL |
 | **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, neurogenesis trigger |
 | **ConceptLobe** | `concept_lobe` | Learned internal representations — online clustering over embeddings, emergent abstractions, parameterised patterns |
+| **CausalLobe** | `causal_lobe` | Learned causal world model — temporal correlation of actions→effects, Bayesian confidence, causal lift, prediction queries |
 | **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
 | *Specialists* | `build/{domain}_specialist` | Runtime-generated lobes for chronically failing domains (via neurogenesis) |
 
@@ -422,10 +428,10 @@ xdg-open http://localhost:8080
 These are the fundamental capability gaps between the current system and general intelligence. Each is a research-grade problem with no known complete solution.
 
 - [x] **1. Internal representations** — ConceptLobe embeds every execution into a 768-dim concept space (Nomic embeddings), clusters similar operations via online cosine-similarity, and infers abstractions automatically (e.g., `cat /etc/hostname` and `cat /etc/os-release` → `read_content:<path>`). Fully integrated: BasalGanglia classifies via concept space before regex fallback, FrontalExecutive receives concept transfer commands, PrimordialLoop uses concept abstractions for postcondition inference. Dynamic domains emerge from experience and persist across restarts.
-- [ ] **2. Causal world model** — Maintain a learned graph of cause-effect relationships from executions. "When I did X, Y changed." Enables prediction ("if I do X, what will happen?"), counterfactual reasoning ("if I hadn't done X, would Y have happened?"), and planning with foresight rather than operator chaining.
-- [ ] **3. Abstraction hierarchy** — Discover multi-level abstractions autonomously. Not just `cat <path>` = `read_content`, but `read_content` + `search_content` = `information_retrieval`. Compositional concept formation that builds upward from primitives without human-defined taxonomies.
-- [ ] **4. Semantic compositionality** — Compose *concepts*, not just commands. "Backup" = "copy" + "before modification" + "to safe location". The system should invent new composite operations from the meaning of their parts, not from syntactic concatenation.
-- [ ] **5. Recursive meta-cognition** — Model its own knowledge gaps structurally: "I cannot solve X → because I lack operator with precondition Y → I should explore situations where Y is achievable." Self-directed learning that targets specific deficiencies rather than random exploration.
+- [x] **2. Causal world model** — CausalLobe observes action→effect pairs through temporal correlation: when an `execution_result` is followed by a `visual_stimulus` (filesystem change), a causal link is strengthened with exponential decay weighting (half-life 30s). Bayesian confidence updates track P(effect|action), causal lift filters spurious correlations (P(effect|action) - P(effect)). Handles `causal_query` to predict effects of proposed commands with confidence scores. Persists learned graph to `data/causal_graph.json`, prunes weak edges and orphan nodes, caps at 2000 nodes (LRU). Verb-matching fallback enables approximate predictions for novel commands.
+- [x] **3. Abstraction hierarchy** — ConceptLobe tracks which clusters co-activate within goal sequences. When clusters co-occur frequently (≥4 times, ≥15% of goals), a Level 2 meta-concept is composed (e.g., `read_content` + `search_content` → `information_retrieval`). Meta-concepts that themselves co-occur are further composed into Level 3+ abstractions. Known semantic compositions provide meaningful names; novel compositions are named by shared suffix/prefix analysis. Hierarchy persists to `data/concept_hierarchy.json` with co-occurrence matrix and is broadcast in `concept_update`.
+- [x] **4. Semantic compositionality** — ConceptLobe tracks ordered sequences of cluster activations within goals (subsequences length 2–4). Recurring sequences (≥3 observations) become CompositeOperations with inferred semantic roles: precondition (search, inspect), action (read, write, compile), verification (compare, verify). 20+ known compositions (e.g., `search_filesystem→read_content` = `locate_and_read`, `read_content→copy_resource` = `backup`). Novel compositions named by role structure (`guarded_X`, `prepared_X`, `verified_X`). Persists to `data/concept_hierarchy.json` and broadcast in `concept_update`.
+- [x] **5. Recursive meta-cognition** — MetaCognition (expanded from 110 to ~400 lines) now observes `execution_result` failures, classifies error patterns (16 types: missing_file, permission_denied, missing_tool, link_error, etc.), builds a knowledge gap graph with structural root causes. Precondition chain inference: "file_write fails → needs filesystem_navigation → which requires resource_discovery". Every 5 minutes: analyze gaps by importance (occurrence × recency), walk the precondition chain to find the deepest actionable target, publish `exploration_target` for directed learning and `knowledge_gap` summaries. Gaps auto-resolve when domain success rate exceeds 70%. Persists to `data/knowledge_gaps.json`.
 
 ---
 

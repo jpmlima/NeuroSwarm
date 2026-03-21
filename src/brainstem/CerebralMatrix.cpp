@@ -52,6 +52,7 @@ public:
         init_lobes.push_back({"STATISTICS", base + "statistics_lobe"});
         init_lobes.push_back({"BASAL_GANGLIA", base + "basal_ganglia"});
         init_lobes.push_back({"CONCEPT", base + "concept_lobe"});
+        init_lobes.push_back({"CAUSAL", base + "causal_lobe"});
     }
 
     void awaken() {
