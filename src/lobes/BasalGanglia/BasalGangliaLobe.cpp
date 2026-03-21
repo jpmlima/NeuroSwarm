@@ -804,11 +804,50 @@ private:
         }
 
         // Cross-domain transfer: propagate confidence to related domains
-        if (success && domain_affinity.count(domain)) {
-            for (auto& related : domain_affinity[domain]) {
+        // Use concept space affinity first, fall back to static affinity
+        if (success) {
+            std::set<std::string> related_domains;
+
+            // Concept-based affinity: find domains whose concept clusters are near this one
+            if (concept_space_available) {
+                // Find which concept cluster this domain maps to
+                for (auto& [cname, cinfo] : concept_clusters) {
+                    // Check if this concept relates to the current domain
+                    bool matches = false;
+                    if (cinfo.abstraction == domain) matches = true;
+                    for (auto& [concept, mapped] : concept_to_domain) {
+                        if (mapped == domain && cinfo.abstraction.find(concept) != std::string::npos) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+
+                    // All other concepts are potential transfer targets
+                    for (auto& [other_name, other_info] : concept_clusters) {
+                        if (other_name == cname) continue;
+                        // Map concept to domain
+                        std::string related;
+                        for (auto& [concept, mapped] : concept_to_domain) {
+                            if (other_info.abstraction.find(concept) != std::string::npos) {
+                                related = mapped;
+                                break;
+                            }
+                        }
+                        if (related.empty()) related = other_info.abstraction;
+                        if (self_model.count(related)) related_domains.insert(related);
+                    }
+                }
+            }
+
+            // Static affinity fallback
+            if (related_domains.empty() && domain_affinity.count(domain)) {
+                for (auto& r : domain_affinity[domain]) related_domains.insert(r);
+            }
+
+            for (auto& related : related_domains) {
                 if (self_model.count(related)) {
                     auto& rd = self_model[related];
-                    // Small boost — 5% toward higher confidence
                     rd.predicted_success_rate = std::min(1.0f, rd.predicted_success_rate + 0.05f);
                 }
             }
@@ -933,8 +972,22 @@ private:
                 int t = d.success + d.failure;
                 if (t < 5 || d.actual_success_rate >= 0.4f) continue;
             } else if (current_drive == DriveLevel::SELF_MODIFY) {
-                // Only consider source_modification and compilation
-                if (domain != "source_modification" && domain != "compilation") continue;
+                // Consider source_modification, compilation, and concept-derived equivalents
+                bool is_self_modify_domain =
+                    domain == "source_modification" || domain == "compilation" ||
+                    domain == "build_system" || domain == "compile" ||
+                    domain == "transform_text" || domain == "compare_content";
+                // Also allow any concept-derived domain that maps to these
+                if (!is_self_modify_domain && concept_space_available) {
+                    for (auto& [concept, mapped] : concept_to_domain) {
+                        if ((mapped == "compilation" || mapped == "source_modification") &&
+                            domain.find(concept) != std::string::npos) {
+                            is_self_modify_domain = true;
+                            break;
+                        }
+                    }
+                }
+                if (!is_self_modify_domain) continue;
             }
 
             float f = compute_fitness(domain);
@@ -1884,6 +1937,23 @@ int main() {
             for (auto& c : domain_commands[domain]) cmds.push_back(c);
         }
 
+        // For concept-derived dynamic domains: pull example commands from concept clusters
+        if (cmds.empty() && concept_space_available) {
+            for (auto& [cname, cinfo] : concept_clusters) {
+                if (cinfo.abstraction == domain ||
+                    cinfo.abstraction.find(domain) != std::string::npos ||
+                    domain.find(cinfo.abstraction) != std::string::npos) {
+                    // Use the self_model example_commands which were populated from executions
+                    if (self_model.count(domain) && !self_model[domain].example_commands.empty()) {
+                        for (auto& c : self_model[domain].example_commands) {
+                            cmds.push_back(c);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
         return cmds;
     }
 
@@ -1901,7 +1971,14 @@ int main() {
             f >> doc;
 
             for (auto& [domain, data] : doc.items()) {
-                if (self_model.find(domain) == self_model.end()) continue;
+                // Accept dynamic domains from concept space — don't skip unknown domains
+                if (self_model.find(domain) == self_model.end()) {
+                    // Register as dynamic domain
+                    if (std::find(domains.begin(), domains.end(), domain) == domains.end()) {
+                        domains.push_back(domain);
+                    }
+                    self_model[domain] = DomainState{};
+                }
                 auto& d = self_model[domain];
                 d.success               = data.value("success", 0);
                 d.failure               = data.value("failure", 0);
