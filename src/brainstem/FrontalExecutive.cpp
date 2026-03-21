@@ -437,17 +437,59 @@ private:
         dispatch_to_all(real_req);
     }
 
+    // Detect conversational queries that don't need bash commands
+    bool is_conversational(const std::string& text) {
+        std::string lower = text;
+        for (auto& c : lower) c = std::tolower(c);
+        static const std::vector<std::string> patterns = {
+            "who are you", "what are you", "what is your name", "what's your name",
+            "quem es tu", "qual e o teu nome", "como te chamas",
+            "hello", "hi ", "hey ", "ola", "olá", "bom dia", "boa tarde", "boa noite",
+            "how are you", "como estas", "como estás",
+            "what can you do", "o que consegues fazer", "o que sabes fazer",
+            "help", "ajuda",
+            "tell me about yourself", "fala sobre ti", "descreve-te",
+            "thank", "obrigad",
+        };
+        for (const auto& p : patterns) {
+            if (lower.find(p) != std::string::npos) return true;
+        }
+        // Short messages ending with ? are likely questions about the system
+        if (lower.size() < 60 && lower.back() == '?') return true;
+        return false;
+    }
+
+    void handle_conversational(const std::string& cid, const std::string& text) {
+        std::cout << "[EXECUTIVE] Conversational query detected: " << text << std::endl;
+
+        // Use LLM with free-form prompt (no JSON grammar, no bash command)
+        json req = {
+            {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
+            {"adapter", "default"},
+            {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture that bootstraps from zero knowledge. "
+                     "You are a distributed system of C++ lobes communicating via ZeroMQ, with intrinsic motivation, "
+                     "neurogenesis, dream sandbox testing, and semantic memory. You run on the user's local machine. "
+                     "Answer conversationally and concisely. Do not output JSON or bash commands.\n<|end|>\n"
+                     "<|user|>\n" + text + "\n<|end|>\n<|assistant|>\n"}
+        };
+        dispatch_to_all(req);
+    }
+
     void start_new_goal(const json& data) {
         std::string cid  = data.value("cid", "user_" + std::to_string(std::time(nullptr)));
         std::string goal = data.value("text", "");
 
+        // Check if this is a conversational query (no bash command needed)
+        bool is_user_stimulus = (data.value("origin", "") == "broca_terminal" ||
+                                 data.value("origin", "") == "user_terminal");
+        if (is_user_stimulus && is_conversational(goal)) {
+            handle_conversational(cid, goal);
+            return;
+        }
+
         GoalState state;
         state.goal   = goal;
         state.active = true;
-
-        // User stimuli always handled inline (high priority, needs immediate response)
-        bool is_user_stimulus = (data.value("origin", "") == "broca_terminal" ||
-                                 data.value("origin", "") == "user_terminal");
 
         // Delegate to Spike worker if capacity allows and not a user stimulus
         if (!is_user_stimulus && active_workers < MAX_SPIKE_WORKERS) {
