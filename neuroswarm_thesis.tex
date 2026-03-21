@@ -141,9 +141,9 @@ NeuroSwarm runs as a constellation of 20+ Unix processes managed by a parent pro
 }
 
 % Specialist lobes (dynamic)
-\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries] (s1) at (-3.5, -3.5) {COMPILATION\\SPECIALIST};
-\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries] (s2) at (-0.5, -3.5) {FILE\_WRITE\\SPECIALIST};
-\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries] (s3) at (2.5, -3.5) {SCRIPT\\SPECIALIST};
+\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries, align=center] (s1) at (-3.5, -3.5) {COMPILATION\\SPECIALIST};
+\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries, align=center] (s2) at (-0.5, -3.5) {FILE\_WRITE\\SPECIALIST};
+\node[rectangle, rounded corners=3pt, draw=neurogreen, fill=neurogreen!10, minimum width=1.8cm, minimum height=0.5cm, font=\tiny\bfseries, align=center] (s3) at (2.5, -3.5) {SCRIPT\\SPECIALIST};
 \draw[arr, neurogreen, dashed] (s1) -- (s1 |- bus.south);
 \draw[arr, neurogreen, dashed] (s2) -- (s2 |- bus.south);
 \draw[arr, neurogreen, dashed] (s3) -- (s3 |- bus.south);
@@ -253,25 +253,25 @@ The PrimordialLoop encodes five immutable axioms --- the only hardcoded knowledg
     \draw[arr] (\i) -- (\j);
 }
 
-% Time annotations
-\node[gray, font=\tiny, right] at (4.3, 0) {$<$ 1s};
-\node[gray, font=\tiny, right] at (4.3, -1.2) {$\sim$ 2s};
-\node[gray, font=\tiny, right] at (4.3, -2.4) {$\sim$ 10s};
-\node[gray, font=\tiny, right] at (4.3, -3.6) {$\sim$ 5s};
-\node[gray, font=\tiny, right] at (4.3, -4.8) {$\sim$ 3s};
-\node[gray, font=\tiny, right] at (4.3, -6.0) {$\sim$ 30s};
-\node[gray, font=\tiny, right] at (4.3, -7.2) {$\sim$ 2s};
-\node[gray, font=\tiny, right] at (4.3, -8.4) {$\sim$ 10s};
+% Time annotations (2cm right of box edge at x=4 → x=6)
+\node[gray, font=\tiny, anchor=west] at (6, 0) {$<$ 1s};
+\node[gray, font=\tiny, anchor=west] at (6, -1.2) {$\sim$ 2s};
+\node[gray, font=\tiny, anchor=west] at (6, -2.4) {$\sim$ 10s};
+\node[gray, font=\tiny, anchor=west] at (6, -3.6) {$\sim$ 5s};
+\node[gray, font=\tiny, anchor=west] at (6, -4.8) {$\sim$ 3s};
+\node[gray, font=\tiny, anchor=west] at (6, -6.0) {$\sim$ 30s};
+\node[gray, font=\tiny, anchor=west] at (6, -7.2) {$\sim$ 2s};
+\node[gray, font=\tiny, anchor=west] at (6, -8.4) {$\sim$ 10s};
 
-% Operator count annotations
-\node[neurogreen, font=\tiny, left] at (-4.3, 0) {0 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -1.2) {5 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -2.4) {$\sim$50 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -3.6) {$\sim$55 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -4.8) {$\sim$60 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -6.0) {$\sim$1000 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -7.2) {$\sim$1080 ops};
-\node[neurogreen, font=\tiny, left] at (-4.3, -8.4) {$\sim$1087 ops};
+% Operator count annotations (2cm left of box edge at x=-4 → x=-6)
+\node[neurogreen, font=\tiny, anchor=east] at (-6, 0) {0 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -1.2) {5 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -2.4) {$\sim$50 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -3.6) {$\sim$55 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -4.8) {$\sim$60 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -6.0) {$\sim$1000 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -7.2) {$\sim$1080 ops};
+\node[neurogreen, font=\tiny, anchor=east] at (-6, -8.4) {$\sim$1087 ops};
 
 \end{tikzpicture}
 \caption{Bootstrap sequence with approximate timing and cumulative operator count. The system goes from zero knowledge to $>$1{,}000 operators in under 60 seconds. Subsequent startups load persisted state and skip known phases, reducing startup to $\sim$10 seconds.}
@@ -346,8 +346,9 @@ The key architectural decision: the LLM is not the brain. It is one component am
 \draw[arr, neurogreen] (t2.east) -- ++(1.2, 0) node[right, font=\footnotesize, neurogreen] {Execute};
 \draw[arr, neurogreen] (t3.east) -- ++(1.2, 0) node[right, font=\footnotesize, neurogreen] {Execute};
 
-% Learning feedback
-\draw[arr, neuroblue, dashed] (5.5, -4.3) -- (5.5, -5) -- (-5.5, -5) -- (-5.5, 0.3) -- (t1.west) node[pos=0.5, below, font=\tiny, neuroblue] {Successful commands become new operators $\to$ Tier 1 grows};
+% Learning feedback — routed well outside tier boxes to avoid overlap
+\draw[arr, neuroblue, dashed] (5.8, -4.6) -- (5.8, -5.5) -- (-6.2, -5.5) -- (-6.2, 0) -- (t1.west);
+\node[neuroblue, font=\tiny, align=center] at (0, -5.9) {Successful commands become new operators $\to$ Tier 1 grows};
 
 \end{tikzpicture}
 \caption{The three-tier execution pipeline. Each tier is tried in order; success at any tier bypasses the rest. The feedback loop (dashed) shows how Tier 3 outputs feed back into Tier 1: every successful LLM-generated command becomes a learned operator, reducing future LLM dependency.}
@@ -483,14 +484,13 @@ Goals are filtered through a Maslow-inspired priority stack:
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    level/.style={trapezium, trapezium angle=75, draw=#1, fill=#1!15, minimum width=#2, minimum height=0.8cm, font=\small\bfseries, align=center},
     every node/.style={font=\small}
 ]
-\node[level=neurored, 3cm] (s) at (0, 0) {SURVIVAL};
-\node[level=neuroorange, 4.5cm] (h) at (0, -1.1) {HOMEOSTASIS};
-\node[level=neuroblue, 6cm] (e) at (0, -2.2) {EXPLORATION};
-\node[level=neuropurple, 7.5cm] (m) at (0, -3.3) {MASTERY};
-\node[level=neurogreen, 9cm] (sm) at (0, -4.4) {SELF-MODIFY};
+\node[trapezium, trapezium angle=75, draw=neurored, fill=neurored!15, minimum width=3cm, minimum height=0.8cm, font=\small\bfseries, align=center] (s) at (0, 0) {SURVIVAL};
+\node[trapezium, trapezium angle=75, draw=neuroorange, fill=neuroorange!15, minimum width=4.5cm, minimum height=0.8cm, font=\small\bfseries, align=center] (h) at (0, -1.1) {HOMEOSTASIS};
+\node[trapezium, trapezium angle=75, draw=neuroblue, fill=neuroblue!15, minimum width=6cm, minimum height=0.8cm, font=\small\bfseries, align=center] (e) at (0, -2.2) {EXPLORATION};
+\node[trapezium, trapezium angle=75, draw=neuropurple, fill=neuropurple!15, minimum width=7.5cm, minimum height=0.8cm, font=\small\bfseries, align=center] (m) at (0, -3.3) {MASTERY};
+\node[trapezium, trapezium angle=75, draw=neurogreen, fill=neurogreen!15, minimum width=9cm, minimum height=0.8cm, font=\small\bfseries, align=center] (sm) at (0, -4.4) {SELF-MODIFY};
 
 \node[gray, font=\tiny, right] at (2, 0) {Lobe crashes, system integrity};
 \node[gray, font=\tiny, right] at (3, -1.1) {Stamina, temperature, metabolic};
@@ -527,24 +527,30 @@ The MetaCognition lobe classifies every failed \texttt{execution\_result} into o
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    box/.style={rectangle, rounded corners=3pt, draw=#1, fill=#1!10, minimum width=3cm, minimum height=0.9cm, font=\footnotesize\bfseries, align=center},
+    box/.style={rectangle, rounded corners=3pt, draw=#1, fill=#1!10, minimum width=2.6cm, minimum height=0.8cm, font=\scriptsize\bfseries, align=center},
     arr/.style={-{Stealth[length=5pt]}, thick, #1},
-    every node/.style={font=\footnotesize}
+    every node/.style={font=\scriptsize}
 ]
 
+% Top row — wider spacing (0, 5, 10)
 \node[box=neurored] (mc) at (0, 0) {MetaCognition\\detects gap};
 \node[box=neuroorange] (et) at (5, 0) {Publishes\\exploration\_target};
 \node[box=neuroblue] (bg) at (10, 0) {BasalGanglia\\boosts domain};
-\node[box=neurogreen] (fe) at (10, -2) {FrontalExecutive\\executes with context};
-\node[box=neuropurple] (ml) at (5, -2) {MotorLobe\\execution\_result};
-\node[box=neurored] (mc2) at (0, -2) {MetaCognition\\evaluates result};
+% Bottom row — vertical gap = 3.5
+\node[box=neurogreen] (fe) at (10, -3.5) {FrontalExecutive\\executes with context};
+\node[box=neuropurple] (ml) at (5, -3.5) {MotorLobe\\execution\_result};
+\node[box=neurored] (mc2) at (0, -3.5) {MetaCognition\\evaluates result};
 
-\draw[arr=neurored] (mc) -- (et) node[midway, above, font=\tiny] {domain, importance, strategy};
-\draw[arr=neuroorange] (et) -- (bg) node[midway, above, font=\tiny] {fitness boost $+0.5 \times$ importance};
-\draw[arr=neuroblue] (bg) -- (fe) node[midway, right, font=\tiny] {intrinsic\_goal with\\gap context};
-\draw[arr=neurogreen] (fe) -- (ml) node[midway, below, font=\tiny] {execution\_request};
-\draw[arr=neuropurple] (ml) -- (mc2) node[midway, below, font=\tiny] {success/failure};
-\draw[arr=gray, dashed] (mc2) -- (mc) node[midway, left, font=\tiny] {update gaps};
+% Top arrows — labels above with generous offset
+\draw[arr=neurored] (mc) -- (et) node[midway, above=4pt, font=\tiny] {domain, importance};
+\draw[arr=neuroorange] (et) -- (bg) node[midway, above=4pt, font=\tiny] {fitness boost (+0.3)};
+% Right arrow
+\draw[arr=neuroblue] (bg) -- (fe) node[midway, right=3pt, font=\tiny, align=left] {intrinsic\_goal\\with gap context};
+% Bottom arrows — labels below with generous offset
+\draw[arr=neurogreen] (fe) -- (ml) node[midway, below=4pt, font=\tiny] {execution\_request};
+\draw[arr=neuropurple] (ml) -- (mc2) node[midway, below=4pt, font=\tiny] {success/failure};
+% Left arrow
+\draw[arr=gray, dashed] (mc2) -- (mc) node[midway, left=3pt, font=\tiny] {update gaps};
 
 \end{tikzpicture}
 \caption{The directed exploration loop. MetaCognition identifies the most critical knowledge gap, publishes an \texttt{exploration\_target}, and the Basal Ganglia boosts the targeted domain's fitness score. The goal context includes the gap's error pattern, root cause, and suggested strategy --- so the FrontalExecutive knows \emph{why} it is exploring, not just \emph{what}.}
@@ -620,16 +626,16 @@ Before triggering neurogenesis, the Basal Ganglia first sends a \texttt{domain\_
 ]
 
 \node[step=neuroblue] (s1) at (0, 0) {\textbf{Basal Ganglia}\\Generates C++\\from template};
-\node[step=neuroorange] (s2) at (4.5, 0) {\textbf{Motor Lobe}\\Compiles with\\g++ -std=c++17};
-\node[step=neurogreen] (s3) at (9, 0) {\textbf{CerebralMatrix}\\fork() + exec()\\inject into bus};
-\node[step=neuropurple] (s4) at (9, -2.5) {\textbf{Specialist Lobe}\\Monitors domain\\publishes advice};
+\node[step=neuroorange] (s2) at (5.5, 0) {\textbf{Motor Lobe}\\Compiles with\\g++ -std=c++17};
+\node[step=neurogreen] (s3) at (11, 0) {\textbf{CerebralMatrix}\\fork() + exec()\\inject into bus};
+\node[step=neuropurple] (s4) at (11, -3) {\textbf{Specialist Lobe}\\Monitors domain\\publishes advice};
 
-\draw[arr=neuroblue] (s1) -- (s2) node[midway, above, font=\tiny] {genesis\_request};
-\draw[arr=neuroorange] (s2) -- (s3) node[midway, above, font=\tiny] {inject\_lobe};
-\draw[arr=neurogreen] (s3) -- (s4) node[midway, right, font=\tiny] {lobe\_injected};
+\draw[arr=neuroblue] (s1) -- (s2) node[midway, above=3pt, font=\tiny] {genesis\_request};
+\draw[arr=neuroorange] (s2) -- (s3) node[midway, above=3pt, font=\tiny] {inject\_lobe};
+\draw[arr=neurogreen] (s3) -- (s4) node[midway, right=2pt, font=\tiny] {lobe\_injected};
 
 % Feedback
-\draw[arr=gray, dashed] (s4.west) -- (0, -2.5) -- (s1.south) node[pos=0.4, below, font=\tiny] {specialist\_report every 5min};
+\draw[arr=gray, dashed] (s4.west) -- (0, -3) -- (s1.south) node[pos=0.4, below=2pt, font=\tiny] {specialist\_report every 5min};
 
 \end{tikzpicture}
 \caption{The neurogenesis pipeline. From chronic domain failure to a running specialist lobe takes approximately 3 seconds (template generation: $<$1ms, compilation: $\sim$2s, injection: $<$100ms).}
@@ -683,7 +689,7 @@ This creates horizontal gene transfer: an operator learned on one machine become
 \end{itemize}
 
 \section{Postcondition Enrichment}
-Operators from bootstrap initially have empty postconditions. After Phase 6, \texttt{enrich\_operator\_postconditions()} infers postconditions from patterns:
+Operators from bootstrap initially have empty postconditions. After Phase~6, the function \texttt{enrich\_operator\_post\-con\-di\-tions()} infers postconditions from patterns:
 
 \begin{table}[H]
 \centering
@@ -896,11 +902,12 @@ This chapter presents measurements from live system runs. All data was collected
     xlabel={Cognitive Cycles},
     ylabel={LLM Calls / Total Executions (\%)},
     xmin=0, xmax=500,
-    ymin=0, ymax=100,
+    ymin=0, ymax=110,
     grid=both,
     grid style={gray!20},
     legend pos=north east,
-    legend style={font=\footnotesize}
+    legend style={font=\footnotesize},
+    clip=false
 ]
 % NeuroSwarm: decaying curve
 \addplot[thick, neuroblue, smooth] coordinates {
@@ -908,14 +915,14 @@ This chapter presents measurements from live system runs. All data was collected
 };
 \addlegendentry{NeuroSwarm}
 
-% AutoGPT: constant
-\addplot[thick, neurored, dashed] coordinates {
+% AutoGPT: constant at 100% — very thick so it's clearly visible at the top
+\addplot[very thick, neurored, dashed] coordinates {
     (0, 100) (100, 100) (200, 100) (300, 100) (400, 100) (500, 100)
 };
 \addlegendentry{AutoGPT / LangChain}
 
-% Annotation
-\draw[<-, thick, gray] (350, 4) -- (400, 25) node[right, font=\footnotesize, text width=3.5cm] {Planner resolves\\most goals without\\inference};
+% Annotation — inside plot area, text box anchored to stay within bounds
+\draw[<-, thick, gray] (axis cs:280, 8) -- (axis cs:200, 45) node[above, font=\footnotesize, text width=3.5cm, align=center] {Planner resolves most goals without inference};
 
 \end{axis}
 \end{tikzpicture}
@@ -1062,13 +1069,13 @@ The architecture ensures LLM dependency monotonically decreases (see Figure~\ref
 
 \section{Limitations}
 \begin{itemize}
-    \item \textbf{Symbol grounding}: The system operates within the symbolic domain of a filesystem. No sensorimotor grounding --- no cameras, microphones, or actuators.
-    \item \textbf{Single-machine bottleneck}: Inter-instance communication is limited to periodic SSH-based operator sync.
-    \item \textbf{Operator quality}: Postcondition inference is pattern-based and imperfect.
-    \item \textbf{Genesis template rigidity}: The specialist template is a fixed C++ skeleton --- only domain-specific parameterisations, not novel architectures.
-    \item \textbf{No formal verification}: As the system modifies itself, behaviour becomes irreducibly emergent.
-    \item \textbf{Substantive success alignment}: MetaCognition and BasalGanglia must share the same success filter. Without alignment, the directed exploration loop fails to activate because MetaCognition sees no gaps.
+    \item \textbf{Symbol grounding}: The system operates within the symbolic domain of a filesystem. No sensorimotor grounding --- no cameras, microphones, or actuators. A future \texttt{SensoryLobe} could integrate V4L2 (vision), ALSA/PulseAudio (audition), or GPIO (tactile), but this would substantially expand scope.
+    \item \textbf{Single-machine bottleneck}: Inter-instance communication is limited to periodic SSH-based operator sync. The natural extension is ZMQ mesh networking --- each CerebralMatrix binds PUB/SUB to TCP peers rather than localhost --- but this requires distributed authentication and discovery.
+    \item \textbf{Operator quality}: Postcondition inference is pattern-based and imperfect. LLM-assisted postcondition inference (``what facts changed?'') at the cost of one inference per novel operator is a viable improvement.
+    \item \textbf{Genesis template rigidity}: The specialist template is a fixed C++ skeleton --- only domain-specific parameterisations, not novel architectures. Multiple template archetypes (observer, transformer, validator) or LLM-generated templates with compilation constraints would increase architectural diversity.
+    \item \textbf{No formal verification}: As the system modifies itself, behaviour becomes irreducibly emergent. This is intrinsic to autopoietic systems: runtime invariant monitors (Homeostasis, Critic Lobe) provide empirical safety bounds but not formal guarantees. We consider this a fundamental property, not an engineering gap.
 \end{itemize}
+
 
 \section{Relation to Theories of Consciousness}
 The architecture satisfies the structural prerequisites of two prominent theories:
