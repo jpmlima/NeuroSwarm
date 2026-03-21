@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Version-3.0.0-blue?style=for-the-badge" alt="v3.0.0">
   <img src="https://img.shields.io/badge/Architecture-Distributed_Cortical_Matrix-green?style=for-the-badge" alt="Architecture">
   <img src="https://img.shields.io/badge/Language-C%2B%2B17-orange?style=for-the-badge" alt="C++17">
-  <img src="https://img.shields.io/badge/Inference-Phi--4--mini_Q4__K__M-purple?style=for-the-badge" alt="Phi-4-mini">
+  <img src="https://img.shields.io/badge/Inference-Qwen2.5--7B_Q4__K__M-purple?style=for-the-badge" alt="Qwen2.5-7B">
   <br><br>
   <h3>A biomimetic cognitive architecture that bootstraps from zero knowledge</h3>
   <p><em>Autopoiesis, intrinsic motivation, and structural self-modification in a distributed C++ system</em></p>
@@ -15,7 +15,7 @@
 <div align="center">
   <img src="docs/neuroswarm_dashboard.png" alt="NeuroSwarm Cognitive Dashboard" width="900"/>
   <br>
-  <sub>Real-time cognitive dashboard — 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis metrics, spike task ticker</sub>
+  <sub>Real-time cognitive dashboard — 2D network graph with density clusters, cognitive pipeline indicator, Maslow drive hierarchy, neurogenesis metrics, spike task ticker</sub>
 </div>
 
 ---
@@ -87,7 +87,7 @@ graph TD
     end
 
     subgraph OBSERVE ["Observability"]
-        VZ[Visualizer — 2D Dashboard\nport 8080]
+        VZ[Visualizer — 2D Dashboard\nCognitive Pipeline Indicator\nport 8080]
     end
 
     PL -->|primordial_ready| TH
@@ -240,7 +240,7 @@ This enables structural adaptation without system restart — analogous to adult
 | **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, crash detection with exponential backoff, neurogenesis injection, apoptosis termination, orphan cleanup |
 | **PrimordialLoop** | `primordial_loop` | Autopoiesis kernel — bootstrap from zero, GOAP planner, operator registry, variation engine, surprise engine, runtime learning, network expansion |
 | **Thalamus** | `thalamus` | ZMQ XPUB/XSUB relay — all messages transit this single bottleneck |
-| **SynapticController** | `synaptic_controller` | LLM inference server — Phi-4-mini (generative) + Nomic-Embed (semantic), multi-slot ModelManager |
+| **SynapticController** | `synaptic_controller` | LLM inference server — Qwen2.5-7B (generative) + Nomic-Embed (semantic), multi-slot ModelManager |
 | **FrontalExecutive** | `frontal_executive` | 3-tier execution: Planner → Suggested Commands → LLM. Goal pursuit, plan execution |
 | **CriticLobe** | `critic_lobe` | Three-tier adversarial validation: pattern blacklist + scope check + red-team LLM |
 | **MotorLobe** | `motor_lobe` | Command execution in 3 modes: reality, dream (sandboxed), neuro-surgery (self-modification) |
@@ -332,7 +332,7 @@ Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 | Layer | Technology |
 |---|---|
 | **Neural Bus** | ZeroMQ 4.x — PUB/SUB, non-blocking |
-| **Inference** | llama.cpp (Vulkan/GPU offload) — Phi-4-mini-instruct Q4_K_M |
+| **Inference** | llama.cpp (Vulkan/GPU offload) — Qwen2.5-7B-Instruct Q4_K_M |
 | **Embeddings** | nomic-embed-text-v1.5 Q8_0 — dedicated 137M model, mean pooling |
 | **Memory Index** | L2-normalised cosine similarity over JSONL (zero external dependencies) |
 | **Grammar Constraints** | GBNF — llama.cpp grammar-constrained decoding for structured JSON output |
@@ -355,16 +355,16 @@ cd ..
 # 2. Download models (first time only)
 python3 -c "
 from huggingface_hub import hf_hub_download
-# Primary: Phi-4-mini — best quality/size ratio for <12GB VRAM
-hf_hub_download('unsloth/Phi-4-mini-instruct-GGUF',
-                'Phi-4-mini-instruct-Q4_K_M.gguf', local_dir='models')
+# Primary: Qwen2.5-7B — best quality/size ratio for <12GB VRAM
+hf_hub_download('Qwen/Qwen2.5-7B-Instruct-GGUF',
+                'qwen2.5-7b-instruct-q4_k_m.gguf', local_dir='models')
 # Semantic memory
 hf_hub_download('nomic-ai/nomic-embed-text-v1.5-GGUF',
                 'nomic-embed-text-v1.5.Q8_0.gguf', local_dir='models')
 "
 
 # 3. Launch all processes
-bash start_agi.sh
+./start.sh
 
 # 4. Open a conversation
 ./build/broca_chat
@@ -380,7 +380,7 @@ xdg-open http://localhost:8080
 ## XI. Roadmap
 
 - [x] **Ralph loop** — `tasks.json`-driven autonomous self-improvement with `git commit` audit trail
-- [x] **Phi-4-mini** — primary generative model (3.8B, Q4_K_M, 2.4GB)
+- [x] **Qwen2.5-7B** — primary generative model (7B, Q4_K_M, 4.4GB), priority fallback: Qwen2.5-7B → Phi-4-mini → Qwen2.5-1.5B
 - [x] **Dream Sandbox** — isolated filesystem execution before reality deployment
 - [x] **Neuro-Surgery** — runtime C++ lobe compilation and process injection
 - [x] **Cognitive Dashboard** — 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis/apoptosis metrics, spike task ticker
@@ -395,7 +395,7 @@ xdg-open http://localhost:8080
 - [x] **REM fine-tuning** — REM Engine exports successful reality-mode execution traces as chat-template training data and spawns `llama-finetune` (CPU-only, no VRAM conflict) to produce specialised GGUFs. ModelManager supports LoRA adapter loading via `llama_adapter_lora_init` for externally-trained adapters, with per-inference activation/deactivation. SynapticController auto-loads fine-tuned models from `models/finetuned/` and LoRA adapters from `models/lora/` at startup
 - [x] **Self-preservation** — CerebralMatrix monitors all child processes via `waitpid(WNOHANG)`, detects crashes with signal/exit-code analysis, auto-restarts with exponential backoff (2s→4s→8s→16s), marks lobes permanently dead after 5 consecutive failures. Orphaned processes from previous sessions cleaned up at startup via `/proc` scan. FrontalExecutive reaps zombie spike workers in idle loop
 - [x] **Neurogenesis pipeline** — BasalGanglia detects chronic domain failure (<30% over 20+ attempts) and generates specialist lobes from parameterised C++ templates. MotorLobe compiles as standalone executables. CerebralMatrix validates binaries and injects via `fork()`/`exec()`. Specialists monitor their domain, publish advice and periodic reports. Apoptosis via `lobe_terminate` allows pruning of unneeded specialists
-- [x] **Dashboard v2** — 2D Canvas network graph replacing Three.js 3D mesh. 16 core lobe nodes with cluster density clouds, curved bezier edges. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker with chronological task entries. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events
+- [x] **Dashboard v3** — 2D Canvas network graph with 16 core lobe nodes (including ConceptLobe) and cluster density clouds. Right panel: cognitive pipeline step indicator (Goal > Plan > Suggest > LLM > Critic > Dream > Exec) showing real-time execution stage. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events. Clean startup via `start.sh` suppresses polkit/GVFS desktop dialogs
 - [x] **Autopoiesis kernel (PrimordialLoop)** — bootstrap from zero knowledge through 7 phases: existence → first contact → capability discovery → sense acquisition → tool discovery → active exploration → planner self-test. 5 axioms hardcoded (Execution, Surprise, Associative Memory, Variation, Self-Reference). Persists world state and self-model across restarts for incremental bootstrap (~10s vs ~60s)
 - [x] **GOAP Planner** — backward-chaining search over learned operators. Maps goal postconditions to operator chains. Reports gaps (unsatisfiable postconditions) that trigger operator generation. No LLM involved — pure graph search
 - [x] **Operator Registry** — persistent procedural memory. Operators learned from bootstrap, runtime execution, variation, and LLM. Track success rate, duration, fragments for recombination. Append-only JSONL with periodic prune (apoptosis for dying operators)
@@ -406,7 +406,7 @@ xdg-open http://localhost:8080
 - [x] **Network expansion** — SSH-based self-deployment: discover hosts from `~/.ssh/known_hosts` + `~/.ssh/config`, probe reachability, deploy kernel binary via `scp`, start remote instance via `nohup`. Periodic operator sync imports novel operators from remote instances (horizontal gene transfer)
 - [x] **Domain resolution pipeline** — before neurogenesis, chronic failures go through 4-stage resolution: variation → mutation → planner → LLM. Each stage tests candidates in Dream Sandbox. Neurogenesis only triggers when all stages fail
 - [x] **Postcondition enrichment** — retroactive inference of postconditions for bootstrap-learned operators using command pattern matching. Bridges experiential learning (commands without annotations) and the Planner (requires postconditions)
-- [x] **GUI skip list** — PrimordialLoop skips GUI apps, editors, browsers, terminal emulators, window managers, and interactive interpreters during binary probing to avoid launching graphical programs during headless operation
+- [x] **GUI skip list** — PrimordialLoop skips GUI apps, editors, browsers, terminal emulators, window managers, and interactive interpreters during binary probing and dream testing to avoid launching graphical programs during headless operation
 - [x] **RLAIF chain tracking** — FrontalExecutive records full command chains per goal, caches completed chains, and publishes `rlaif_reinforce` on dopamine signals. BasalGanglia boosts genome template fitness proportionally. Chains are consumed after use and deduplicated per domain to prevent multiplied reinforcement
 - [x] **Semantic success validation** — `is_substantive_success()` rejects degenerate commands that exit 0 without real work: echo-only commands, `/dev/null` no-ops, and empty output. Applied at BasalGanglia level to both execution results and RLAIF chain reinforcement
 - [x] **Lateral inhibition** — competing specialists for overlapping domains are pruned when one handles less than 50% of a rival's commands. Prevents redundant specialist proliferation after neurogenesis
