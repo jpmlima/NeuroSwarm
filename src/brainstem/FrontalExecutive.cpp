@@ -1152,7 +1152,7 @@ private:
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", "coder"},
             {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
-            {"text", "<|system|>\nYou are a bash executor. Reply ONLY with JSON: {\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nModes: reality (normal), neuro_surgery (modify+recompile src/*.cpp)\nRules: command MUST be executable bash. No placeholders. No explanations outside JSON.\n"
+            {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture. Reply ONLY with JSON: {\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nModes: reality (normal), neuro_surgery (modify+recompile src/*.cpp)\nRules: command MUST be executable bash. No placeholders. No explanations outside JSON.\n"
              + (system_knowledge.empty() ? "" : system_knowledge + "\n")
              + "<|end|>\n<|user|>\n"
              + (current_timestamp.empty() ? "" : "T:" + current_timestamp + " ")

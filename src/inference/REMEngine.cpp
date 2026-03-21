@@ -193,7 +193,7 @@ private:
 
             // JSONL format: one training sample per line
             json sample = {{"text",
-                "<|system|>\nYou are a bash executor. Reply ONLY with JSON: "
+                "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture. Reply ONLY with JSON: "
                 "{\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
                 "Rules: command MUST be executable bash. No placeholders.\n<|end|>\n"
                 "<|user|>\nGOAL: " + goal + "\n<|end|>\n"
