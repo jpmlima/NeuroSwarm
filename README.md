@@ -41,48 +41,49 @@ Each *lobe* is an independent OS process with a precisely scoped cognitive funct
 
 ```mermaid
 graph TD
-    subgraph "Autopoiesis Kernel"
-        PL[PrimordialLoop — Bootstrap from Zero\nOperator Registry + GOAP Planner\nVariation Engine + Surprise Engine]
+    subgraph KERNEL ["Autopoiesis Kernel"]
+        PL[PrimordialLoop\nBootstrap · GOAP Planner\nOperator Registry · Variation · Surprise]
     end
 
-    subgraph "Sensory Layer"
+    subgraph SENSORY ["Sensory Input"]
         UI[BrocaChat — Terminal I/O]
         VL[Visual Lobe — Filesystem Watcher]
         AL[Auditory Lobe — VAD / Whisper.cpp]
     end
 
-    subgraph "Neural Bus"
-        TH{THALAMUS — ZMQ relay\ntcp:5555 → tcp:5556}
+    subgraph BUS ["Neural Bus"]
+        TH{THALAMUS\nZMQ XPUB/XSUB\ntcp:5555 ↔ tcp:5556\nBridge mode for multi-node}
     end
 
-    subgraph "Cognitive Core"
-        WN[Wernicke — NLU / Intent Classification]
-        FE[Frontal Executive — 3-Tier Execution\nPlanner → Suggested → LLM]
+    subgraph COGNITION ["Cognitive Core"]
+        WN[Wernicke — NLU]
+        FE[Frontal Executive\n3-Tier: Planner → Suggested → LLM\nRLAIF chain tracking]
         CL[Critic Lobe — Adversarial Validation]
     end
 
-    subgraph "Memory System"
-        HP[Hippocampus — Semantic RAG\nNomic-Embed + Cosine Similarity]
-        REM[REM Engine — Memory Consolidation\nEngram Analysis → LoRA Fine-Tune]
+    subgraph MEMORY ["Memory and Learning"]
+        HP[Hippocampus — Semantic RAG\nNomic-Embed · Cosine Similarity]
+        REM[REM Engine — Sleep Consolidation\nEngram Analysis → LoRA Fine-Tune]
     end
 
-    subgraph "Execution Layer"
-        MT[Motor Lobe — OS Execution\nReality / Dream / Neuro-Surgery modes]
+    subgraph EXECUTION ["Execution"]
+        MT[Motor Lobe — OS Execution\nReality · Dream · Neuro-Surgery]
+        SW[Spike Workers — Ephemeral\nfork+exec per goal]
     end
 
-    subgraph "Motivation System"
-        BG[BasalGanglia — Intrinsic Motivation\nFitness Function + Neurogenesis]
+    subgraph MOTIVATION ["Motivation and Evolution"]
+        BG[BasalGanglia — Intrinsic Motivation\nFitness F · Dopamine · RLAIF\nGenome · Meta-Templates\nNeurogenesis · Lateral Inhibition]
     end
 
-    subgraph "Autonomic Regulation"
-        HM[Homeostasis — CPU/RAM/GPU Telemetry]
+    subgraph AUTONOMIC ["Autonomic Regulation"]
+        HM[Homeostasis — Telemetry · Stamina]
         MC[MetaCognition — Reflective Diary]
         CH[Chronos — Temporal Awareness]
         ST[Statistics — Metrics Aggregation]
     end
 
-    subgraph "Observability"
-        VZ[Visualizer — 2D Network Dashboard\nport 8080]
+    subgraph OBSERVE ["Observability"]
+        VZ[Visualizer — 2D Dashboard\nport 8080]
     end
 
     PL -->|primordial_ready| TH
@@ -92,14 +93,18 @@ graph TD
     AL --> TH
     TH <--> WN
     TH <--> FE
-    FE -->|goal_plan_request| PL
+    FE -->|goal_request| PL
     FE --> CL --> FE
     FE --> MT --> FE
+    FE -->|rlaif_reinforce| BG
+    FE -.->|fork+exec| SW
     HP <--> FE
     REM --> FE
     BG -->|intrinsic_goal| FE
+    BG -->|dopamine_signal| FE
     BG -->|domain_resolve_request| PL
     BG -->|genesis_request| MT
+    BG -->|lobe_terminate| TH
     HM --> BG
     HM --> FE
     MC --> TH
@@ -304,6 +309,7 @@ Core intents:
 | `operator_request` | → PL | Request an operator by postcondition |
 | `kernel_deployed` | NE → | Remote kernel binary deployed via SSH |
 | `remote_kernel_started` | NE → | Remote PrimordialLoop instance started |
+| `rlaif_reinforce` | FE → BG | Reinforcement signal with executed command chain and magnitude |
 | `operators_synced` | NE → | Novel operators imported from remote instance |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
@@ -390,6 +396,13 @@ xdg-open http://localhost:8080
 - [x] **Domain resolution pipeline** — before neurogenesis, chronic failures go through 4-stage resolution: variation → mutation → planner → LLM. Each stage tests candidates in Dream Sandbox. Neurogenesis only triggers when all stages fail
 - [x] **Postcondition enrichment** — retroactive inference of postconditions for bootstrap-learned operators using command pattern matching. Bridges experiential learning (commands without annotations) and the Planner (requires postconditions)
 - [x] **GUI skip list** — PrimordialLoop skips GUI apps, editors, browsers, terminal emulators, window managers, and interactive interpreters during binary probing to avoid launching graphical programs during headless operation
+- [x] **RLAIF chain tracking** — FrontalExecutive records full command chains per goal, caches completed chains, and publishes `rlaif_reinforce` on dopamine signals. BasalGanglia boosts genome template fitness proportionally. Chains are consumed after use and deduplicated per domain to prevent multiplied reinforcement
+- [x] **Semantic success validation** — `is_substantive_success()` rejects degenerate commands that exit 0 without real work: echo-only commands, `/dev/null` no-ops, and empty output. Applied at BasalGanglia level to both execution results and RLAIF chain reinforcement
+- [x] **Lateral inhibition** — competing specialists for overlapping domains are pruned when one handles less than 50% of a rival's commands. Prevents redundant specialist proliferation after neurogenesis
+- [x] **Cross-compilation** — NetworkExpander maps 8 architectures (aarch64, armv7l, riscv64, mips, ppc64le, s390x, x86_64, i686) to GNU cross-toolchain compilers for remote kernel deployment on heterogeneous nodes
+- [x] **Meta-templates** — specialist C++ template evolves genetically. Population of parameter variants (report interval, cache size, keyword count) with crossover and mutation. Fitness feedback from specialist reports drives selection
+- [x] **Runtime assertions** — `NS_ASSERT`, `NS_PRECONDITION`, `NS_POSTCONDITION`, `NS_INVARIANT` macros with JSONL logging to `data/assertions.jsonl`. `ScopedRollback` RAII guard for neuro-surgery. Compilable out with `-DNS_NO_ASSERTIONS`
+- [x] **Full system test** — end-to-end test suite (`full_system_test`) verifying Thalamus connectivity, bus round-trip, intrinsic goal cycle, execution pipeline, dopamine signal flow, self-model persistence, and RLAIF reinforcement delivery
 
 ---
 
