@@ -252,6 +252,28 @@ body {
     border-left: 3px solid #e2e8f0; border-radius: 4px;
     min-height: 36px;
 }
+/* Pipeline Step Indicator */
+#pipeline-steps {
+    display: flex; align-items: center; gap: 0;
+    padding: 8px 10px; background: var(--bg); border-radius: 6px;
+    border: 1px solid var(--panel-border); overflow-x: auto;
+}
+.pipe-step {
+    display: flex; align-items: center; gap: 0; white-space: nowrap;
+}
+.pipe-label {
+    font-size: 9px; font-family: var(--mono); color: var(--text-dim);
+    padding: 3px 6px; border-radius: 3px; transition: all 0.3s;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.pipe-label.active {
+    background: #2563eb; color: #fff; font-weight: 600;
+    box-shadow: 0 0 8px rgba(37,99,235,0.3);
+}
+.pipe-label.done { color: var(--success); }
+.pipe-arrow {
+    font-size: 9px; color: var(--text-dim); margin: 0 2px;
+}
 #neural-stream { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; min-height: 0; }
 .stream-entry {
     display: flex; align-items: flex-start; gap: 8px;
@@ -352,6 +374,18 @@ body {
         <div class="focus-text" id="active-goal">Idle — awaiting directive...</div>
     </div>
     <div class="r-section">
+        <div class="section-label">Cognitive Pipeline</div>
+        <div id="pipeline-steps">
+            <div class="pipe-step"><span class="pipe-label" id="pipe-goal">Goal</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-plan">Plan</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-suggest">Suggest</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-llm">LLM</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-critic">Critic</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-dream">Dream</span><span class="pipe-arrow">&rsaquo;</span></div>
+            <div class="pipe-step"><span class="pipe-label" id="pipe-exec">Exec</span></div>
+        </div>
+    </div>
+    <div class="r-section">
         <div class="section-label">Last Thought</div>
         <div class="thought-text" id="last-thought">Standby.</div>
     </div>
@@ -384,7 +418,7 @@ const NODES = {
     homeostasis: { name:"Homeostasis",        component:"homeostasis",         color:"#e11d48", x:0.28, y:0.72, r:15, desc:"Autonomic Stress Regulation",     cluster:"autonomic" },
     chronos:     { name:"Chronos Lobe",       component:"chronos_lobe",        color:"#f43f5e", x:0.38, y:0.80, r:12, desc:"Circadian & Temporal Awareness",  cluster:"autonomic" },
     statistics:  { name:"Statistics",         component:"statistics_lobe",     color:"#6366f1", x:0.70, y:0.76, r:11, desc:"Performance Telemetry",           cluster:"infra" },
-    visualizer:  { name:"Visualizer",         component:"visualizer",          color:"#818cf8", x:0.86, y:0.68, r:10, desc:"This Dashboard",                  cluster:"infra" }
+    concept:     { name:"Concept Space",     component:"concept_lobe",        color:"#8b5cf6", x:0.86, y:0.68, r:14, desc:"Internal Representations",        cluster:"inference" }
 };
 
 const EDGES = [
@@ -398,18 +432,19 @@ const EDGES = [
     {s:'basal',t:'motor'},         {s:'basal',t:'homeostasis'},
     {s:'metacog',t:'synaptic'},    {s:'statistics',t:'thalamus'},
     {s:'critic',t:'amygdala'},     {s:'thalamus',t:'motor'},
-    {s:'thalamus',t:'synaptic'},   {s:'basal',t:'thalamus'}
+    {s:'thalamus',t:'synaptic'},   {s:'basal',t:'thalamus'},
+    {s:'concept',t:'frontal'},     {s:'concept',t:'basal'}
 ];
 
 const CLUSTERS = {
     executive:  { color:'#2563eb', nodes:['frontal'] },
-    inference:  { color:'#7c3aed', nodes:['synaptic','metacog'] },
+    inference:  { color:'#7c3aed', nodes:['synaptic','metacog','concept'] },
     memory:     { color:'#c2410c', nodes:['hippocampus','rem'] },
     language:   { color:'#059669', nodes:['wernicke'] },
     safety:     { color:'#ea580c', nodes:['critic','amygdala'] },
     perception: { color:'#0891b2', nodes:['visual'] },
     motor:      { color:'#16a34a', nodes:['motor'] },
-    infra:      { color:'#4f46e5', nodes:['thalamus','statistics','visualizer'] },
+    infra:      { color:'#4f46e5', nodes:['thalamus','statistics'] },
     motivation: { color:'#db2777', nodes:['basal'] },
     autonomic:  { color:'#e11d48', nodes:['homeostasis','chronos'] }
 };
@@ -422,7 +457,7 @@ const ORIGIN_NODE = {
     'thalamus':'thalamus',         'wernicke_lobe':'wernicke',
     'metacognition':'metacog',     'amygdala':'amygdala',
     'basal_ganglia':'basal',       'chronos_lobe':'chronos',
-    'statistics_lobe':'statistics','visualizer':'visualizer',
+    'statistics_lobe':'statistics','concept_lobe':'concept',
     'spike_worker':'frontal',      'cerebral_matrix':'thalamus',
     'broca_terminal':'wernicke',   'user_terminal':'wernicke'
 };
@@ -440,7 +475,9 @@ const INTENT_TARGET = {
     'sleep_cycle_complete':'rem',    'spike_assign':'motor',
     'spike_ready':'frontal',         'spike_done':'frontal',
     'specialist_advice':'motor',     'specialist_report':'basal',
-    'threat_assessment':'amygdala',  'metacognitive_report':'metacog'
+    'threat_assessment':'amygdala',  'metacognitive_report':'metacog',
+    'concept_query':'concept',        'concept_response':'frontal',
+    'concept_update':'concept',       'concept_transfer':'frontal'
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -889,6 +926,35 @@ function removeSpecialistNode(name) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   COGNITIVE PIPELINE TRACKER
+═══════════════════════════════════════════════════════ */
+const PIPE_IDS = ['pipe-goal','pipe-plan','pipe-suggest','pipe-llm','pipe-critic','pipe-dream','pipe-exec'];
+let currentPipeStep = -1;
+
+function setPipelineStep(stepIdx) {
+    PIPE_IDS.forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.remove('active','done');
+        if (i < stepIdx) el.classList.add('done');
+        else if (i === stepIdx) el.classList.add('active');
+    });
+    currentPipeStep = stepIdx;
+}
+
+function updatePipeline(intent, ev) {
+    if (intent === 'intrinsic_goal') setPipelineStep(0);
+    else if (intent === 'goal_plan') setPipelineStep(1);
+    else if (intent === 'execution_request' && (ev.source === 'suggested' || ev.source === 'basal_ganglia' || ev.tier === 'suggested')) setPipelineStep(2);
+    else if (intent === 'inference_request' && (ev.adapter||'default') !== 'critic') setPipelineStep(3);
+    else if (intent === 'critic_validate') setPipelineStep(4);
+    else if (intent === 'execution_request' && ev.mode === 'dream') setPipelineStep(5);
+    else if (intent === 'execution_request' && ev.mode === 'reality') setPipelineStep(6);
+    else if (intent === 'execution_result' && ev.mode === 'reality') setPipelineStep(6);
+    else if (intent === 'cognitive_idle') setPipelineStep(-1);
+}
+
+/* ═══════════════════════════════════════════════════════
    EVENT POLLING & PROCESSING
 ═══════════════════════════════════════════════════════ */
 let lastSeenTs = 0;
@@ -941,6 +1007,7 @@ function processEvent(ev) {
     if (srcKey && dstKey && srcKey !== dstKey) spawnParticle(srcKey, dstKey);
 
     addStreamEntry(srcKey, intent, dstKey);
+    updatePipeline(intent, ev);
 
     if (intent === 'inference_request') {
         const m = (ev.text||'').match(/GOAL:\s*(.*)/);

@@ -683,6 +683,9 @@ private:
             // Terminal emulators
             "alacritty", "kitty", "wezterm", "foot", "xterm", "urxvt",
             "gnome", "konsole", "tilix", "terminator",
+            // Qt / GTK tools
+            "qdoc", "qmake", "designer", "assistant", "linguist", "qdbusviewer",
+            "gtk-launch", "gtk3-demo", "gtk4-demo",
             // Window managers / compositors
             "hyprland", "sway", "i3", "dwm", "bspwm", "awesome",
             "waybar", "polybar", "rofi", "dmenu", "wofi", "walker",
@@ -1635,6 +1638,9 @@ private:
     // Test a candidate via dream sandbox (runtime) or inline (bootstrap)
     bool test_candidate_sandboxed(const VariationEngine::Candidate& candidate) {
         if (is_dangerous(candidate.command)) return false;
+        // Extract first token (binary name) and skip GUI/interactive programs
+        std::string bin = candidate.command.substr(0, candidate.command.find(' '));
+        if (is_gui_or_interactive(bin)) return false;
 
         auto dr = dream_test(candidate.command);
 

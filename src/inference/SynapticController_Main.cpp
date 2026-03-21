@@ -19,14 +19,18 @@ int main(int argc, char** argv) {
     }
 
     try {
-        // Prefer Phi-4-mini if available; fall back to Qwen2.5-1.5B
-        auto pick_model = [](const std::string& preferred, const std::string& fallback) {
-            return std::ifstream(preferred).good() ? preferred : fallback;
+        // Model priority: Qwen2.5-7B → Phi-4-mini → Qwen2.5-1.5B
+        auto pick_model = [](const std::vector<std::string>& candidates) {
+            for (auto& path : candidates) {
+                if (std::ifstream(path).good()) return path;
+            }
+            return candidates.back();
         };
-        std::string gen_model = pick_model(
+        std::string gen_model = pick_model({
+            "/home/xenomai/Documents/NeuroSwarm/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
             "/home/xenomai/Documents/NeuroSwarm/models/Phi-4-mini-instruct-Q4_K_M.gguf",
             "/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
-        );
+        });
         std::cout << "[BRAIN] Loading generative model: " << gen_model << std::endl;
         neuroswarm::ModelManager brain(
             gen_model,

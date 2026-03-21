@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <chrono>
 #include <thread>
 #include <dirent.h>
@@ -54,6 +55,9 @@ public:
     }
 
     void awaken() {
+        // Prevent systemd from wrapping fork'd children in transient units (polkit dialog)
+        unsetenv("DBUS_SESSION_BUS_ADDRESS");
+
         std::cout << "[CEREBRAL] Starting all lobes..." << std::endl;
         signal(SIGHUP, SIG_IGN);
         // Phase 2: Do NOT set SIGCHLD to SIG_IGN — we need waitpid() for crash detection
@@ -158,6 +162,8 @@ private:
         if (pid == 0) {
             // Child: reset signal handlers
             signal(SIGCHLD, SIG_DFL);
+            // Prevent systemd from wrapping children in transient units (avoids polkit dialog)
+            unsetenv("DBUS_SESSION_BUS_ADDRESS");
             execl(path.c_str(), path.c_str(), (char*)NULL);
             _exit(1);
         } else if (pid > 0) {
@@ -332,6 +338,21 @@ private:
 } // namespace neuroswarm
 
 int main() {
+    // Strip desktop session variables — prevents polkit auth dialogs
+    // and GVFS "browsing network" windows when fork()'ing child lobes
+    unsetenv("DBUS_SESSION_BUS_ADDRESS");
+    unsetenv("DBUS_SYSTEM_BUS_ADDRESS");
+    unsetenv("DISPLAY");
+    unsetenv("WAYLAND_DISPLAY");
+    setenv("GIO_USE_VFS", "local", 1);
+    setenv("SSH_ASKPASS_REQUIRE", "never", 1);
+
+    // Detach from desktop session so systemd doesn't track our forks
+    setsid();
+
+    // Become subreaper — adopted orphans reparent to us, not systemd
+    prctl(PR_SET_CHILD_SUBREAPER, 1);
+
     neuroswarm::CerebralMatrix matrix;
     matrix.awaken();
     return 0;

@@ -91,6 +91,7 @@ public:
             std::cout << "[NETWORK] Probing " << host.address << "..." << std::endl;
 
             // Test SSH connection (non-interactive, with timeout)
+            // Test SSH connection (non-interactive, with timeout)
             std::string cmd = "ssh -o BatchMode=yes -o ConnectTimeout="
                 + std::to_string(timeout_sec)
                 + " -o StrictHostKeyChecking=no"
@@ -360,8 +361,10 @@ private:
     ExecResult exec(const std::string& cmd) {
         std::array<char, 256> buffer;
         std::string result;
+        // Suppress GUI askpass dialogs — force non-interactive SSH
+        std::string wrapped = "SSH_ASKPASS='' DISPLAY='' " + cmd;
         std::unique_ptr<FILE, decltype(&pclose)> pipe(
-            popen((cmd + " 2>&1").c_str(), "r"), pclose);
+            popen((wrapped + " 2>&1").c_str(), "r"), pclose);
         int exit_code = -1;
         if (pipe) {
             while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
