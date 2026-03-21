@@ -35,7 +35,8 @@ public:
             "time_pulse", "search_result", "critic_result",
             "intrinsic_goal", "spike_ready", "spike_done",
             "inference_result", "metabolic_alert", "goal_plan",
-            "primordial_ready", "dopamine_signal"
+            "primordial_ready", "dopamine_signal",
+            "concept_transfer", "concept_response"
         });
 
         load_system_knowledge();
@@ -152,6 +153,12 @@ public:
                 }
                 else if (origin == "basal_ganglia" && intent == "dopamine_signal") {
                     handle_dopamine(j);
+                }
+                else if (origin == "basal_ganglia" && intent == "concept_transfer") {
+                    handle_concept_transfer(j);
+                }
+                else if (origin == "concept_lobe" && intent == "concept_response") {
+                    handle_concept_response(j);
                 }
                 else if (origin == "synaptic_controller" && intent == "inference_result") {
                     std::string adapter = j.value("adapter", "");
@@ -904,6 +911,9 @@ private:
         if (it == active_goals.end()) return;
         auto& state = it->second;
 
+        // Query concept space for transfer before LLM
+        query_concepts_for_goal(cid, state.goal);
+
         // Proceed with normal LLM-based flow: memory search → inference
         json mem_req = {
             {"cid", cid}, {"origin", "frontal_executive"},
@@ -954,6 +964,83 @@ private:
         std::chrono::steady_clock::time_point completed_at;
     };
     std::map<std::string, CompletedChain> recent_chains;
+
+    // --- Concept space integration ---
+
+    // Handle concept transfer from BasalGanglia — additional commands from similar concepts
+    void handle_concept_transfer(const json& data) {
+        std::string cid = data.value("cid", "");
+        auto transfer = data.value("transfer_commands", json::array());
+        if (cid.empty() || transfer.empty()) return;
+
+        auto it = active_goals.find(cid);
+        if (it == active_goals.end()) return;
+
+        // Append transfer commands to the goal's suggested commands
+        int added = 0;
+        for (auto& cmd : transfer) {
+            std::string c = cmd.get<std::string>();
+            // Avoid duplicates
+            bool dup = false;
+            for (auto& existing : it->second.suggested_commands) {
+                if (existing == c) { dup = true; break; }
+            }
+            if (!dup && added < 3) {
+                it->second.suggested_commands.push_back(c);
+                added++;
+            }
+        }
+
+        if (added > 0) {
+            std::cout << "[EXECUTIVE] CONCEPT TRANSFER: Added " << added
+                      << " commands from similar concepts for CID " << cid << std::endl;
+        }
+    }
+
+    // Handle direct concept response — for future use (e.g., before LLM fallback)
+    std::map<std::string, std::string> pending_concept_lookups;  // concept_cid → goal_cid
+
+    void handle_concept_response(const json& data) {
+        std::string cid = data.value("cid", "");
+        if (!pending_concept_lookups.count(cid)) return;
+
+        std::string goal_cid = pending_concept_lookups[cid];
+        pending_concept_lookups.erase(cid);
+
+        auto it = active_goals.find(goal_cid);
+        if (it == active_goals.end()) return;
+
+        auto concepts = data.value("concepts", json::array());
+        if (concepts.empty()) return;
+
+        // Use concept patterns as additional context for the LLM prompt
+        std::string concept_context = "\nRelated concepts from experience:";
+        for (auto& c : concepts) {
+            float sim = c.value("similarity", 0.0f);
+            if (sim < 0.4f) continue;
+            std::string name = c.value("concept", "");
+            std::string pattern = c.value("pattern", "");
+            float rate = c.value("success_rate", 0.0f);
+            concept_context += "\n  - " + name + " (pattern: " + pattern
+                             + ", success: " + std::to_string((int)(rate * 100)) + "%)";
+        }
+
+        it->second.history += concept_context;
+        std::cout << "[EXECUTIVE] CONCEPT CONTEXT: Enriched goal " << goal_cid
+                  << " with " << concepts.size() << " related concepts" << std::endl;
+    }
+
+    // Query concept space before falling back to LLM
+    void query_concepts_for_goal(const std::string& cid, const std::string& goal) {
+        std::string concept_cid = "fe_concept_" + cid;
+        pending_concept_lookups[concept_cid] = cid;
+
+        json query = {
+            {"origin", "frontal_executive"}, {"intent", "concept_query"},
+            {"cid", concept_cid}, {"query", goal}
+        };
+        dispatch_to_all(query);
+    }
 
     // Publish intrinsic goal result back to BasalGanglia for self-model update
     void publish_intrinsic_result(const std::string& cid, bool success) {

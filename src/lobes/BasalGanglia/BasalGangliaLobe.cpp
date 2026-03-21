@@ -52,7 +52,8 @@ public:
             "lobe_crash", "lobe_death", "metabolic_alert",
             "genesis_result", "specialist_report", "lobe_injected",
             "lobe_terminated", "domain_resolve_result",
-            "rlaif_reinforce"
+            "rlaif_reinforce",
+            "concept_update", "concept_response"
         });
 
         mkdir("./data", 0755);
@@ -351,6 +352,13 @@ public:
                     std::cout << "[BASAL_GANGLIA] APOPTOSIS COMPLETE: " << name
                               << " removed (" << reason << ")" << std::endl;
                 }
+                // ConceptLobe: learned representations update
+                else if (origin == "concept_lobe" && intent == "concept_update") {
+                    handle_concept_update(j);
+                }
+                else if (origin == "concept_lobe" && intent == "concept_response") {
+                    handle_concept_response(j);
+                }
             } catch (...) {}
         }
     }
@@ -458,12 +466,41 @@ private:
         {"log_analysis",        {"data_analysis", "file_read"}}
     };
 
-    // Keyword → domain classification
+    // Keyword → domain classification (fallback when concept space has no match)
     struct KeywordRule {
         std::string domain;
         std::vector<std::string> keywords;
     };
     std::vector<KeywordRule> classification_rules;
+
+    // Learned concept space — populated by ConceptLobe updates
+    struct ConceptInfo {
+        std::string abstraction;    // e.g., "read_content", "build_system"
+        std::string pattern;        // e.g., "cat <path>"
+        float success_rate = 0.0f;
+        int members = 0;
+        int observations = 0;
+        float coherence = 0.0f;
+    };
+    std::map<std::string, ConceptInfo> concept_clusters;  // cluster_name → info
+    // Maps concept abstractions to legacy domain names for compatibility
+    std::map<std::string, std::string> concept_to_domain = {
+        {"read_content", "file_read"}, {"write_output", "file_write"},
+        {"copy_resource", "file_write"}, {"move_resource", "file_write"},
+        {"create_resource", "file_write"}, {"create_structure", "file_write"},
+        {"search_filesystem", "file_search"}, {"search_content", "file_search"},
+        {"inspect_process", "process_inspection"}, {"signal_process", "process_inspection"},
+        {"network_transfer", "network_diagnostics"}, {"network_inspect", "network_diagnostics"},
+        {"network_probe", "network_diagnostics"}, {"remote_access", "network_diagnostics"},
+        {"build_system", "compilation"}, {"compile", "compilation"},
+        {"version_control", "git_operations"}, {"transform_text", "source_modification"},
+        {"system_status", "system_monitoring"}, {"system_identity", "system_monitoring"},
+        {"measure_content", "data_analysis"}, {"measure_resource", "data_analysis"},
+        {"interpret", "script_creation"}, {"archive", "file_write"},
+        {"compare_content", "source_modification"}, {"identify_type", "file_read"},
+        {"verify_integrity", "file_read"}, {"modify_permissions", "file_write"}
+    };
+    bool concept_space_available = false;  // true once first concept_update received
 
     void init_domain_commands() {
         domain_commands["file_read"] = {
@@ -558,6 +595,13 @@ private:
     }
 
     std::string classify_command(const std::string& cmd) {
+        // Try concept-based classification first if concept space is populated
+        if (concept_space_available && !concept_clusters.empty()) {
+            std::string concept_domain = classify_via_concepts(cmd);
+            if (!concept_domain.empty()) return concept_domain;
+        }
+
+        // Fallback: regex keyword classification
         std::string cmd_lower = cmd;
         std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(), ::tolower);
 
@@ -569,6 +613,59 @@ private:
             }
         }
         return ""; // unclassified
+    }
+
+    // Classify a command using the learned concept space
+    // Sends an async concept_query — for now, uses cached cluster abstractions
+    std::string classify_via_concepts(const std::string& cmd) {
+        // Extract the verb from the command (first meaningful token)
+        std::string verb;
+        std::istringstream iss(cmd);
+        std::string token;
+        while (iss >> token) {
+            if (token.find('=') != std::string::npos) continue;  // skip env vars
+            if (token == "sudo" || token == "env" || token == "nice") continue;
+            auto slash = token.rfind('/');
+            if (slash != std::string::npos) token = token.substr(slash + 1);
+            verb = token;
+            break;
+        }
+
+        // Check if any concept cluster's abstraction or pattern matches this verb
+        for (auto& [name, info] : concept_clusters) {
+            // Match by abstraction name containing the verb
+            std::string abs_lower = info.abstraction;
+            std::transform(abs_lower.begin(), abs_lower.end(), abs_lower.begin(), ::tolower);
+
+            // Match by pattern prefix (e.g., pattern "cat <path>" matches "cat")
+            std::string pattern_verb;
+            std::istringstream piss(info.pattern);
+            piss >> pattern_verb;
+
+            if (pattern_verb == verb || abs_lower.find(verb) != std::string::npos) {
+                // Map concept abstraction to a domain
+                // First check direct mapping
+                if (concept_to_domain.count(info.abstraction)) {
+                    return concept_to_domain[info.abstraction];
+                }
+                // Check if abstraction contains a known domain prefix
+                for (auto& [concept, domain] : concept_to_domain) {
+                    if (info.abstraction.find(concept) != std::string::npos) {
+                        return domain;
+                    }
+                }
+                // If no mapping exists, this is a genuinely new domain discovered by the concept space
+                // Register it dynamically
+                std::string new_domain = info.abstraction;
+                if (std::find(domains.begin(), domains.end(), new_domain) == domains.end()) {
+                    domains.push_back(new_domain);
+                    std::cout << "[BASAL_GANGLIA] CONCEPT: New dynamic domain discovered: '"
+                              << new_domain << "'" << std::endl;
+                }
+                return new_domain;
+            }
+        }
+        return "";
     }
 
     // Fitness function: F(d) = 0.20*Coverage + 0.15*Trend + 0.30*PredictionError + 0.25*Novelty - 0.10*Stress
@@ -909,6 +1006,9 @@ private:
 
         routing::publish(pub, goal);
 
+        // Query concept space for transfer learning — find similar successful operations
+        query_concept_transfer(cid, best_domain);
+
         std::cout << "[BASAL_GANGLIA] Intrinsic goal published: domain='" << best_domain
                   << "' fitness=" << best_fitness << " drive=" << drive_label
                   << " (" << context << ")" << std::endl;
@@ -949,6 +1049,117 @@ private:
                 std::cout << "[BASAL_GANGLIA] Cooldown expired for domain '" << domain << "'." << std::endl;
             }
         }
+    }
+
+    // --- Concept space integration ---
+
+    void handle_concept_update(const json& j) {
+        auto clusters = j.value("clusters", json::array());
+        int new_concepts = 0;
+
+        for (auto& c : clusters) {
+            std::string name = c.value("concept", "");
+            if (name.empty()) continue;
+
+            ConceptInfo info;
+            info.abstraction = name;
+            info.pattern = c.value("pattern", "");
+            info.success_rate = c.value("success_rate", 0.0f);
+            info.members = c.value("members", 0);
+            info.observations = c.value("observations", 0);
+            info.coherence = c.value("coherence", 0.0f);
+
+            bool is_new = !concept_clusters.count(name);
+            concept_clusters[name] = info;
+
+            if (is_new && info.members >= 3) {
+                new_concepts++;
+                // Check if this concept maps to an existing domain
+                std::string mapped_domain;
+                for (auto& [concept, domain] : concept_to_domain) {
+                    if (name.find(concept) != std::string::npos) {
+                        mapped_domain = domain;
+                        break;
+                    }
+                }
+
+                if (mapped_domain.empty()) {
+                    // Genuinely new domain discovered by concept space
+                    if (std::find(domains.begin(), domains.end(), name) == domains.end()) {
+                        domains.push_back(name);
+                        std::cout << "[BASAL_GANGLIA] CONCEPT: Emergent domain '" << name
+                                  << "' (pattern: " << info.pattern
+                                  << ", members: " << info.members << ")" << std::endl;
+                    }
+                }
+            }
+        }
+
+        if (!concept_space_available) {
+            concept_space_available = true;
+            std::cout << "[BASAL_GANGLIA] CONCEPT SPACE ONLINE: " << concept_clusters.size()
+                      << " clusters available for classification" << std::endl;
+        }
+
+        if (new_concepts > 0) {
+            std::cout << "[BASAL_GANGLIA] CONCEPT UPDATE: " << new_concepts
+                      << " new concepts, " << concept_clusters.size() << " total" << std::endl;
+        }
+    }
+
+    // Pending concept queries for goal enrichment
+    std::map<std::string, std::string> pending_concept_queries;  // concept_cid → goal_cid
+
+    void handle_concept_response(const json& j) {
+        std::string cid = j.value("cid", "");
+        auto concepts = j.value("concepts", json::array());
+
+        // Check if this was a goal-enrichment query
+        if (pending_concept_queries.count(cid)) {
+            std::string goal_cid = pending_concept_queries[cid];
+            pending_concept_queries.erase(cid);
+
+            // Enrich the intrinsic goal with concept-based transfer commands
+            if (!concepts.empty()) {
+                json transfer_cmds = json::array();
+                for (auto& c : concepts) {
+                    float sim = c.value("similarity", 0.0f);
+                    if (sim < 0.5f) continue;
+                    auto examples = c.value("example_commands", json::array());
+                    for (auto& ex : examples) {
+                        transfer_cmds.push_back(ex);
+                    }
+                }
+
+                if (!transfer_cmds.empty()) {
+                    std::cout << "[BASAL_GANGLIA] CONCEPT TRANSFER: " << transfer_cmds.size()
+                              << " commands from similar concepts for CID " << goal_cid << std::endl;
+                    // Publish as supplementary suggested commands
+                    json supplement = {
+                        {"origin", "basal_ganglia"},
+                        {"intent", "concept_transfer"},
+                        {"cid", goal_cid},
+                        {"transfer_commands", transfer_cmds}
+                    };
+                    routing::publish(pub, supplement);
+                }
+            }
+        }
+    }
+
+    // Query concept space for commands similar to a domain goal
+    void query_concept_transfer(const std::string& goal_cid, const std::string& domain) {
+        if (!concept_space_available) return;
+
+        std::string concept_cid = "bg_concept_" + goal_cid;
+        pending_concept_queries[concept_cid] = goal_cid;
+
+        json query = {
+            {"origin", "basal_ganglia"}, {"intent", "concept_query"},
+            {"cid", concept_cid},
+            {"query", "operations for " + domain + " domain"}
+        };
+        routing::publish(pub, query);
     }
 
     // Phase 4: Command Genome — evolutionary command template system

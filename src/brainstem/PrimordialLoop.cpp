@@ -44,7 +44,7 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result", "concept_update"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
@@ -1197,6 +1197,8 @@ private:
                     handle_domain_resolve(j);
                 } else if (intent == "execution_result") {
                     learn_from_execution(j);
+                } else if (intent == "concept_update") {
+                    handle_concept_update(j);
                 }
             }
 
@@ -1246,8 +1248,9 @@ private:
         op.language = "bash";
         op.learned_from = "runtime";
 
-        // Infer postcondition from command pattern
-        std::string post = infer_postcondition(cmd);
+        // Infer postcondition: try concept space first, then regex patterns
+        std::string post = infer_postcondition_from_concepts(cmd);
+        if (post.empty()) post = infer_postcondition(cmd);
         if (!post.empty()) {
             op.postconditions.push_back(post);
             world_state_.insert(post);
@@ -1265,6 +1268,63 @@ private:
                       << (post.empty() ? "" : " → " + post) << std::endl;
             variation_.sync_fragments(registry_);
         }
+    }
+
+    // --- Concept space integration ---
+
+    // Cached concept abstractions from ConceptLobe
+    struct ConceptAbstraction {
+        std::string name;      // e.g., "read_content"
+        std::string pattern;   // e.g., "cat <path>"
+    };
+    std::vector<ConceptAbstraction> concept_abstractions;
+
+    void handle_concept_update(const json& j) {
+        auto clusters = j.value("clusters", json::array());
+        concept_abstractions.clear();
+        for (auto& c : clusters) {
+            ConceptAbstraction ca;
+            ca.name = c.value("concept", "");
+            ca.pattern = c.value("pattern", "");
+            if (!ca.name.empty() && c.value("members", 0) >= 3) {
+                concept_abstractions.push_back(ca);
+            }
+        }
+        if (!concept_abstractions.empty()) {
+            std::cout << "[PRIMORDIAL] Concept space: " << concept_abstractions.size()
+                      << " abstractions available for postcondition enrichment" << std::endl;
+        }
+    }
+
+    // Try concept-based postcondition before falling back to regex
+    std::string infer_postcondition_from_concepts(const std::string& cmd) {
+        if (concept_abstractions.empty()) return "";
+
+        // Extract verb from command
+        std::string verb;
+        std::istringstream iss(cmd);
+        std::string token;
+        while (iss >> token) {
+            if (token.find('=') != std::string::npos) continue;
+            if (token == "sudo" || token == "env") continue;
+            auto slash = token.rfind('/');
+            if (slash != std::string::npos) token = token.substr(slash + 1);
+            verb = token;
+            break;
+        }
+
+        // Check if any concept pattern starts with this verb
+        for (auto& ca : concept_abstractions) {
+            std::string pattern_verb;
+            std::istringstream piss(ca.pattern);
+            piss >> pattern_verb;
+            if (pattern_verb == verb) {
+                // Convert concept name to postcondition format: "can_" + abstraction
+                std::string post = "can_" + ca.name;
+                return post;
+            }
+        }
+        return "";
     }
 
     // Infer a postcondition from a command string using pattern rules
