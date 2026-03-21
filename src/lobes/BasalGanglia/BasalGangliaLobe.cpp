@@ -1215,8 +1215,9 @@ private:
             f *= (current_stamina / 100.0f);
 
             // Directed exploration: boost domain targeted by MetaCognition
+            // Capped to +0.3 to prevent monopoly — importance only determines direction, not magnitude
             if (has_active_exploration_target() && domain == exploration_target_domain) {
-                float boost = exploration_target_importance * 0.5f;  // up to +0.5
+                float boost = std::min(0.3f, exploration_target_importance * 0.02f);
                 f += boost;
             }
 
@@ -1239,6 +1240,35 @@ private:
                 return;
             }
         }
+
+        // Anti-repetition: force domain rotation after MAX_CONSECUTIVE_SAME_DOMAIN
+        if (best_domain == last_selected_domain) {
+            consecutive_same_domain++;
+            if (consecutive_same_domain >= MAX_CONSECUTIVE_SAME_DOMAIN) {
+                // Put this domain in short cooldown and find next best
+                self_model[best_domain].cooldown_until = now_ts + 120;  // 2 min cooldown
+                std::cout << "[BASAL_GANGLIA] Domain rotation: '" << best_domain
+                          << "' selected " << consecutive_same_domain
+                          << "x consecutively. Forcing 2min cooldown." << std::endl;
+                consecutive_same_domain = 0;
+
+                // Re-pick excluding cooled-down domain
+                best_domain.clear();
+                best_fitness = -999.0f;
+                for (auto& domain : domains) {
+                    if (self_model[domain].cooldown_until > now_ts) continue;
+                    float f = compute_fitness(domain) * (current_stamina / 100.0f);
+                    if (f > best_fitness) { best_fitness = f; best_domain = domain; }
+                }
+                if (best_domain.empty()) {
+                    std::cout << "[BASAL_GANGLIA] All domains in cooldown after rotation. Skipping." << std::endl;
+                    return;
+                }
+            }
+        } else {
+            consecutive_same_domain = 1;
+        }
+        last_selected_domain = best_domain;
 
         auto& d = self_model[best_domain];
         int total = d.success + d.failure;
@@ -1592,6 +1622,11 @@ private:
     float exploration_target_importance = 0.0f;
     long exploration_target_timestamp = 0;
     static constexpr int EXPLORATION_TARGET_TTL = 300;  // 5 min expiry
+
+    // Anti-repetition: domain rotation tracking
+    std::string last_selected_domain;
+    int consecutive_same_domain = 0;
+    static constexpr int MAX_CONSECUTIVE_SAME_DOMAIN = 5;  // force rotation after 5
     static constexpr const char* GENESIS_DIR = "./src/lobes/genesis/";
 
     // Apoptosis tracking: domain → consecutive idle/healthy reports + performance delta
@@ -2189,19 +2224,29 @@ int main() {
     json get_suggested_commands(const std::string& domain) {
         json cmds = json::array();
 
-        // Try genome templates first (top 3 by fitness)
+        // Try genome templates — weighted random selection (fitness-proportional)
+        // Avoids always picking the same top-fitness command
         auto it = command_genome.find(domain);
         if (it != command_genome.end() && !it->second.empty()) {
-            auto sorted = it->second;
-            std::sort(sorted.begin(), sorted.end(),
-                [](const CommandTemplate& a, const CommandTemplate& b) { return a.fitness > b.fitness; });
-            for (size_t i = 0; i < sorted.size() && i < 3; i++) {
-                cmds.push_back(sorted[i].cmd);
-            }
-            // Add one random template for exploration (mutation pressure)
-            if (sorted.size() > 3) {
-                int idx = rand() % sorted.size();
-                cmds.push_back(sorted[idx].cmd);
+            auto pool = it->second;
+
+            // Fitness-proportional sampling (roulette wheel)
+            float total_fit = 0.0f;
+            for (auto& t : pool) total_fit += std::max(0.1f, t.fitness);
+
+            std::set<int> picked;
+            int picks = std::min((int)pool.size(), 4);
+            for (int p = 0; p < picks && picked.size() < pool.size(); p++) {
+                float r = (float)(rand() % 1000) / 1000.0f * total_fit;
+                float acc = 0.0f;
+                for (int i = 0; i < (int)pool.size(); i++) {
+                    acc += std::max(0.1f, pool[i].fitness);
+                    if (acc >= r && picked.find(i) == picked.end()) {
+                        picked.insert(i);
+                        cmds.push_back(pool[i].cmd);
+                        break;
+                    }
+                }
             }
         }
 

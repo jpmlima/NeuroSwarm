@@ -380,15 +380,15 @@ body {
 <!-- RIGHT PANEL -->
 <div id="right-panel">
     <div class="r-section">
-        <div class="section-label">Cognitive Focus</div>
-        <div class="focus-text" id="active-goal">Idle — awaiting directive...</div>
-    </div>
-    <div class="r-section">
         <div class="section-label">Active Drive</div>
         <div id="drive-indicator-r" class="drive-box">
             <div class="drive-level" id="drive-level-r">—</div>
             <div class="drive-domain" id="drive-domain-r">awaiting goal</div>
         </div>
+    </div>
+    <div class="r-section">
+        <div class="section-label">Cognitive Focus</div>
+        <div class="focus-text" id="active-goal">Idle — awaiting directive...</div>
     </div>
     <div class="r-section">
         <div class="section-label">Last Thought</div>
@@ -1031,6 +1031,24 @@ function processEvent(ev) {
             const m = (ev.text||'').match(/"thought"\s*:\s*"([^"]+)"/);
             if (m) document.getElementById('last-thought').textContent = m[1];
         } catch(e){}
+    }
+    // Update Cognitive Focus from intrinsic_goal (works even without LLM inference)
+    if (intent === 'intrinsic_goal') {
+        const domain = ev.domain || 'unknown';
+        const drive = ev.drive_level || '';
+        const fitness = ev.fitness != null ? ev.fitness.toFixed(2) : '?';
+        document.getElementById('active-goal').textContent =
+            drive + ' \u2192 ' + domain + ' (fitness: ' + fitness + ')';
+    }
+    // Update Last Thought from execution_result (shows what the system is actually doing)
+    if (intent === 'execution_result' && origin === 'motor_cortex') {
+        const cmd = ev.command || '';
+        const status = ev.status || '';
+        if (cmd) {
+            const truncCmd = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;
+            const icon = status === 'success' ? '\u2713' : '\u2717';
+            document.getElementById('last-thought').textContent = icon + ' ' + truncCmd;
+        }
     }
     if (intent === 'homeostatic_pulse') {
         const sr = Math.max(0, ev.success_rate || 0);
