@@ -195,6 +195,12 @@ private:
     // ─── Substantive Success Filter (mirrors BasalGanglia) ────────
 
     bool is_substantive_success(const std::string& cmd, const std::string& output) {
+        // Corrupted fragments starting with hyphens
+        if (cmd.find("-") == 0) return false;
+
+        // Loop attractors — commands the system fixates on without learning
+        if (cmd == "whoami" || cmd == "id" || cmd == "hostname" || cmd == "pwd") return false;
+
         // Pure echo commands — exit 0 but no real work
         if (cmd.find("echo ") == 0 && cmd.find("&&") == std::string::npos
             && cmd.find("|") == std::string::npos) return false;
