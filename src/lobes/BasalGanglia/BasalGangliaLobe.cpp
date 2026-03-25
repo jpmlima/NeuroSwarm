@@ -676,76 +676,15 @@ private:
     bool concept_space_available = false;  // true once first concept_update received
 
     void init_domain_commands() {
-        domain_commands["file_read"] = {
-            "cat src/brainstem/Thalamus.cpp | head -50",
-            "wc -l src/brainstem/*.cpp",
-            "file data/engrams/memory_index.jsonl",
-            "stat src/brainstem/FrontalExecutive.cpp"
-        };
-        domain_commands["file_write"] = {
-            "echo '# diagnostic report' > /tmp/neuro_diag.md",
-            "date >> data/activity_log.txt",
-            "cp tasks.json tasks.json.bak"
-        };
-        domain_commands["file_search"] = {
-            "find src/ -name '*.cpp' -newer build/thalamus",
-            "grep -r 'intent' src/brainstem/ --include='*.cpp' -l",
-            "find data/ -name '*.jsonl' -size +0c"
-        };
-        domain_commands["process_inspection"] = {
-            "ps aux | grep -E '(thalamus|motor_lobe|frontal)' | grep -v grep",
-            "pgrep -la 'synaptic_controller'",
-            "ls -la /proc/self/fd/ | wc -l"
-        };
-        domain_commands["network_diagnostics"] = {
-            "ss -tlnp | grep -E '(5555|5556|8080)'",
-            "nc -z localhost 5555 && echo 'ZMQ PUB alive' || echo 'ZMQ PUB down'",
-            "curl -s -o /dev/null -w '%{http_code}' http://localhost:8080"
-        };
-        domain_commands["source_modification"] = {
-            "grep -c 'TODO\\|FIXME\\|HACK' src/brainstem/*.cpp",
-            "wc -l src/brainstem/*.cpp src/lobes/*/*.cpp | tail -1",
-            "diff <(head -5 src/brainstem/Thalamus.cpp) <(head -5 src/brainstem/Homeostasis.cpp)"
-        };
-        domain_commands["compilation"] = {
-            "cmake --build build --target thalamus 2>&1 | tail -5",
-            "make -C build -n thalamus 2>&1 | head -3",
-            "ls -lt build/thalamus build/motor_lobe build/frontal_executive | head -3"
-        };
-        domain_commands["git_operations"] = {
-            "git -C . log --oneline -5",
-            "git -C . status --short",
-            "git -C . diff --stat HEAD~1"
-        };
-        domain_commands["system_monitoring"] = {
-            "uptime",
-            "free -h | head -2",
-            "df -h / | tail -1"
-        };
-        domain_commands["data_analysis"] = {
-            "wc -l data/metrics/*.jsonl 2>/dev/null || echo 'no metrics yet'",
-            "tail -3 data/metrics/ralph_cycles.jsonl 2>/dev/null || echo 'no ralph data'",
-            "cat data/self_model.json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d),\"domains tracked\")' 2>/dev/null || echo 'no self-model'"
-        };
-        domain_commands["script_creation"] = {
-            "echo '#!/bin/bash' > /tmp/ns_health.sh && echo 'ps aux | grep -c neuroswarm' >> /tmp/ns_health.sh && chmod +x /tmp/ns_health.sh && /tmp/ns_health.sh",
-            "bash -c 'for f in build/{thalamus,motor_lobe,frontal_executive}; do [ -x \"$f\" ] && echo \"OK: $f\" || echo \"MISSING: $f\"; done'"
-        };
-        domain_commands["self_inspection"] = {
-            "cat data/self_model.json 2>/dev/null | head -20 || echo 'self-model not yet populated'",
-            "du -sh data/ build/ src/ 2>/dev/null",
-            "find src/ -name '*.cpp' | wc -l"
-        };
-        domain_commands["memory_analysis"] = {
-            "wc -l data/engrams/memory_index.jsonl 2>/dev/null || echo 'no engrams'",
-            "tail -1 data/engrams/memory_index.jsonl 2>/dev/null || echo 'empty memory'",
-            "ls -la data/system_knowledge.md 2>/dev/null || echo 'no behavioural knowledge'"
-        };
-        domain_commands["log_analysis"] = {
-            "tail -5 progress.txt 2>/dev/null || echo 'no progress log'",
-            "tail -3 data/metrics/system_events.jsonl 2>/dev/null || echo 'no system events'",
-            "wc -l data/metrics/*.jsonl 2>/dev/null | sort -n | tail -5"
-        };
+        // Directed Tabula Rasa: Minimum seeds to steer evolution away from 'whoami' loops.
+        for (const auto& domain : domains) {
+            if (domain == "compilation")         domain_commands[domain] = {"cc --version", "make --version"};
+            else if (domain == "file_read")      domain_commands[domain] = {"ls -F", "cat README.md"};
+            else if (domain == "file_write")     domain_commands[domain] = {"touch .neuro_touch", "mkdir -p data/sandbox"};
+            else if (domain == "self_inspection") domain_commands[domain] = {"id", "uname -a"};
+            else if (domain == "file_search")    domain_commands[domain] = {"find . -maxdepth 1"};
+            else domain_commands[domain] = {"id"};
+        }
 
         // Classification rules: keyword → domain
         // Order matters: most specific first.  The FIRST keyword match wins.
@@ -902,20 +841,47 @@ private:
 
     // Semantic validation: reject degenerate commands that "succeed" without doing real work
     bool is_substantive_success(const std::string& cmd, const std::string& output) {
+        // Corrupted fragments starting with hyphens
+        if (cmd.find("-") == 0) return false;
+
         // Pure echo commands — exit 0 but no real work
         if (cmd.find("echo ") == 0 && cmd.find("&&") == std::string::npos
             && cmd.find("|") == std::string::npos) return false;
 
         // Echo-prefixed commands where only the echo part ran (rest is no-op)
-        // e.g. "echo Running 'blah' && make /dev/null"
         if (cmd.find("echo ") != std::string::npos && cmd.find("/dev/null") != std::string::npos)
             return false;
+
+        // Detect shell error strings in output (false successes)
+        std::vector<std::string> shell_errors = {
+            "command not found", "No such file", "sh: line 1", "syntax error",
+            "not a directory", "permission denied", "invalid option", "usage:"
+        };
+        std::string lower_out = output;
+        std::transform(lower_out.begin(), lower_out.end(), lower_out.begin(), ::tolower);
+        for (const auto& err : shell_errors) {
+            if (lower_out.find(err) != std::string::npos) return false;
+        }
+
+        // Detect "|| echo" trick where output matches the echo'd fallback exactly
+        size_t echo_pos = cmd.find("|| echo ");
+        if (echo_pos != std::string::npos) {
+            std::string echo_val = cmd.substr(echo_pos + 8);
+            // Remove quotes if present
+            echo_val.erase(std::remove(echo_val.begin(), echo_val.end(), '\''), echo_val.end());
+            echo_val.erase(std::remove(echo_val.begin(), echo_val.end(), '\"'), echo_val.end());
+            
+            // If output is exactly the echo value (trimmed), it's a masked failure
+            std::string trimmed_out = output;
+            trimmed_out.erase(std::remove(trimmed_out.begin(), trimmed_out.end(), '\n'), trimmed_out.end());
+            trimmed_out.erase(std::remove(trimmed_out.begin(), trimmed_out.end(), '\r'), trimmed_out.end());
+            if (trimmed_out == echo_val) return false;
+        }
 
         // Commands that produce no output are suspicious
         if (output.size() < 3) return false;
 
-        // Output is just the echo text — command didn't produce real results
-        // Check: if output starts with "Running" or similar echo patterns
+        // Output is just placeholder text
         if (output.find("Running '") == 0 || output.find("Running \"") == 0)
             return false;
 

@@ -52,7 +52,8 @@ private:
         // 1. Fear Circuit: Risk detection in commands
         if (!command.empty()) {
             if (command.find("rm ") != std::string::npos || command.find("mkfs") != std::string::npos || 
-                command.find("sudo") != std::string::npos || command.find("> /") != std::string::npos) {
+                command.find("sudo") != std::string::npos || command.find("> /") != std::string::npos ||
+                command == "whoami") {
                 
                 std::cout << "[AMYGDALA] FEAR RESPONSE: Risky command detected -> " << command << std::endl;
                 json threat = {

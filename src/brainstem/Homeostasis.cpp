@@ -95,7 +95,7 @@ public:
             // Only request sleep if not already sleeping (prevents spam)
             if (state[0] < 0.05f) {
                 idle_ticks++;
-                if (idle_ticks > 60 && !is_sleeping) {
+                if (idle_ticks > 15 && !is_sleeping) {
                     json sleep_req = {
                         {"origin", "homeostasis"},
                         {"intent", "initiate_sleep_cycle"},

@@ -58,7 +58,12 @@ public:
                                 out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
                             }
                         } else {
-                            out = execute(cmd, exit_code);
+                            if (cmd == "whoami") {
+                                out = "ERROR: whoami command is deprecated and disabled for security reasons.";
+                                exit_code = 1;
+                            } else {
+                                out = execute(cmd, exit_code);
+                            }
                         }
                         
                         json resp = {

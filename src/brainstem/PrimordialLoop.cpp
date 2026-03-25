@@ -242,7 +242,20 @@ private:
                const std::vector<std::string>& postconditions = {}) {
 
         auto r = exec(cmd);
+        
+        // Smarter success detection for tools
         bool success = (r.exit_code == 0);
+        
+        // Heuristic: tools that output version info are alive even if they return non-zero
+        if (!success && !r.output.empty()) {
+            if (cmd.find("--version") != std::string::npos || cmd.find("-V") != std::string::npos) {
+                if (r.output.find("gcc") != std::string::npos || r.output.find("g++") != std::string::npos ||
+                    r.output.find("clang") != std::string::npos || r.output.find("cmake") != std::string::npos ||
+                    r.output.find("Copyright") != std::string::npos) {
+                    success = true;
+                }
+            }
+        }
 
         size_t output_hash = std::hash<std::string>{}(r.output);
         auto s = surprise_.compute(context, success, output_hash);

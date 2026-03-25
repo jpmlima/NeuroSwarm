@@ -33,8 +33,8 @@ ModelManager::ModelManager(const std::string& base_model_path,
     }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx    = 2048;  // 2048 tokens is sufficient for FE prompts; smaller KV cache reduces latency
-    cparams.n_batch  = 512;   // Previously 32 — batch size was the dominant throughput bottleneck
+    cparams.n_ctx    = 4096;  // Increased to 4096 to prevent JSON truncation in complex prompts
+    cparams.n_batch  = 512;
     cparams.n_ubatch = 512;
     ctx_ptr = llama_init_from_model((llama_model*)gray_matter, cparams);
 
@@ -225,8 +225,8 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     tokens.resize(n_tokens);
 
     // SAFETY: Truncate if prompt is too big for KV cache (reserve space for generation)
-    if (tokens.size() > 1700) {  // Reserve 300 tokens for generation headroom within n_ctx=2048
-        tokens.erase(tokens.begin(), tokens.end() - 1700);
+    if (tokens.size() > 3500) {  // Reserve 500+ tokens for generation headroom within n_ctx=4096
+        tokens.erase(tokens.begin(), tokens.end() - 3500);
     }
 
     // Process prompt in n_batch-sized chunks; 16× faster than the previous stride of 32, safe for any prompt length
@@ -289,7 +289,7 @@ std::vector<float> ModelManager::get_embeddings(const std::string& text) {
 
     // Mark all tokens for embedding output
     llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t)tokens.size());
-    if (llama_decode(ctx, batch) != 0) return {};
+    if (llama_encode(ctx, batch) != 0) return {};
 
     int n_embd = llama_model_n_embd(model);
 

@@ -203,10 +203,34 @@ private:
         if (cmd.find("echo ") != std::string::npos && cmd.find("/dev/null") != std::string::npos)
             return false;
 
+        // Detect shell error strings in output
+        std::vector<std::string> shell_errors = {
+            "command not found", "No such file", "sh: line 1", "syntax error",
+            "not a directory", "permission denied", "invalid option", "usage:"
+        };
+        std::string lower_out = output;
+        std::transform(lower_out.begin(), lower_out.end(), lower_out.begin(), ::tolower);
+        for (const auto& err : shell_errors) {
+            if (lower_out.find(err) != std::string::npos) return false;
+        }
+
+        // Detect "|| echo" trick where output matches the echo'd fallback
+        size_t echo_pos = cmd.find("|| echo ");
+        if (echo_pos != std::string::npos) {
+            std::string echo_val = cmd.substr(echo_pos + 8);
+            echo_val.erase(std::remove(echo_val.begin(), echo_val.end(), '\''), echo_val.end());
+            echo_val.erase(std::remove(echo_val.begin(), echo_val.end(), '\"'), echo_val.end());
+            
+            std::string trimmed_out = output;
+            trimmed_out.erase(std::remove(trimmed_out.begin(), trimmed_out.end(), '\n'), trimmed_out.end());
+            trimmed_out.erase(std::remove(trimmed_out.begin(), trimmed_out.end(), '\r'), trimmed_out.end());
+            if (trimmed_out == echo_val) return false;
+        }
+
         // Commands that produce no output are suspicious
         if (output.size() < 3) return false;
 
-        // Output is just echo text — command didn't produce real results
+        // Output is just echo text
         if (output.find("Running '") == 0 || output.find("Running \"") == 0)
             return false;
 

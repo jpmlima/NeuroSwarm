@@ -231,7 +231,7 @@ private:
 
     // Spike worker management
     int active_workers = 0;
-    static constexpr int MAX_SPIKE_WORKERS = 2;
+    static constexpr int MAX_SPIKE_WORKERS = 4;
     std::map<std::string, json> pending_spike_assignments; // worker_id → assignment payload
     std::map<std::string, std::string> worker_cid_map;       // worker_id → CID (presence = worker alive)
     std::map<std::string, pid_t> worker_pid_map;              // worker_id → PID (for reaping zombies)
@@ -562,7 +562,7 @@ private:
         std::string mode = data.value("mode", "reality");
 
         // RLAIF: track every command attempted for this goal
-        if (!state.last_cmd.empty())
+        if (!state.last_cmd.empty() && status == "success")
             state.executed_commands.push_back(state.last_cmd);
 
         if (status == "success") {
@@ -793,18 +793,17 @@ private:
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
 
-        active_goals[cid] = state;
-
-        // Autopoiesis: try Planner first — use learned operators before LLM
-        if (!domain.empty() && domain != "unknown") {
-            try_planner_first(cid, domain);
+        // FORCE SPIKE DELEGATION for intrinsic goals to ensure visibility and deep reasoning
+        if (active_workers < MAX_SPIKE_WORKERS) {
+            spawn_spike(cid, state);
             return;
         }
 
-        // No domain or unknown — fall back to Spike/LLM
-        if (active_workers < MAX_SPIKE_WORKERS) {
-            active_goals.erase(cid);
-            spawn_spike(cid, state);
+        active_goals[cid] = state;
+
+        // Autopoiesis: try Planner if no worker capacity
+        if (!domain.empty() && domain != "unknown") {
+            try_planner_first(cid, domain);
             return;
         }
 

@@ -65,10 +65,10 @@ public:
         while (true) {
             auto j = routing::receive(sub, zmq::recv_flags::dontwait);
             if (j.is_null()) {
-                // Timeout: self-terminate if idle for 120 seconds
+                // Timeout: self-terminate if idle for 300 seconds
                 auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 120) {
-                    std::cout << "[SPIKE:" << worker_id << "] Timeout — no activity for 120s. Terminating." << std::endl;
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 300) {
+                    std::cout << "[SPIKE:" << worker_id << "] Timeout — no activity for 300s. Terminating." << std::endl;
                     publish_done(false);
                     return;
                 }
