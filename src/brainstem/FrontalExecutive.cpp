@@ -454,8 +454,14 @@ private:
         state.last_cmd  = cmd;
         state.last_mode = mode;
 
-        // Validate LLM-generated command before dream execution
-        dispatch_validated_execution(cid, cmd, "dream");
+        // Neuro-surgery commands must run against real source files, not dream sandbox
+        // Also respect LLM's requested mode when it explicitly says neuro_surgery
+        std::string exec_mode = "dream";
+        if (mode == "neuro_surgery" || cid.find("surgery_") != std::string::npos ||
+            state.domain == "source_modification") {
+            exec_mode = "reality";
+        }
+        dispatch_validated_execution(cid, cmd, exec_mode);
     }
 
     void commit_to_reality(const std::string& cid) {

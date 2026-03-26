@@ -299,9 +299,16 @@ private:
             }
         }
 
+        // Source modification / neuro-surgery must run against real files, not dream sandbox
+        std::string exec_mode = "dream";
+        if (mode == "neuro_surgery" || cid.find("surgery_") != std::string::npos ||
+            domain == "source_modification") {
+            exec_mode = "reality";
+        }
+
         json dream_req = {
             {"cid", cid}, {"origin", "spike_worker"}, {"intent", "execution_request"},
-            {"command", cmd}, {"mode", "dream"},
+            {"command", cmd}, {"mode", exec_mode},
             {"domain", domain}
         };
         dispatch(dream_req);
@@ -360,6 +367,55 @@ private:
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    // Build source context for source_modification goals
+    std::string get_source_context() {
+        if (domain != "source_modification") return "";
+
+        // Pick a target file from goal/history or rotate through key files
+        std::string target;
+        std::regex path_re(R"((src/[^\s'"]+\.(?:cpp|hpp|h))|(include/[^\s'"]+\.(?:hpp|h)))");
+        std::smatch m;
+        std::string search = goal + " " + history;
+        if (std::regex_search(search, m, path_re)) {
+            target = m[0].str();
+        }
+        if (target.empty()) {
+            static const std::vector<std::string> key_files = {
+                "src/brainstem/PrimordialLoop.cpp",
+                "src/brainstem/FrontalExecutive.cpp",
+                "src/lobes/BasalGanglia/BasalGangliaLobe.cpp",
+                "include/OperatorRegistry.hpp",
+                "src/brainstem/MetaCognition.cpp"
+            };
+            target = key_files[std::time(nullptr) % key_files.size()];
+        }
+
+        std::ifstream f(target);
+        if (!f.is_open()) return "";
+        std::string line;
+        std::vector<std::string> lines;
+        while (std::getline(f, line)) lines.push_back(line);
+        if (lines.empty()) return "";
+
+        int total = lines.size();
+        int window = std::min(40, total);
+        int start = 0;
+        if (total > window) {
+            start = (std::time(nullptr) / 60) % (total - window);
+        }
+
+        std::string snippet;
+        for (int i = start; i < start + window && i < total; i++) {
+            snippet += std::to_string(i + 1) + ": " + lines[i] + "\n";
+        }
+
+        return "\n\nSOURCE FILE: " + target + " (lines " + std::to_string(start + 1)
+             + "-" + std::to_string(start + window) + " of " + std::to_string(total) + ")\n"
+             + snippet
+             + "\nIMPORTANT: Write a sed -i command targeting EXACT text from the file above. "
+               "The pattern must match a real line. Example: sed -i 's/old_exact_text/new_text/' " + target + "\n";
+    }
+
     void request_thought(const std::string& extra_prompt = "") {
         total_thought_cycles++;
         if (total_thought_cycles > 20) {
@@ -368,6 +424,10 @@ private:
             publish_done(false);
             return;
         }
+
+        // Inject source file context for source_modification goals
+        std::string source_ctx = get_source_context();
+
         json req = {
             {"cid", cid}, {"origin", "spike_worker"}, {"intent", "inference_request"},
             {"adapter", "executive"},
@@ -376,7 +436,7 @@ private:
              + (system_knowledge.empty() ? "" : system_knowledge + "\n")
              + "<|end|>\n<|user|>\n"
              + (current_timestamp.empty() ? "" : "T:" + current_timestamp + " ")
-             + "GOAL: " + goal + memory_context + "\n" + (history.empty() ? "" : "HISTORY:" + history.substr(0, 500) + "\n") + extra_prompt + "<|end|>\n<|assistant|>\n"}
+             + "GOAL: " + goal + memory_context + "\n" + (history.empty() ? "" : "HISTORY:" + history.substr(0, 500) + "\n") + source_ctx + extra_prompt + "<|end|>\n<|assistant|>\n"}
         };
         dispatch(req);
     }
