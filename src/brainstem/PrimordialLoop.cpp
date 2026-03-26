@@ -550,7 +550,21 @@ private:
     // ─── Self-Modification Operators (always registered, idempotent) ───
     void ensure_self_modification_operators() {
         // Skip if already registered (idempotent across incremental restarts)
-        if (registry_.find("sed_replace") != nullptr) return;
+        if (registry_.find("sed_replace") != nullptr) {
+            // Even if operators exist, ensure world state has file_exists facts
+            // so the Planner can satisfy preconditions
+            if (world_state_.find("file_exists(src/)") == world_state_.end()) {
+                world_state_.insert("file_exists(src/)");
+                world_state_.insert("file_exists(include/)");
+                world_state_.insert("source_files_available");
+            }
+            return;
+        }
+
+        // Add file_exists facts so the Planner can chain through preconditions
+        world_state_.insert("file_exists(src/)");
+        world_state_.insert("file_exists(include/)");
+        world_state_.insert("source_files_available");
 
         // SAFETY: Commands use sed (in-place edit) and cp (backup).
         // NEVER register tee — it truncates files when run via popen (no stdin).

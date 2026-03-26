@@ -62,6 +62,11 @@ public:
                             if (cmd == "whoami") {
                                 out = "ERROR: whoami command is deprecated and disabled for security reasons.";
                                 exit_code = 1;
+                            } else if (is_destructive_write(cmd)) {
+                                // SAFETY: block commands that truncate files via popen
+                                out = "ERROR: blocked destructive write command (bare tee truncates files via popen).";
+                                exit_code = 1;
+                                std::cout << "[MOTOR] SAFETY BLOCK: " << cmd << std::endl;
                             } else {
                                 out = execute(cmd, exit_code);
                             }
@@ -126,6 +131,20 @@ private:
 
     void dispatch(const json& data) {
         routing::publish(pub, data);
+    }
+
+    // SAFETY: block commands that silently destroy files when run via popen
+    // popen(cmd, "r") provides no stdin, so tee/tee -a get immediate EOF and truncate/no-op
+    bool is_destructive_write(const std::string& cmd) {
+        // Bare tee without pipe input — truncates target file
+        if (cmd.find("tee ") == 0 || cmd.find("tee -") == 0) return true;
+        // rm -rf on source dirs
+        if (cmd.find("rm -rf src/") != std::string::npos) return true;
+        if (cmd.find("rm -rf include/") != std::string::npos) return true;
+        // Redirect that empties files: > src/file.cpp
+        if (cmd.find("> src/") != std::string::npos && cmd.find(">>") == std::string::npos) return true;
+        if (cmd.find("> include/") != std::string::npos && cmd.find(">>") == std::string::npos) return true;
+        return false;
     }
 
     // Phase 1: Smart Dream Bypass — read-only commands execute in real CWD
