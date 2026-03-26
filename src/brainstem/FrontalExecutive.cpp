@@ -670,6 +670,29 @@ private:
                 if (state.last_mode == "neuro_surgery") {
                     std::cout << "[EXECUTIVE] Neuro-Surgery verified. Evolution complete." << std::endl;
                 }
+
+                // Phase 4: Auto-rebuild after source modification
+                // If a sed/patch command succeeded on source files, trigger cmake rebuild
+                if (state.domain == "source_modification" &&
+                    (state.last_cmd.find("sed -i") != std::string::npos ||
+                     state.last_cmd.find("patch ") != std::string::npos)) {
+                    std::cout << "[EXECUTIVE] SOURCE MODIFIED — triggering auto-rebuild." << std::endl;
+                    // Queue rebuild as next step
+                    state.plan.clear();
+                    state.plan.push_back("cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1 | tail -10");
+                    state.last_cmd = state.plan.front();
+                    state.plan.erase(state.plan.begin());
+                    state.last_mode = "neuro_surgery";
+                    state.history += "\n[AUTO-REBUILD] Recompiling after source modification.";
+                    json exec_req = {
+                        {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                        {"command", state.last_cmd}, {"mode", "neuro_surgery"},
+                        {"domain", "compilation"}
+                    };
+                    dispatch_to_all(exec_req);
+                    return;  // Wait for rebuild result before completing goal
+                }
+
                 if (!state.task_id.empty()) {
                     mark_task_complete(cid);
                 }
