@@ -27,7 +27,8 @@ public:
         sub.connect("tcp://" + thalamus_ip + ":5556");
         routing::subscribe(sub, {
             "search_memory", "recall_memory", "consolidate_memories",
-            "embedding_result", "execution_result"
+            "embedding_result", "execution_result",
+            "search_trajectory"
         });
 
         if (!fs::exists(base_dir)) {
@@ -57,6 +58,23 @@ private:
     // Pending embedding requests: embed_cid → engram waiting to be indexed
     struct PendingEmbed { json engram; };
     std::map<std::string, PendingEmbed> pending_embeds;
+
+    // Phase 7: Trajectory memory — track command sequences per goal CID
+    struct TrajectoryStep {
+        std::string command;
+        bool success = false;
+        long timestamp = 0;
+    };
+    struct TrajectoryRecord {
+        std::string cid;
+        std::string domain;
+        std::vector<TrajectoryStep> steps;
+        long start_ts = 0;
+        long last_ts = 0;
+    };
+    std::map<std::string, TrajectoryRecord> trajectory_buffer;
+    static constexpr int TRAJECTORY_STALE_SECS = 120;
+    static constexpr int MAX_TRAJECTORIES = 2000;
 
     void process_neural_event(const json& event) {
         std::string intent = event.value("intent", "");
@@ -90,6 +108,12 @@ private:
             record_engram(cid, event);
             if (cid != "global_stream") record_engram("global_stream", event);
             request_memory_embedding(cid, event);
+            // Phase 7: Track trajectory steps
+            track_trajectory_step(cid, event);
+        }
+        // Phase 7: Trajectory search
+        else if (intent == "search_trajectory") {
+            handle_trajectory_search(event);
         }
         else {
             record_engram(cid, event);
@@ -292,6 +316,136 @@ private:
             {"intent", "consolidation_complete"}
         };
         dispatch(resp);
+    }
+
+    // ── Phase 7: Trajectory Memory ──────────────────────────────────────
+
+    void track_trajectory_step(const std::string& cid, const json& event) {
+        if (cid.empty() || cid == "global_stream") return;
+
+        std::string cmd = event.value("command", "");
+        if (cmd.empty()) return;
+        bool success = (event.value("status", "") == "success");
+
+        auto& traj = trajectory_buffer[cid];
+        if (traj.steps.empty()) {
+            traj.cid = cid;
+            traj.domain = event.value("domain", "");
+            traj.start_ts = std::time(nullptr);
+        }
+        traj.steps.push_back({cmd, success, std::time(nullptr)});
+        traj.last_ts = std::time(nullptr);
+
+        // Finalize stale trajectories
+        finalize_stale_trajectories();
+    }
+
+    void finalize_stale_trajectories() {
+        long now = std::time(nullptr);
+        std::vector<std::string> stale;
+        for (auto& [cid, traj] : trajectory_buffer) {
+            if (now - traj.last_ts >= TRAJECTORY_STALE_SECS && traj.steps.size() >= 2) {
+                stale.push_back(cid);
+            } else if (now - traj.last_ts >= TRAJECTORY_STALE_SECS * 2) {
+                stale.push_back(cid);  // cleanup even single-step stale ones
+            }
+        }
+
+        for (auto& cid : stale) {
+            auto& traj = trajectory_buffer[cid];
+            if (traj.steps.size() >= 2) {
+                // Build summary string
+                std::string summary;
+                bool any_success = false;
+                for (auto& s : traj.steps) {
+                    if (!summary.empty()) summary += " -> ";
+                    summary += s.command;
+                    if (s.success) any_success = true;
+                }
+
+                // Determine outcome from last step
+                std::string outcome = traj.steps.back().success ? "success" : "failure";
+
+                json record = {
+                    {"cid", traj.cid},
+                    {"domain", traj.domain},
+                    {"steps", json::array()},
+                    {"outcome", outcome},
+                    {"summary", summary},
+                    {"step_count", (int)traj.steps.size()},
+                    {"ts", traj.start_ts}
+                };
+                for (auto& s : traj.steps) {
+                    record["steps"].push_back({
+                        {"cmd", s.command}, {"ok", s.success}
+                    });
+                }
+
+                // Write to trajectories.jsonl
+                {
+                    std::lock_guard<std::mutex> lock(io_mutex);
+                    std::ofstream f("./data/trajectories.jsonl", std::ios::app);
+                    if (f.is_open()) f << record.dump() << "\n";
+                }
+
+                std::cout << "[HIPPOCAMPUS] Trajectory finalized: " << traj.cid
+                          << " (" << traj.steps.size() << " steps, " << outcome << ")" << std::endl;
+            }
+            trajectory_buffer.erase(cid);
+        }
+    }
+
+    void handle_trajectory_search(const json& request) {
+        std::string query = request.value("query", "");
+        std::string cid = request.value("cid", "global");
+
+        // Keyword-based trajectory search (fast, no embedding needed)
+        std::vector<json> matches;
+        {
+            std::lock_guard<std::mutex> lock(io_mutex);
+            fs::path traj_path = "./data/trajectories.jsonl";
+            if (fs::exists(traj_path)) {
+                std::ifstream f(traj_path);
+                std::string line;
+                // Score by keyword overlap with query
+                struct Match { json record; int score; };
+                std::vector<Match> scored;
+
+                while (std::getline(f, line)) {
+                    if (line.empty()) continue;
+                    try {
+                        auto j = json::parse(line);
+                        std::string summary = j.value("summary", "");
+                        std::string domain = j.value("domain", "");
+                        int score = 0;
+                        // Score: domain match = 3, query substring in summary = 2, "success" outcome = 1
+                        if (!domain.empty() && query.find(domain) != std::string::npos) score += 3;
+                        if (!query.empty() && summary.find(query) != std::string::npos) score += 2;
+                        if (j.value("outcome", "") == "success") score += 1;
+                        if (score > 0) scored.push_back({j, score});
+                    } catch (...) {}
+                }
+
+                std::sort(scored.begin(), scored.end(),
+                    [](const Match& a, const Match& b) { return a.score > b.score; });
+
+                for (size_t i = 0; i < std::min(scored.size(), (size_t)3); i++) {
+                    matches.push_back(scored[i].record);
+                }
+            }
+        }
+
+        json result = {
+            {"cid", cid}, {"origin", "hippocampus"},
+            {"intent", "trajectory_result"},
+            {"query", query}, {"trajectories", matches}
+        };
+        dispatch(result);
+
+        if (!matches.empty()) {
+            std::cout << "[HIPPOCAMPUS] Trajectory search: " << matches.size()
+                      << " matches for '" << query << "'" << std::endl;
+        }
     }
 
     void dispatch(const json& data) {

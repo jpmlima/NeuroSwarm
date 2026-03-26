@@ -33,7 +33,8 @@ public:
             "stimulus", "visual_stimulus", "execution_result",
             "high_stress_alert", "homeostatic_pulse", "prompt_update",
             "time_pulse", "search_result", "critic_result",
-            "intrinsic_goal", "spike_ready", "spike_done",
+            "intrinsic_goal", "intrinsic_goal_unavailable", "spike_ready", "spike_done",
+            "trajectory_result",
             "inference_result", "metabolic_alert", "goal_plan",
             "primordial_ready", "dopamine_signal",
             "concept_transfer", "concept_response",
@@ -52,23 +53,34 @@ public:
             if (j.is_null()) {
                 if (active_goals.empty()) {
                     auto now = std::chrono::steady_clock::now();
-                    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 30) {
+                    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 5) {
                         pick_next_task();
                         last_activity = std::chrono::steady_clock::now();
                     }
                 } else {
-                    // Goals waiting for memory recall: timeout after 3s and proceed
                     auto now = std::chrono::steady_clock::now();
+                    // Stale goal watchdog — abandon goals stuck for >120s (message loss recovery)
+                    std::vector<std::string> stale_cids;
                     for (auto& [cid, state] : active_goals) {
-                        if (!state.memory_searched) {
-                            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - state.created_at).count();
-                            if (elapsed >= 3) {
-                                std::cout << "[EXECUTIVE] Memory recall timeout for CID " << cid << ". Proceeding without context." << std::endl;
-                                state.memory_searched = true;
-                                request_thought(cid, "Initial task breakdown for goal: " + state.goal);
-                            }
+                        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - state.created_at).count();
+                        // Goals waiting for memory recall: timeout after 3s and proceed
+                        if (!state.memory_searched && elapsed >= 3) {
+                            std::cout << "[EXECUTIVE] Memory recall timeout for CID " << cid << ". Proceeding without context." << std::endl;
+                            state.memory_searched = true;
+                            request_thought(cid, "Initial task breakdown for goal: " + state.goal);
+                        }
+                        // Stale goal: no progress for 60 seconds — likely lost message
+                        if (elapsed >= 60) {
+                            stale_cids.push_back(cid);
                         }
                     }
+                    for (auto& cid : stale_cids) {
+                        std::cout << "[EXECUTIVE] STALE GOAL WATCHDOG: Abandoning CID " << cid
+                                  << " (stuck >120s). Likely message loss on bus." << std::endl;
+                        publish_intrinsic_result(cid, false);
+                        active_goals.erase(cid);
+                    }
+                    if (!stale_cids.empty()) broadcast_idle_if_empty();
                 }
                 // Reap any zombie spike workers (child may exit after sending spike_done)
                 reap_zombies();
@@ -131,11 +143,20 @@ public:
                 else if (origin == "hippocampus" && intent == "search_result") {
                     handle_memory_recall(j);
                 }
+                else if (origin == "hippocampus" && intent == "trajectory_result") {
+                    handle_trajectory_recall(j);
+                }
                 else if (origin == "critic_lobe" && intent == "critic_result") {
                     handle_critic_feedback(j);
                 }
                 else if (origin == "basal_ganglia" && intent == "intrinsic_goal") {
                     handle_intrinsic_goal(j);
+                }
+                else if (origin == "basal_ganglia" && intent == "intrinsic_goal_unavailable") {
+                    // BasalGanglia couldn't find a suitable domain — reset flag so next cycle retries
+                    std::cout << "[EXECUTIVE] BasalGanglia: no goal available (" << j.value("reason", "unknown")
+                              << "). Will retry next cycle." << std::endl;
+                    waiting_for_intrinsic_goal = false;
                 }
                 else if (origin == "primordial_loop" && intent == "goal_plan") {
                     handle_goal_plan(j);
@@ -219,6 +240,7 @@ private:
     float system_stress = 0.0f;
     float current_stamina = 100.0f;  // Phase 5: metabolic energy level
     bool waiting_for_intrinsic_goal = false;
+    std::chrono::steady_clock::time_point intrinsic_goal_requested_at;
     bool planner_ready_ = false;  // true after PrimordialLoop broadcasts primordial_ready
     std::string system_knowledge; // injected into every prompt, updated by REM Engine
     // Temporal context from ChronosLobe
@@ -434,7 +456,8 @@ private:
         auto& state = active_goals[cid];
         json real_req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-            {"command", state.last_cmd}, {"mode", state.last_mode}
+            {"command", state.last_cmd}, {"mode", state.last_mode},
+            {"domain", state.domain}
         };
         dispatch_to_all(real_req);
     }
@@ -544,6 +567,35 @@ private:
         request_thought(cid, "Initial task breakdown for goal: " + state.goal);
     }
 
+    // Phase 7: Inject trajectory context into goal memory
+    void handle_trajectory_recall(const json& data) {
+        std::string cid = data.value("cid", "unknown");
+        if (active_goals.find(cid) == active_goals.end()) return;
+
+        auto& state = active_goals[cid];
+        auto trajectories = data.value("trajectories", json::array());
+
+        if (!trajectories.empty()) {
+            state.memory_context += "\n\nPAST TRAJECTORIES (command sequences that worked before):\n";
+            int shown = 0;
+            for (auto& t : trajectories) {
+                std::string outcome = t.value("outcome", "unknown");
+                auto steps = t.value("steps", json::array());
+                if (steps.empty()) continue;
+
+                state.memory_context += (outcome == "success" ? "- WORKED: " : "- FAILED: ");
+                for (size_t i = 0; i < steps.size() && i < 5; i++) {
+                    if (i > 0) state.memory_context += " → ";
+                    state.memory_context += steps[i].value("cmd", "?");
+                }
+                state.memory_context += " (" + outcome + ")\n";
+                if (++shown >= 2) break;
+            }
+            if (shown > 0)
+                std::cout << "[EXECUTIVE] Trajectory context: " << shown << " past sequence(s)." << std::endl;
+        }
+    }
+
     void process_visual_stimulus(const json& data) {
         // Lightweight visual analysis path; additional lobe integration can be layered here
         std::string cid = "visual_" + std::to_string(std::time(nullptr));
@@ -579,7 +631,8 @@ private:
                           << " (" << state.plan.size() << " remaining)" << std::endl;
                 json exec_req = {
                     {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                    {"command", next_cmd}, {"mode", "reality"}
+                    {"command", next_cmd}, {"mode", "reality"},
+                    {"domain", state.domain}
                 };
                 dispatch_to_all(exec_req);
             } else {
@@ -622,7 +675,8 @@ private:
                           << " (" << state.suggested_commands.size() << " remaining)" << std::endl;
                 json exec_req = {
                     {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                    {"command", next_cmd}, {"mode", "reality"}
+                    {"command", next_cmd}, {"mode", "reality"},
+                    {"domain", state.domain}
                 };
                 dispatch_to_all(exec_req);
                 return;
@@ -735,6 +789,7 @@ private:
         // Tier 2: Request intrinsic goal from BasalGanglia
         if (!waiting_for_intrinsic_goal) {
             waiting_for_intrinsic_goal = true;
+            intrinsic_goal_requested_at = std::chrono::steady_clock::now();
             std::string cid = "intrinsic_" + std::to_string(std::time(nullptr));
             json req = {
                 {"cid", cid}, {"origin", "frontal_executive"},
@@ -745,7 +800,15 @@ private:
             return;
         }
 
-        // Tier 3: Hardcoded epistemic fallback (if BasalGanglia hasn't responded)
+        // Timeout: if BasalGanglia hasn't responded in 10s, retry
+        {
+            auto wait_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - intrinsic_goal_requested_at).count();
+            if (wait_elapsed < 10) return;  // still waiting, don't fall through yet
+            std::cout << "[EXECUTIVE] BasalGanglia timeout (" << wait_elapsed << "s). Retrying." << std::endl;
+        }
+
+        // Tier 3: Retry — reset and request again next cycle
         waiting_for_intrinsic_goal = false;
         std::string cid = "epistemic_" + std::to_string(std::time(nullptr));
         std::string goal = "Self-Assigned Task: Analyze src/brainstem/Thalamus.cpp and suggest a performance optimization using neuro_surgery.";
@@ -793,16 +856,11 @@ private:
         std::cout << "[EXECUTIVE] Intrinsic goal accepted: domain='" << domain
                   << "' fitness=" << fitness << " [CID: " << cid << "]" << std::endl;
 
-        // FORCE SPIKE DELEGATION for intrinsic goals to ensure visibility and deep reasoning
-        if (active_workers < MAX_SPIKE_WORKERS) {
-            spawn_spike(cid, state);
-            return;
-        }
-
         active_goals[cid] = state;
 
-        // Autopoiesis: try Planner if no worker capacity
-        if (!domain.empty() && domain != "unknown") {
+        // PLANNER FIRST: try learned operators before falling back to LLM
+        // This is the core autonomy mechanism — the system uses what it learned
+        if (!domain.empty() && domain != "unknown" && planner_ready_) {
             try_planner_first(cid, domain);
             return;
         }
@@ -909,19 +967,27 @@ private:
 
             json exec_req = {
                 {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                {"command", cmd}, {"mode", "reality"}
+                {"command", cmd}, {"mode", "reality"},
+                {"domain", state.domain}
             };
             dispatch_to_all(exec_req);
         } else if (!state.suggested_commands.empty()) {
             std::cout << "[EXECUTIVE] PLANNER MISS → trying suggested commands." << std::endl;
             try_suggested_commands(cid);
         } else {
-            // No plan and no suggestions — fall back to LLM inference
+            // No plan and no suggestions — fall back to spike worker (LLM)
             auto gaps = data.value("gaps", json::array());
             std::cout << "[EXECUTIVE] PLANNER MISS: no plan for domain '" << state.domain << "'";
             if (!gaps.empty()) std::cout << " (gaps: " << gaps.dump() << ")";
             std::cout << ". Falling back to LLM." << std::endl;
-            fallback_to_llm(cid);
+            // Prefer spike worker if available (isolated process, better reasoning)
+            if (active_workers < MAX_SPIKE_WORKERS) {
+                // Remove from active_goals — spike manages its own lifecycle
+                active_goals.erase(cid);
+                spawn_spike(cid, state);
+            } else {
+                fallback_to_llm(cid);
+            }
         }
     }
 
@@ -931,7 +997,14 @@ private:
         auto& state = it->second;
 
         if (state.suggested_commands.empty()) {
-            fallback_to_llm(cid);
+            // Prefer spike for LLM fallback
+            if (active_workers < MAX_SPIKE_WORKERS) {
+                GoalState s = state;
+                active_goals.erase(cid);
+                spawn_spike(cid, s);
+            } else {
+                fallback_to_llm(cid);
+            }
             return;
         }
 
@@ -947,7 +1020,8 @@ private:
 
         json exec_req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-            {"command", cmd}, {"mode", "reality"}
+            {"command", cmd}, {"mode", "reality"},
+            {"domain", state.domain}
         };
         dispatch_to_all(exec_req);
     }
@@ -959,6 +1033,13 @@ private:
 
         // Query concept space for transfer before LLM
         query_concepts_for_goal(cid, state.goal);
+
+        // Phase 7: Also search for relevant trajectories
+        json traj_req = {
+            {"cid", cid}, {"origin", "frontal_executive"},
+            {"intent", "search_trajectory"}, {"query", state.domain}
+        };
+        dispatch_to_all(traj_req);
 
         // Proceed with normal LLM-based flow: memory search → inference
         json mem_req = {
@@ -1322,9 +1403,13 @@ private:
         }
 
         // Command passes local validation — execute it
+        std::string exec_domain = "";
+        auto git = active_goals.find(cid);
+        if (git != active_goals.end()) exec_domain = git->second.domain;
         json exec_req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-            {"command", cmd}, {"mode", mode}
+            {"command", cmd}, {"mode", mode},
+            {"domain", exec_domain}
         };
         dispatch_to_all(exec_req);
 

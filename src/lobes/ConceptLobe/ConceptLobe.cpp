@@ -1673,6 +1673,46 @@ private:
                       << parts << "] (seen " << count << "x)" << std::endl;
         }
 
+        // Phase 7: Promote high-confidence composites as emergent goals
+        long now = (long)epoch_secs();
+        for (auto& [key, op] : composite_ops) {
+            if (op.observation_count < 5 || op.success_rate < 0.6f) continue;
+            if (now - (long)op.last_seen > 600) continue;  // only recent patterns
+
+            // Check if already promoted recently (use last_seen as proxy — avoid spam)
+            // Build sequence of cluster abstractions and example commands
+            json sequence = json::array();
+            json example_cmds = json::array();
+            for (auto& role : op.roles) {
+                if (clusters.count(role.cluster_id)) {
+                    auto& cl = clusters[role.cluster_id];
+                    sequence.push_back(cl.abstraction);
+                    // Pick first member's command as example
+                    if (!cl.members.empty() && nodes.count(cl.members[0])) {
+                        example_cmds.push_back(nodes[cl.members[0]].command);
+                    }
+                }
+            }
+
+            if (sequence.empty()) continue;
+
+            json emergent = {
+                {"origin", "concept_lobe"},
+                {"intent", "emergent_goal"},
+                {"composite_name", op.name},
+                {"composite_id", op.id},
+                {"sequence", sequence},
+                {"success_rate", op.success_rate},
+                {"observation_count", op.observation_count},
+                {"example_commands", example_cmds}
+            };
+            routing::publish(pub, emergent);
+
+            std::cout << "[CONCEPT] EMERGENT GOAL promoted: '" << op.name
+                      << "' obs=" << op.observation_count
+                      << " sr=" << (int)(op.success_rate * 100) << "%" << std::endl;
+        }
+
         // Prune stale sequences (not seen recently, low count)
         std::vector<std::string> stale_seqs;
         for (auto& [key, count] : sequence_counts) {

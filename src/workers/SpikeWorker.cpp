@@ -65,10 +65,10 @@ public:
         while (true) {
             auto j = routing::receive(sub, zmq::recv_flags::dontwait);
             if (j.is_null()) {
-                // Timeout: self-terminate if idle for 300 seconds
+                // Timeout: self-terminate if idle for 120 seconds
                 auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 300) {
-                    std::cout << "[SPIKE:" << worker_id << "] Timeout — no activity for 300s. Terminating." << std::endl;
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count() > 120) {
+                    std::cout << "[SPIKE:" << worker_id << "] Timeout — no activity for 120s. Terminating." << std::endl;
                     publish_done(false);
                     return;
                 }
@@ -301,7 +301,8 @@ private:
 
         json dream_req = {
             {"cid", cid}, {"origin", "spike_worker"}, {"intent", "execution_request"},
-            {"command", cmd}, {"mode", "dream"}
+            {"command", cmd}, {"mode", "dream"},
+            {"domain", domain}
         };
         dispatch(dream_req);
     }
@@ -309,7 +310,8 @@ private:
     void commit_to_reality() {
         json real_req = {
             {"cid", cid}, {"origin", "spike_worker"}, {"intent", "execution_request"},
-            {"command", last_cmd}, {"mode", last_mode}
+            {"command", last_cmd}, {"mode", last_mode},
+            {"domain", domain}
         };
         dispatch(real_req);
     }

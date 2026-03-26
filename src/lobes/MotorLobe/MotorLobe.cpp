@@ -35,6 +35,7 @@ public:
                         std::string cmd = j.value("command", "");
                         std::string mode = j.value("mode", "reality"); // Execution context: "reality" (live), "dream" (sandboxed), or "neuro_surgery" (self-modification)
                         std::string cid = j.value("cid", "unknown");
+                        std::string domain = j.value("domain", "");
 
                         int exit_code = 0;
                         std::string out;
@@ -74,7 +75,8 @@ public:
                             {"proprioception", out},
                             {"exit_code", exit_code},
                             {"status", (exit_code == 0 ? "success" : "failure")},
-                            {"mode", mode}
+                            {"mode", mode},
+                            {"domain", domain}
                         };
                         dispatch(resp);
                     } else if (j.value("intent", "") == "genesis_request") {

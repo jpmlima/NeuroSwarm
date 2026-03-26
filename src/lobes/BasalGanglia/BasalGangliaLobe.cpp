@@ -212,7 +212,10 @@ public:
             "rlaif_reinforce",
             "concept_update", "concept_response",
             "validate_command",
-            "exploration_target"
+            "exploration_target",
+            "emergent_goal",
+            "stagnation_alert",
+            "system_tuning"
         });
 
         mkdir("./data", 0755);
@@ -523,6 +526,18 @@ public:
                 else if (origin == "metacognition" && intent == "exploration_target") {
                     handle_exploration_target(j);
                 }
+                // Phase 7: Emergent goals from ConceptLobe — promote patterns to drives
+                else if (origin == "concept_lobe" && intent == "emergent_goal") {
+                    handle_emergent_goal(j);
+                }
+                // MetaCognition detected repetition — force domain rotation
+                else if (origin == "metacognition" && intent == "stagnation_alert") {
+                    handle_stagnation_alert(j);
+                }
+                // MetaCognition proposes system parameter adjustments
+                else if (origin == "metacognition" && intent == "system_tuning") {
+                    handle_system_tuning(j);
+                }
                 // BK-tree: command validation request from FrontalExecutive
                 else if (intent == "validate_command") {
                     handle_validate_command(j);
@@ -545,8 +560,9 @@ private:
         SURVIVAL = 0,     // respond to lobe_crash, lobe_death
         HOMEOSTASIS = 1,  // respond to high CPU/RAM/temp, metabolic alerts
         EXPLORATION = 2,  // intrinsic motivation — try untested domains
-        MASTERY = 3,      // retry domains with low success rates
-        SELF_MODIFY = 4   // source modification, compilation, code generation
+        EMERGENT = 3,     // Phase 7: pattern-driven goals from ConceptLobe
+        MASTERY = 4,      // retry domains with low success rates
+        SELF_MODIFY = 5   // source modification, compilation, code generation
     };
 
     struct PendingDrive {
@@ -607,6 +623,8 @@ private:
         long cooldown_until = 0;
         // Phase 6: stale selection counter — how many times selected without new attempts
         int stale_selections = 0;
+        // Phase 7: opportunity cost — attempts without substantive success
+        int attempts_since_substantive_success = 0;
     };
 
     std::vector<std::string> domains = {
@@ -676,14 +694,24 @@ private:
     bool concept_space_available = false;  // true once first concept_update received
 
     void init_domain_commands() {
-        // Directed Tabula Rasa: Minimum seeds to steer evolution away from 'whoami' loops.
+        // Directed Tabula Rasa: Substantive seeds that produce real, measurable output.
+        // No trivial commands (mkdir, id, whoami, echo) — those pollute the genome.
         for (const auto& domain : domains) {
-            if (domain == "compilation")         domain_commands[domain] = {"cc --version", "make --version"};
-            else if (domain == "file_read")      domain_commands[domain] = {"ls -F", "cat README.md"};
-            else if (domain == "file_write")     domain_commands[domain] = {"touch .neuro_touch", "mkdir -p data/sandbox"};
-            else if (domain == "self_inspection") domain_commands[domain] = {"id", "uname -a"};
-            else if (domain == "file_search")    domain_commands[domain] = {"find . -maxdepth 1"};
-            else domain_commands[domain] = {"id"};
+            if (domain == "compilation")          domain_commands[domain] = {"make build/thalamus 2>&1 | head", "cc --version"};
+            else if (domain == "file_read")       domain_commands[domain] = {"cat README.md", "head -20 CMakeLists.txt", "wc -l src/brainstem/*.cpp"};
+            else if (domain == "file_write")      domain_commands[domain] = {"cp README.md data/readme_backup.md", "tee data/test_write.txt <<< 'neuroswarm test'"};
+            else if (domain == "self_inspection") domain_commands[domain] = {"cat /proc/self/status | head -15", "ls -la build/"};
+            else if (domain == "file_search")     domain_commands[domain] = {"find src -name '*.cpp' -type f | head -20", "grep -r 'intent' include/ --include='*.hpp' -l"};
+            else if (domain == "process_inspection") domain_commands[domain] = {"ps aux --no-header | head -20", "pgrep -la neuro"};
+            else if (domain == "network_diagnostics") domain_commands[domain] = {"ss -tlnp | head -20", "ss -an | grep 5555"};
+            else if (domain == "git_operations")  domain_commands[domain] = {"git status --short", "git log --oneline -5"};
+            else if (domain == "system_monitoring") domain_commands[domain] = {"free -h", "df -h / | tail -1"};
+            else if (domain == "data_analysis")   domain_commands[domain] = {"wc -l data/operators.jsonl", "python3 -c 'import json; print(len(open(\"data/operators.jsonl\").readlines()))'"};
+            else if (domain == "source_modification") domain_commands[domain] = {"head -5 src/brainstem/PrimordialLoop.cpp", "wc -l src/brainstem/*.cpp"};
+            else if (domain == "script_creation") domain_commands[domain] = {"python3 -c 'print(\"hello from neuroswarm\")'", "bash -c 'for i in 1 2 3; do echo $i; done'"};
+            else if (domain == "log_analysis")    domain_commands[domain] = {"tail -10 data/engrams/global_stream.jsonl 2>/dev/null || echo 'no logs yet'"};
+            else if (domain == "memory_analysis") domain_commands[domain] = {"ls -la data/engrams/ | tail -10", "du -sh data/"};
+            else domain_commands[domain] = {"ls -la", "cat /proc/loadavg"};
         }
 
         // Classification rules: keyword → domain
@@ -829,12 +857,33 @@ private:
         // Phase 6: Stale penalty — domain selected many times but never executed
         float stale_penalty = std::min(1.0f, d.stale_selections * 0.15f);
 
+        // Phase 7: Opportunity cost — sigmoid penalty for fruitless attempts
+        // Gentle at first (allows learning), steep after 10 attempts, saturates at 0.4
+        float opportunity_cost = 0.0f;
+        if (d.attempts_since_substantive_success > 3) {
+            opportunity_cost = 0.4f / (1.0f + std::exp(-(d.attempts_since_substantive_success - 10.0f) / 3.0f));
+        }
+
+        // Phase 8: Habituation penalty — domains where recent commands are all repeats
+        // score poorly. Measures command diversity: unique/total in recent history.
+        float habituation_penalty = 0.0f;
+        auto hit = domain_command_history.find(domain);
+        if (hit != domain_command_history.end() && !hit->second.empty()) {
+            auto& hist = hit->second;
+            std::set<std::string> unique_cmds(hist.begin(), hist.end());
+            float diversity = (float)unique_cmds.size() / (float)hist.size();
+            // Low diversity (e.g., 1 unique out of 10 = 0.1) → penalty up to 0.5
+            habituation_penalty = 0.5f * (1.0f - diversity);
+        }
+
         float fitness = 0.20f * coverage
                       + 0.15f * trend
-                      + 0.30f * pred_error
-                      + 0.25f * novelty
+                      + 0.25f * pred_error
+                      + 0.20f * novelty
                       - 0.10f * system_stress
-                      - stale_penalty;
+                      - stale_penalty
+                      - opportunity_cost
+                      - habituation_penalty;
 
         return fitness;
     }
@@ -845,7 +894,11 @@ private:
         if (cmd.find("-") == 0) return false;
 
         // Loop attractors — commands the system fixates on without learning
-        if (cmd == "whoami" || cmd == "id" || cmd == "hostname" || cmd == "pwd") return false;
+        if (cmd == "whoami" || cmd == "id" || cmd == "hostname" || cmd == "pwd"
+            || cmd == "uname" || cmd == "uname -a" || cmd == "uptime" || cmd == "date") return false;
+
+        // mkdir spam — trivial directory creation is not real work
+        if (cmd.find("mkdir") == 0 && cmd.find("&&") == std::string::npos) return false;
 
         // Pure echo commands — exit 0 but no real work
         if (cmd.find("echo ") == 0 && cmd.find("&&") == std::string::npos
@@ -916,14 +969,23 @@ private:
         if (success) {
             d.success++;
             d.consecutive_failures = 0;
+            // Only reset opportunity cost if this is a genuinely novel success
+            // Repeating the same command 30 times is not progress
+            float exec_habit = habituation_factor(domain, cmd);
+            if (exec_habit > 0.25f) {
+                d.attempts_since_substantive_success = 0;
+            } else {
+                d.attempts_since_substantive_success++;  // repetition = no real progress
+            }
         } else {
             d.failure++;
             d.consecutive_failures++;
+            d.attempts_since_substantive_success++;  // Phase 7: no progress — accumulate cost
 
-            // Learned helplessness: 5 consecutive failures → 10-minute cooldown
+            // Learned helplessness: 5 consecutive failures → 3-minute cooldown
             if (d.consecutive_failures >= 5) {
                 long now_ts = std::time(nullptr);
-                d.cooldown_until = now_ts + 600; // 10 minutes
+                d.cooldown_until = now_ts + 180; // 3 minutes
                 std::cout << "[BASAL_GANGLIA] Learned helplessness: domain '" << domain
                           << "' entering 10-minute cooldown after " << d.consecutive_failures
                           << " consecutive failures." << std::endl;
@@ -957,12 +1019,16 @@ private:
         }
 
         // Check for dopamine signal — novel capability or high prediction error surprise
+        // Modulated by habituation: repeated commands produce weaker signals
         bool is_novel = (total_before == 0 && total == 1);
         bool is_surprising = (d.prediction_error > 0.3f);
 
         if (is_novel || is_surprising) {
-            emit_dopamine(domain, is_novel ? "novel_capability" : "prediction_surprise",
-                         d.prediction_error);
+            float habit = habituation_factor(domain, cmd);
+            float magnitude = d.prediction_error * habit;
+            emit_dopamine(domain,
+                magnitude > 0.02f ? (is_novel ? "novel_capability" : "prediction_surprise") : "habituated",
+                magnitude);
         }
 
         // Cross-domain transfer: propagate confidence to related domains
@@ -1041,6 +1107,9 @@ private:
         if (success) {
             d.consecutive_failures = 0;
 
+            // Habituation: compute novelty of this command in this domain
+            float habit = habituation_factor(domain, cmd);
+
             // RLAIF: reinforce all commands from the successful execution chain
             // Only reinforce substantive commands (filter degenerate echo-only)
             if (j.contains("executed_commands")) {
@@ -1049,14 +1118,33 @@ private:
                 for (auto& cmd_j : cmds) {
                     std::string c = cmd_j.get<std::string>();
                     if (!is_substantive_success(c, "validated")) continue;
-                    update_genome_fitness(domain, c, true);
-                    reinforced++;
+                    // Habituation: repeated commands get diminishing fitness boost
+                    float cmd_habit = habituation_factor(domain, c);
+                    if (cmd_habit > 0.1f) {
+                        update_genome_fitness(domain, c, true);
+                        reinforced++;
+                    }
                 }
                 if (reinforced > 0) {
-                    std::cout << "[BASAL_GANGLIA] RLAIF: Chain reinforcement — "
-                              << reinforced << " commands in '" << domain << "'" << std::endl;
-                    emit_dopamine(domain, "rlaif_chain_success", 0.3f);
+                    // Dopamine magnitude modulated by habituation
+                    float dopamine = 0.3f * habit;
+                    // Always emit signal (even when suppressed) so dashboard can visualize habituation
+                    emit_dopamine(domain, dopamine > 0.02f ? "rlaif_chain_success" : "habituated", dopamine);
+                    if (dopamine > 0.02f) {
+                        std::cout << "[BASAL_GANGLIA] RLAIF: Chain reinforcement — "
+                                  << reinforced << " commands in '" << domain
+                                  << "' (habituation=" << habit << ")" << std::endl;
+                    } else {
+                        std::cout << "[BASAL_GANGLIA] HABITUATION: Suppressed dopamine for '"
+                                  << domain << "' (habit=" << habit << ")" << std::endl;
+                    }
+                } else {
+                    // No substantive commands — emit zero dopamine
+                    emit_dopamine(domain, "habituated", 0.0f);
                 }
+            } else if (habit < 0.1f) {
+                // Even without RLAIF chain, penalise repetitive domains
+                d.attempts_since_substantive_success++;
             }
         }
     }
@@ -1064,6 +1152,77 @@ private:
     // ──────────────────────────────────────────────────────────────────────
     // Directed Exploration: MetaCognition → BasalGanglia priority steering
     // ──────────────────────────────────────────────────────────────────────
+
+    // MetaCognition detected the system is stuck repeating the same command.
+    // This is the system's own self-awareness kicking in — it noticed the loop.
+    // Response: cooldown the stagnating domain, force rotation to something new.
+    void handle_stagnation_alert(const json& j) {
+        std::string domain = j.value("domain", "");
+        std::string repeated_cmd = j.value("repeated_command", "");
+        int count = j.value("repetition_count", 0);
+        float ratio = j.value("repetition_ratio", 0.0f);
+
+        if (domain.empty() || !self_model.count(domain)) return;
+
+        auto& d = self_model[domain];
+
+        // Apply cooldown proportional to repetition severity (tunable)
+        int cooldown_secs = (int)(cooldown_multiplier_ * ratio);
+        cooldown_secs = std::max(cooldown_secs, 60);  // minimum 60s cooldown
+        d.cooldown_until = std::time(nullptr) + cooldown_secs;
+
+        // Spike opportunity cost — this domain is not producing novelty
+        d.attempts_since_substantive_success += count;
+
+        std::cout << "[BASAL_GANGLIA] SELF-AWARENESS: MetaCognition detected stagnation in '"
+                  << domain << "' ('" << repeated_cmd.substr(0, 40) << "' x" << count
+                  << "). Applying " << cooldown_secs << "s cooldown." << std::endl;
+
+        save_self_model();  // Persist the cooldown
+    }
+
+    // MetaCognition proposes parameter adjustments based on meta-observations.
+    // This is directed self-modification: the system tuning its own parameters.
+    void handle_system_tuning(const json& j) {
+        auto adjustments = j.value("adjustments", json::array());
+        if (adjustments.empty()) return;
+
+        int applied = 0;
+        for (auto& adj : adjustments) {
+            std::string param = adj.value("parameter", "");
+            std::string recommendation = adj.value("recommendation", "");
+
+            if (param == "cooldown_multiplier" && recommendation == "increase") {
+                float old = cooldown_multiplier_;
+                float suggested = adj.value("suggested_value", 180.0f);
+                cooldown_multiplier_ = std::max(cooldown_multiplier_, suggested);
+                std::cout << "[BASAL_GANGLIA] SELF-MODIFY: cooldown_multiplier " << old
+                          << " → " << cooldown_multiplier_
+                          << " (MetaCognition: " << adj.value("reasoning", "") << ")" << std::endl;
+                applied++;
+            }
+            else if (param == "domain_rotation_pressure" && recommendation == "increase") {
+                float old = domain_rotation_pressure_;
+                float suggested = adj.value("suggested_value", 2.0f);
+                domain_rotation_pressure_ = suggested;
+                std::cout << "[BASAL_GANGLIA] SELF-MODIFY: domain_rotation_pressure " << old
+                          << " → " << domain_rotation_pressure_ << std::endl;
+                applied++;
+            }
+            else if (param == "priority_capability") {
+                priority_capability_ = recommendation;
+                std::cout << "[BASAL_GANGLIA] SELF-MODIFY: priority_capability → '"
+                          << priority_capability_ << "' ("
+                          << adj.value("reasoning", "") << ")" << std::endl;
+                applied++;
+            }
+        }
+
+        if (applied > 0) {
+            std::cout << "[BASAL_GANGLIA] Applied " << applied << "/" << adjustments.size()
+                      << " self-modifications from MetaCognition." << std::endl;
+        }
+    }
 
     void handle_exploration_target(const json& j) {
         exploration_target_domain     = j.value("target_domain", "");
@@ -1087,6 +1246,83 @@ private:
         return (now - exploration_target_timestamp) < EXPLORATION_TARGET_TTL;
     }
 
+    // Phase 7: Emergent meta-goals — ConceptLobe promotes discovered patterns to drives
+    struct EmergentGoal {
+        std::string composite_name;
+        std::vector<std::string> sequence;       // domain sequence (e.g., file_read → data_analysis)
+        std::vector<std::string> example_commands;
+        float success_rate = 0.0f;
+        int observation_count = 0;
+        long timestamp = 0;
+    };
+    std::vector<EmergentGoal> emergent_goals;
+    static constexpr int MAX_EMERGENT_GOALS = 3;
+
+    void handle_emergent_goal(const json& j) {
+        std::string name = j.value("composite_name", "");
+        if (name.empty()) return;
+
+        float sr = j.value("success_rate", 0.0f);
+        int obs = j.value("observation_count", 0);
+
+        // Require minimum confidence
+        if (obs < 5 || sr < 0.6f) return;
+
+        // Check for duplicate
+        for (auto& eg : emergent_goals) {
+            if (eg.composite_name == name) {
+                eg.observation_count = obs;
+                eg.success_rate = sr;
+                eg.timestamp = std::time(nullptr);
+                return;
+            }
+        }
+
+        EmergentGoal eg;
+        eg.composite_name = name;
+        eg.success_rate = sr;
+        eg.observation_count = obs;
+        eg.timestamp = std::time(nullptr);
+
+        if (j.contains("sequence") && j["sequence"].is_array()) {
+            for (auto& s : j["sequence"]) eg.sequence.push_back(s.get<std::string>());
+        }
+        if (j.contains("example_commands") && j["example_commands"].is_array()) {
+            for (auto& c : j["example_commands"]) eg.example_commands.push_back(c.get<std::string>());
+        }
+
+        // Cap at MAX_EMERGENT_GOALS — evict lowest observation count
+        if ((int)emergent_goals.size() >= MAX_EMERGENT_GOALS) {
+            auto worst = std::min_element(emergent_goals.begin(), emergent_goals.end(),
+                [](const EmergentGoal& a, const EmergentGoal& b) {
+                    return a.observation_count < b.observation_count;
+                });
+            if (worst != emergent_goals.end() && obs > worst->observation_count) {
+                std::cout << "[BASAL_GANGLIA] EMERGENT: evicting '" << worst->composite_name
+                          << "' for '" << name << "'" << std::endl;
+                emergent_goals.erase(worst);
+            } else {
+                return;  // new goal isn't better than existing ones
+            }
+        }
+
+        emergent_goals.push_back(eg);
+
+        // Promote to pending drive
+        std::string seq_str;
+        for (size_t i = 0; i < eg.sequence.size(); i++) {
+            if (i > 0) seq_str += " → ";
+            seq_str += eg.sequence[i];
+        }
+        pending_drives.push_back({DriveLevel::EMERGENT,
+            "[EMERGENT] Execute discovered pattern '" + name + "': " + seq_str,
+            "concept_lobe"});
+
+        std::cout << "[BASAL_GANGLIA] EMERGENT GOAL registered: '" << name
+                  << "' (" << seq_str << ") sr=" << (int)(sr * 100)
+                  << "% obs=" << obs << std::endl;
+    }
+
     void handle_goal_request(const json& j) {
         std::string cid = j.value("cid", "");
 
@@ -1106,7 +1342,33 @@ private:
             switch (drive.level) {
                 case DriveLevel::SURVIVAL:    drive_name = "SURVIVAL"; break;
                 case DriveLevel::HOMEOSTASIS: drive_name = "HOMEOSTASIS"; break;
+                case DriveLevel::EMERGENT:    drive_name = "EMERGENT"; break;
                 default:                      drive_name = "UNKNOWN"; break;
+            }
+
+            // Phase 7: EMERGENT drives carry their own sequence and commands
+            if (drive.level == DriveLevel::EMERGENT) {
+                // Find matching emergent goal for context
+                json suggested = json::array();
+                std::string domain = "self_inspection";
+                for (auto& eg : emergent_goals) {
+                    if (drive.description.find(eg.composite_name) != std::string::npos) {
+                        for (auto& c : eg.example_commands) suggested.push_back(c);
+                        if (!eg.sequence.empty()) domain = eg.sequence[0];  // start with first domain
+                        break;
+                    }
+                }
+                json goal = {
+                    {"cid", cid}, {"origin", "basal_ganglia"},
+                    {"intent", "intrinsic_goal"},
+                    {"domain", domain}, {"fitness", 0.8f},
+                    {"drive_level", "EMERGENT"},
+                    {"suggested_commands", suggested},
+                    {"context", drive.description}
+                };
+                routing::publish(pub, goal);
+                std::cout << "[BASAL_GANGLIA] EMERGENT goal published: " << drive.description << std::endl;
+                return;
             }
 
             json goal = {
@@ -1206,6 +1468,13 @@ private:
             }
             if (best_domain.empty()) {
                 std::cout << "[BASAL_GANGLIA] All domains in cooldown. No intrinsic goal available." << std::endl;
+                // Always respond so FrontalExecutive doesn't stall waiting
+                json no_goal = {
+                    {"cid", cid}, {"origin", "basal_ganglia"},
+                    {"intent", "intrinsic_goal_unavailable"},
+                    {"reason", "all_cooldown"}
+                };
+                routing::publish(pub, no_goal);
                 return;
             }
         }
@@ -1215,7 +1484,7 @@ private:
             consecutive_same_domain++;
             if (consecutive_same_domain >= MAX_CONSECUTIVE_SAME_DOMAIN) {
                 // Put this domain in short cooldown and find next best
-                self_model[best_domain].cooldown_until = now_ts + 120;  // 2 min cooldown
+                self_model[best_domain].cooldown_until = now_ts + 30;  // 30s cooldown
                 std::cout << "[BASAL_GANGLIA] Domain rotation: '" << best_domain
                           << "' selected " << consecutive_same_domain
                           << "x consecutively. Forcing 2min cooldown." << std::endl;
@@ -1231,6 +1500,12 @@ private:
                 }
                 if (best_domain.empty()) {
                     std::cout << "[BASAL_GANGLIA] All domains in cooldown after rotation. Skipping." << std::endl;
+                    json no_goal = {
+                        {"cid", cid}, {"origin", "basal_ganglia"},
+                        {"intent", "intrinsic_goal_unavailable"},
+                        {"reason", "all_cooldown_after_rotation"}
+                    };
+                    routing::publish(pub, no_goal);
                     return;
                 }
             }
@@ -1591,6 +1866,40 @@ private:
     float exploration_target_importance = 0.0f;
     long exploration_target_timestamp = 0;
     static constexpr int EXPLORATION_TARGET_TTL = 300;  // 5 min expiry
+
+    // ─── Tunable parameters (self-modified by MetaCognition) ───
+    float cooldown_multiplier_ = 180.0f;    // base cooldown scaling (seconds * ratio)
+    float domain_rotation_pressure_ = 1.0f; // multiplier on rotation urgency
+    std::string priority_capability_;       // capability MetaCognition wants us to focus on
+
+    // ─── Habituation: dopamine decays with command repetition ───
+    // Biological analogue: sensory habituation. Repeated identical stimuli
+    // produce progressively weaker neural responses. The 1st time you hear
+    // a sound it's startling; the 31st time, your brain ignores it.
+    // No manual cooldowns needed — the reward signal itself carries novelty.
+    static constexpr int HABITUATION_WINDOW = 50;  // remember last N commands per domain
+    std::map<std::string, std::vector<std::string>> domain_command_history;
+
+    float habituation_factor(const std::string& domain, const std::string& cmd) {
+        auto& history = domain_command_history[domain];
+
+        // Count how many times this exact command appeared recently
+        int repeats = 0;
+        for (auto& h : history) {
+            if (h == cmd) repeats++;
+        }
+
+        // Record this command
+        history.push_back(cmd);
+        if ((int)history.size() > HABITUATION_WINDOW) {
+            history.erase(history.begin());
+        }
+
+        // Harmonic decay: 1.0 on first use, gentler than exponential
+        // 1st: 1.0, 2nd: 0.5, 3rd: 0.33, 4th: 0.25, 10th: 0.1
+        if (repeats == 0) return 1.0f;
+        return std::max(0.05f, 1.0f / (float)(1 + repeats));
+    }
 
     // Anti-repetition: domain rotation tracking
     std::string last_selected_domain;
@@ -2193,15 +2502,22 @@ int main() {
     json get_suggested_commands(const std::string& domain) {
         json cmds = json::array();
 
-        // Try genome templates — weighted random selection (fitness-proportional)
+        // Try genome templates — weighted random selection (fitness × freshness)
         // Avoids always picking the same top-fitness command
         auto it = command_genome.find(domain);
         if (it != command_genome.end() && !it->second.empty()) {
             auto pool = it->second;
 
-            // Fitness-proportional sampling (roulette wheel)
+            // Fitness × freshness sampling — habituated commands get demoted
+            // Note: we read history without modifying it (no push_back)
+            auto& hist = domain_command_history[domain];
             float total_fit = 0.0f;
-            for (auto& t : pool) total_fit += std::max(0.1f, t.fitness);
+            for (auto& t : pool) {
+                int repeats = 0;
+                for (auto& h : hist) { if (h == t.cmd) repeats++; }
+                float freshness = (repeats == 0) ? 1.0f : 1.0f / (1.0f + repeats);
+                total_fit += std::max(0.05f, t.fitness * freshness);
+            }
 
             std::set<int> picked;
             int picks = std::min((int)pool.size(), 4);
@@ -2209,7 +2525,10 @@ int main() {
                 float r = (float)(rand() % 1000) / 1000.0f * total_fit;
                 float acc = 0.0f;
                 for (int i = 0; i < (int)pool.size(); i++) {
-                    acc += std::max(0.1f, pool[i].fitness);
+                    int reps = 0;
+                    for (auto& h : hist) { if (h == pool[i].cmd) reps++; }
+                    float fresh = (reps == 0) ? 1.0f : 1.0f / (1.0f + reps);
+                    acc += std::max(0.05f, pool[i].fitness * fresh);
                     if (acc >= r && picked.find(i) == picked.end()) {
                         picked.insert(i);
                         cmds.push_back(pool[i].cmd);
@@ -2290,6 +2609,7 @@ int main() {
                 d.novelty_score         = data.value("novelty_score", 1.0f);
                 d.consecutive_failures  = data.value("consecutive_failures", 0);
                 d.cooldown_until        = data.value("cooldown_until", 0L);
+                d.attempts_since_substantive_success = data.value("attempts_since_substantive_success", 0);
 
                 if (data.contains("example_commands") && data["example_commands"].is_array()) {
                     for (auto& cmd : data["example_commands"]) {
@@ -2511,7 +2831,8 @@ int main() {
                 {"example_commands",      d.example_commands},
                 {"novelty_score",         d.novelty_score},
                 {"consecutive_failures",  d.consecutive_failures},
-                {"cooldown_until",        d.cooldown_until}
+                {"cooldown_until",        d.cooldown_until},
+                {"attempts_since_substantive_success", d.attempts_since_substantive_success}
             };
         }
 

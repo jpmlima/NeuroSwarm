@@ -99,6 +99,16 @@ private:
     int total_failures = 0;
     int total_successes = 0;
 
+    // ─── Repetition Detection (self-awareness of stagnation) ───
+    // Track recent commands to detect when the system is stuck in a loop
+    std::vector<std::string> recent_commands;                // sliding window of last N commands
+    std::map<std::string, int> command_repetition_count;     // cmd → consecutive count
+    std::string last_command;
+    int consecutive_same = 0;
+    static constexpr int REPETITION_WINDOW = 30;
+    static constexpr int REPETITION_THRESHOLD = 5;           // same cmd 5x in window → stagnation
+    std::time_t last_stagnation_alert = 0;
+
     static constexpr int MAX_RECENT_FAILURES = 200;
     static constexpr int GAP_ANALYSIS_INTERVAL = 300;       // 5 minutes
 
@@ -269,6 +279,9 @@ private:
             success = false;
         }
 
+        // ─── Repetition detection: notice when we're stuck in a loop ───
+        detect_repetition(cmd, domain);
+
         if (success) {
             domain_success_counts[domain]++;
             total_successes++;
@@ -409,6 +422,18 @@ private:
         for (auto& link : precondition_chain) {
             if (link.capability == domain && link.requires == required) {
                 link.evidence_count++;
+                // Re-publish at milestones (3, 5, 10) for confidence-weighted learning
+                if (link.evidence_count == 3 || link.evidence_count == 5 || link.evidence_count == 10) {
+                    json discovery = {
+                        {"origin", "metacognition"},
+                        {"intent", "precondition_discovery"},
+                        {"domain", domain},
+                        {"required_capability", required},
+                        {"error_type", error_type},
+                        {"evidence_count", link.evidence_count}
+                    };
+                    routing::publish(pub, discovery);
+                }
                 return;
             }
         }
@@ -423,6 +448,17 @@ private:
                   << "' requires '" << required << "' (error: " << error_type << ")"
                   << std::endl;
 
+        // Publish discovery so PrimordialLoop can enrich operators
+        json discovery = {
+            {"origin", "metacognition"},
+            {"intent", "precondition_discovery"},
+            {"domain", domain},
+            {"required_capability", required},
+            {"error_type", error_type},
+            {"evidence_count", 1}
+        };
+        routing::publish(pub, discovery);
+
         // Recursive: does the required capability itself have unmet preconditions?
         // Check if we have gaps for the required capability
         for (auto& [key, gap] : gaps) {
@@ -431,6 +467,58 @@ private:
                           << "' is itself blocked by '" << gap.error_pattern
                           << "' in domain '" << gap.domain << "'" << std::endl;
             }
+        }
+    }
+
+    // ─── Repetition Detection (self-awareness of stagnation) ───
+    // "I notice I keep doing the same thing. This is not learning."
+
+    void detect_repetition(const std::string& cmd, const std::string& domain) {
+        // Track in sliding window
+        recent_commands.push_back(cmd);
+        if (recent_commands.size() > REPETITION_WINDOW)
+            recent_commands.erase(recent_commands.begin());
+
+        // Count occurrences of each command in window
+        std::map<std::string, int> window_counts;
+        for (auto& c : recent_commands) window_counts[c]++;
+
+        // Find the most repeated command
+        std::string worst_cmd;
+        int worst_count = 0;
+        for (auto& [c, n] : window_counts) {
+            if (n > worst_count) { worst_count = n; worst_cmd = c; }
+        }
+
+        // Detect stagnation: same command dominates the window
+        std::time_t now = std::time(nullptr);
+        if (worst_count >= REPETITION_THRESHOLD && now - last_stagnation_alert > 30) {
+            last_stagnation_alert = now;
+
+            float repetition_ratio = (float)worst_count / recent_commands.size();
+
+            std::cout << "[META-COGNITION] STAGNATION DETECTED: '"
+                      << worst_cmd.substr(0, 50) << "' repeated "
+                      << worst_count << "/" << recent_commands.size()
+                      << " times (" << (int)(repetition_ratio * 100) << "%). "
+                      << "Domain: " << domain << ". This is not learning." << std::endl;
+
+            record_reflection("Stagnation detected: command '" + worst_cmd.substr(0, 50) +
+                            "' repeated " + std::to_string(worst_count) + " times in last " +
+                            std::to_string(recent_commands.size()) + " executions. " +
+                            "The system is stuck in a success loop without novelty.");
+
+            // Publish stagnation alert — BasalGanglia should deprioritize this domain
+            json alert = {
+                {"origin", "metacognition"},
+                {"intent", "stagnation_alert"},
+                {"domain", domain},
+                {"repeated_command", worst_cmd},
+                {"repetition_count", worst_count},
+                {"window_size", (int)recent_commands.size()},
+                {"repetition_ratio", repetition_ratio}
+            };
+            routing::publish(pub, alert);
         }
     }
 
@@ -580,9 +668,145 @@ private:
                          ". Exploration target: " + exploration_target + ".");
     }
 
+    // ─── Self-Modification: analyze system dynamics, propose parameter changes ───
+    //
+    // The system observes its own behavior patterns and proposes concrete
+    // parameter adjustments. This is directed self-modification — not random
+    // mutation, but reasoned changes based on meta-observations.
+
+    std::time_t last_tuning_analysis = 0;
+    static constexpr int TUNING_INTERVAL = 600;  // analyze every 10 minutes
+
+    void self_modification_analysis() {
+        std::time_t now = std::time(nullptr);
+        if (now - last_tuning_analysis < TUNING_INTERVAL) return;
+        last_tuning_analysis = now;
+
+        json tuning = {
+            {"origin", "metacognition"},
+            {"intent", "system_tuning"},
+            {"adjustments", json::array()}
+        };
+
+        auto& adjustments = tuning["adjustments"];
+
+        // ── Analysis 1: Stagnation frequency → adjust cooldown scaling ──
+        // If we send stagnation alerts too often, cooldowns are too short
+        float stagnation_rate = 0;
+        if (total_successes + total_failures > 0) {
+            // Count stagnation alerts in recent commands window
+            std::map<std::string, int> window_counts;
+            for (auto& c : recent_commands) window_counts[c]++;
+            int repeated = 0;
+            for (auto& [c, n] : window_counts) {
+                if (n >= REPETITION_THRESHOLD) repeated++;
+            }
+            stagnation_rate = (float)repeated / std::max(1, (int)window_counts.size());
+        }
+
+        if (stagnation_rate > 0.3f) {
+            adjustments.push_back({
+                {"parameter", "cooldown_multiplier"},
+                {"current_signal", stagnation_rate},
+                {"recommendation", "increase"},
+                {"suggested_value", 180},  // 3 minutes minimum
+                {"reasoning", "High stagnation rate (" + std::to_string((int)(stagnation_rate * 100)) +
+                              "%) indicates cooldowns expire too quickly"}
+            });
+        }
+
+        // ── Analysis 2: Domain diversity → redirect exploration ──
+        int active_domains = 0;
+        int stagnant_domains = 0;
+        for (auto& [domain, failures] : domain_failure_counts) {
+            int successes = domain_success_counts.count(domain) ? domain_success_counts[domain] : 0;
+            if (successes + failures > 5) {
+                active_domains++;
+                float domain_sr = (float)successes / (successes + failures);
+                if (domain_sr < 0.1f) stagnant_domains++;
+            }
+        }
+
+        if (active_domains > 0 && stagnant_domains > active_domains / 2) {
+            adjustments.push_back({
+                {"parameter", "domain_rotation_pressure"},
+                {"current_signal", (float)stagnant_domains / active_domains},
+                {"recommendation", "increase"},
+                {"suggested_value", 2.0},  // double rotation pressure
+                {"reasoning", std::to_string(stagnant_domains) + "/" + std::to_string(active_domains) +
+                              " domains stagnant — system should explore new domains more aggressively"}
+            });
+        }
+
+        // ── Analysis 3: Success rate trajectory → adjust risk tolerance ──
+        if (total_successes + total_failures > 50) {
+            float overall_sr = (float)total_successes / (total_successes + total_failures);
+
+            if (overall_sr > 0.7f) {
+                // System is doing well — can afford more exploration
+                adjustments.push_back({
+                    {"parameter", "exploration_rate"},
+                    {"current_signal", overall_sr},
+                    {"recommendation", "increase"},
+                    {"reasoning", "High success rate (" + std::to_string((int)(overall_sr * 100)) +
+                                  "%) — system can afford more novel exploration"}
+                });
+            } else if (overall_sr < 0.2f) {
+                // System is struggling — consolidate on known successes
+                adjustments.push_back({
+                    {"parameter", "exploration_rate"},
+                    {"current_signal", overall_sr},
+                    {"recommendation", "decrease"},
+                    {"reasoning", "Low success rate (" + std::to_string((int)(overall_sr * 100)) +
+                                  "%) — system should consolidate on proven operators"}
+                });
+            }
+        }
+
+        // ── Analysis 4: Precondition chain depth → suggest capability focus ──
+        if (precondition_chain.size() > 5) {
+            // Find the most demanded capability (appears most as "requires")
+            std::map<std::string, int> demand;
+            for (auto& link : precondition_chain) {
+                demand[link.requires] += link.evidence_count;
+            }
+            std::string most_needed;
+            int max_demand = 0;
+            for (auto& [cap, count] : demand) {
+                if (count > max_demand) { max_demand = count; most_needed = cap; }
+            }
+
+            if (max_demand >= 5) {
+                adjustments.push_back({
+                    {"parameter", "priority_capability"},
+                    {"current_signal", max_demand},
+                    {"recommendation", most_needed},
+                    {"reasoning", "Capability '" + most_needed + "' is a prerequisite for " +
+                                  std::to_string(max_demand) + " domain operations — prioritize acquiring it"}
+                });
+            }
+        }
+
+        // Publish if we have recommendations
+        if (!adjustments.empty()) {
+            routing::publish(pub, tuning);
+
+            std::string thought = "SELF-MODIFICATION: Proposing " + std::to_string(adjustments.size()) +
+                                  " parameter adjustments based on " + std::to_string(total_successes + total_failures) +
+                                  " observations.";
+            for (auto& adj : adjustments) {
+                thought += " [" + adj.value("parameter", "") + ": " + adj.value("recommendation", "") + "]";
+            }
+            record_reflection(thought);
+        }
+    }
+
     // ─── Periodic Reflection ────────────────────────────────
 
     void periodic_reflection() {
+        // Run self-modification analysis during reflection
+        self_modification_analysis();
+
         std::string mood = (last_stress > 0.5f) ? "Stressed/Unstable" : "Optimal/Efficient";
         std::string thought = "System state is " + mood + ". Success Rate at " +
                              std::to_string((int)(last_success_rate * 100)) + "%. " +

@@ -44,13 +44,19 @@ public:
 
         pub_.connect("tcp://localhost:5555");
         sub_.connect("tcp://localhost:5556");
-        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result", "concept_update"});
+        routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result", "concept_update", "precondition_discovery"});
 
         fs::create_directories("data");
         fs::create_directories("data/sandbox");
 
         // Try to load previous world state + self model
         bool has_memory = load_persisted_state();
+
+        // Purge degenerate operators from previous runs (mkdir spam, trivial commands)
+        int purged = registry_.purge_degenerate();
+        if (purged > 0) {
+            std::cout << "[PRIMORDIAL] Purged " << purged << " degenerate operators from genome." << std::endl;
+        }
 
         if (has_memory) {
             std::cout << "[PRIMORDIAL] Awakening. I remember " << world_state_.size()
@@ -266,11 +272,14 @@ private:
                   << " [" << surprise_bar << "] "
                   << r.duration_ms << "ms" << std::endl;
 
-        // Learn operator if successful and named
+        // Learn operator if successful and named (templatize if possible)
         if (success && !op_name.empty()) {
+            auto btmpl = templatize_command(cmd);
             Operator op;
             op.name = op_name;
-            op.command_template = cmd;
+            op.command_template = btmpl.was_templatized ? btmpl.template_cmd : cmd;
+            op.parameters = btmpl.param_names;
+            op.preconditions = infer_preconditions(btmpl.param_names);
             op.language = "bash";
             op.postconditions = postconditions;
             op.learned_from = "bootstrap";
@@ -588,8 +597,9 @@ private:
     }
 
     bool test_candidate(const VariationEngine::Candidate& candidate) {
-        // Safety: skip obviously dangerous commands
+        // Safety: skip obviously dangerous or degenerate commands
         if (is_dangerous(candidate.command)) return false;
+        if (is_degenerate(candidate.command)) return false;
 
         // Execute in sandbox context (short timeout via timeout command)
         std::string safe_cmd = "timeout 5 bash -c " + shell_escape(candidate.command);
@@ -602,20 +612,25 @@ private:
 
         if (success && s.is_novel && !r.output.empty()) {
             // New successful command that produces novel output — learn it!
+            auto tmpl = templatize_command(candidate.command);
             std::string op_name = infer_operator_name(candidate.command);
 
-            // Don't duplicate existing operators
+            // Don't duplicate existing operators — template match
             if (!registry_.find(op_name)) {
                 Operator op;
                 op.name = op_name;
-                op.command_template = candidate.command;
+                op.command_template = tmpl.was_templatized ? tmpl.template_cmd : candidate.command;
+                op.parameters = tmpl.param_names;
+                op.preconditions = infer_preconditions(tmpl.param_names);
                 op.language = "bash";
                 op.learned_from = candidate.origin;
                 op.record_use(true, r.duration_ms);
                 registry_.add(op);
 
-                std::cout << "[PRIMORDIAL]   EVOLVED: \"" << candidate.command << "\""
-                          << " via " << candidate.origin;
+                std::cout << "[PRIMORDIAL]   EVOLVED: \"" << candidate.command << "\"";
+                if (tmpl.was_templatized)
+                    std::cout << " → TEMPLATE: \"" << tmpl.template_cmd << "\"";
+                std::cout << " via " << candidate.origin;
                 if (!candidate.parent_a.empty())
                     std::cout << " (from " << candidate.parent_a;
                 if (!candidate.parent_b.empty())
@@ -719,6 +734,34 @@ private:
         return false;
     }
 
+    // Degenerate commands: trivial, produce no useful learning, flood the genome
+    static bool is_degenerate(const std::string& cmd) {
+        // Single-word trivial commands
+        static const std::vector<std::string> trivial = {
+            "whoami", "id", "hostname", "pwd", "uname", "uname -a",
+            "date", "uptime", "true", "false", "yes", "no"
+        };
+        // Trim whitespace for comparison
+        std::string trimmed = cmd;
+        while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+        while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(trimmed.begin());
+        for (const auto& t : trivial) {
+            if (trimmed == t) return true;
+        }
+
+        // mkdir spam — the #1 degenerate pattern
+        if (trimmed.find("mkdir") == 0 && trimmed.find("&&") == std::string::npos) return true;
+
+        // Pure echo with no piping/chaining
+        if (trimmed.find("echo ") == 0 && trimmed.find("&&") == std::string::npos
+            && trimmed.find("|") == std::string::npos && trimmed.find(">") == std::string::npos) return true;
+
+        // Corrupted fragments starting with flags
+        if (!trimmed.empty() && trimmed[0] == '-') return true;
+
+        return false;
+    }
+
     static bool is_dangerous(const std::string& cmd) {
         static const std::vector<std::string> dangerous = {
             "rm ", "rm\t", "rmdir", "mkfs", "dd ", "shred",
@@ -733,15 +776,168 @@ private:
         return false;
     }
 
+    // ─── Parametric Operators: generalize concrete commands into templates ───
+
+    struct TemplatizedCommand {
+        std::string template_cmd;              // e.g., "cat {path}"
+        std::vector<std::string> param_names;  // e.g., ["path"]
+        std::vector<std::string> param_values; // e.g., ["README.md"]
+        bool was_templatized = false;           // true if any arg was generalized
+    };
+
+    static bool is_compound_command(const std::string& cmd) {
+        // Don't templatize piped/chained commands — they're already interesting
+        return cmd.find('|') != std::string::npos ||
+               cmd.find("&&") != std::string::npos ||
+               cmd.find(';') != std::string::npos ||
+               cmd.find("$(") != std::string::npos ||
+               cmd.find('`') != std::string::npos;
+    }
+
+    static bool is_path_like(const std::string& token) {
+        // Contains directory separator
+        if (token.find('/') != std::string::npos) return true;
+        // Has common file extension
+        static const std::vector<std::string> exts = {
+            ".cpp", ".c", ".h", ".hpp", ".py", ".sh", ".txt", ".md", ".json",
+            ".jsonl", ".yaml", ".yml", ".xml", ".html", ".css", ".js", ".ts",
+            ".log", ".csv", ".tsv", ".conf", ".cfg", ".ini", ".toml", ".lock",
+            ".o", ".so", ".a", ".out", ".cmake"
+        };
+        for (const auto& ext : exts) {
+            if (token.size() > ext.size() &&
+                token.substr(token.size() - ext.size()) == ext) return true;
+        }
+        // Known special filenames
+        if (token == "Makefile" || token == "Dockerfile" || token == "README" ||
+            token == "CMakeLists.txt" || token == "Cargo.toml") return true;
+        // Glob patterns with wildcards
+        if (token.find('*') != std::string::npos || token.find('?') != std::string::npos) return true;
+        return false;
+    }
+
+    static TemplatizedCommand templatize_command(const std::string& cmd) {
+        TemplatizedCommand result;
+        result.template_cmd = cmd;
+
+        // Only templatize simple commands (no pipes, chains, subshells)
+        if (is_compound_command(cmd)) return result;
+
+        // Tokenize
+        std::vector<std::string> tokens;
+        std::istringstream iss(cmd);
+        std::string token;
+        while (iss >> token) tokens.push_back(token);
+
+        if (tokens.size() < 2) return result;  // single-word commands have nothing to parameterize
+
+        // Find verb index (skip sudo, env, VAR=val prefixes)
+        int verb_idx = 0;
+        while (verb_idx < (int)tokens.size() &&
+               (tokens[verb_idx] == "sudo" || tokens[verb_idx] == "env" ||
+                tokens[verb_idx].find('=') != std::string::npos)) {
+            verb_idx++;
+        }
+        if (verb_idx >= (int)tokens.size()) return result;
+
+        // Extract verb for context-aware param naming
+        std::string verb = tokens[verb_idx];
+        auto slash = verb.rfind('/');
+        if (slash != std::string::npos) verb = verb.substr(slash + 1);
+
+        // Build templatized command
+        result.template_cmd.clear();
+        int path_count = 0;
+
+        for (int i = 0; i < (int)tokens.size(); i++) {
+            if (i > 0) result.template_cmd += " ";
+
+            if (i <= verb_idx) {
+                // Keep verb and prefixes as-is
+                result.template_cmd += tokens[i];
+            } else if (!tokens[i].empty() && tokens[i][0] == '-') {
+                // Flags stay as-is
+                result.template_cmd += tokens[i];
+                // If next token is a number after a numeric flag (e.g., -n 20), keep it too
+                // This is handled by not matching numbers as paths
+            } else if (is_path_like(tokens[i])) {
+                // Replace path with named parameter
+                std::string pname;
+                if (verb == "cp" || verb == "mv" || verb == "install") {
+                    pname = (path_count == 0) ? "src" : "dst";
+                } else if (verb == "g++" || verb == "gcc" || verb == "cc" || verb == "c++") {
+                    pname = (i > 0 && tokens[i-1] == "-o") ? "output" : "source";
+                } else if (verb == "grep" || verb == "rg") {
+                    pname = "path";  // grep's path arg (pattern handled below)
+                } else if (verb == "tee") {
+                    pname = "output";
+                } else {
+                    pname = "path";
+                    if (path_count > 0) pname += std::to_string(path_count + 1);
+                }
+                path_count++;
+
+                result.template_cmd += "{" + pname + "}";
+                result.param_names.push_back(pname);
+                result.param_values.push_back(tokens[i]);
+                result.was_templatized = true;
+            } else if ((verb == "grep" || verb == "rg") && path_count == 0 &&
+                       result.param_names.empty()) {
+                // First non-flag arg to grep is the pattern
+                result.template_cmd += "{pattern}";
+                result.param_names.push_back("pattern");
+                result.param_values.push_back(tokens[i]);
+                result.was_templatized = true;
+            } else {
+                // Keep as-is (numbers, unknown args)
+                result.template_cmd += tokens[i];
+            }
+        }
+
+        return result;
+    }
+
+    // Infer preconditions from parameter types
+    static std::vector<std::string> infer_preconditions(const std::vector<std::string>& param_names) {
+        std::vector<std::string> preconds;
+        for (const auto& p : param_names) {
+            if (p == "path" || p == "src" || p == "source" || p.substr(0, 4) == "path") {
+                preconds.push_back("path_exists({" + p + "})");
+            }
+        }
+        return preconds;
+    }
+
     static std::string infer_operator_name(const std::string& cmd) {
-        // Extract the first word as the operator base name
+        // Try templatizing first — if successful, name by verb + params
+        auto tmpl = templatize_command(cmd);
+        if (tmpl.was_templatized) {
+            // Extract verb
+            std::string verb;
+            std::istringstream iss(tmpl.template_cmd);
+            std::string token;
+            while (iss >> token) {
+                if (token == "sudo" || token == "env" || token.find('=') != std::string::npos) continue;
+                auto slash = token.rfind('/');
+                if (slash != std::string::npos) token = token.substr(slash + 1);
+                verb = token;
+                break;
+            }
+            // Name = verb + param names joined by _
+            std::string name = verb;
+            for (const auto& p : tmpl.param_names) {
+                name += "_" + p;
+            }
+            return name;
+        }
+
+        // Fallback for compound/non-templatizable commands: verb + hash
         std::string name;
         for (char c : cmd) {
             if (c == ' ' || c == '\t' || c == '|' || c == ';') break;
-            if (c == '/') { name.clear(); continue; } // strip path prefix
+            if (c == '/') { name.clear(); continue; }
             name += c;
         }
-        // Append a suffix from arguments to make it unique
         size_t hash = std::hash<std::string>{}(cmd) % 10000;
         return name + "_" + std::to_string(hash);
     }
@@ -1215,6 +1411,8 @@ private:
                     learn_from_execution(j);
                 } else if (intent == "concept_update") {
                     handle_concept_update(j);
+                } else if (intent == "precondition_discovery") {
+                    handle_precondition_discovery(j);
                 }
             }
 
@@ -1243,24 +1441,27 @@ private:
         std::string cmd = j.value("command", "");
         if (cmd.empty() || cmd.size() > 200) return;
 
-        // Skip if dangerous
+        // Skip if dangerous or degenerate (trivial commands pollute the genome)
         if (is_dangerous(cmd)) return;
+        if (is_degenerate(cmd)) return;
 
-        // Infer operator name from command
+        // Templatize command: generalize concrete args into parameters
+        auto tmpl = templatize_command(cmd);
         std::string op_name = infer_operator_name(cmd);
 
-        // Skip if we already know this exact operator
+        // Skip if we already know this operator (template match)
         if (registry_.find(op_name)) {
-            // Update usage stats on existing operator
             auto* existing = registry_.find(op_name);
             existing->record_use(true, 0);
             return;
         }
 
-        // Learn as new operator
+        // Learn as new operator — with template if possible
         Operator op;
         op.name = op_name;
-        op.command_template = cmd;
+        op.command_template = tmpl.was_templatized ? tmpl.template_cmd : cmd;
+        op.parameters = tmpl.param_names;
+        op.preconditions = infer_preconditions(tmpl.param_names);
         op.language = "bash";
         op.learned_from = "runtime";
 
@@ -1280,8 +1481,12 @@ private:
         auto s = surprise_.compute("runtime_" + op_name, true, output_hash);
 
         if (s.is_novel) {
-            std::cout << "[PRIMORDIAL] RUNTIME LEARNED: \"" << cmd.substr(0, 60) << "\""
-                      << (post.empty() ? "" : " → " + post) << std::endl;
+            std::cout << "[PRIMORDIAL] RUNTIME LEARNED: \"" << cmd.substr(0, 60) << "\"";
+            if (tmpl.was_templatized)
+                std::cout << " → TEMPLATE: \"" << tmpl.template_cmd << "\" params=" << tmpl.param_names.size();
+            if (!post.empty())
+                std::cout << " → " << post;
+            std::cout << std::endl;
             variation_.sync_fragments(registry_);
         }
     }
@@ -1309,6 +1514,81 @@ private:
         if (!concept_abstractions.empty()) {
             std::cout << "[PRIMORDIAL] Concept space: " << concept_abstractions.size()
                       << " abstractions available for postcondition enrichment" << std::endl;
+        }
+    }
+
+    // ─── Precondition Discovery: MetaCognition teaches the Planner ───
+    //
+    // When MetaCognition observes "domain X fails because of error Y",
+    // it discovers that operators in domain X need capability Y as a precondition.
+    // We translate this into concrete operator preconditions so the Planner
+    // can chain operators: "to read a file, first verify the path exists".
+
+    // Map MetaCognition capability names to operator-level preconditions
+    static std::string capability_to_precondition(const std::string& capability) {
+        static const std::map<std::string, std::string> mapping = {
+            {"filesystem_navigation", "path_exists({path})"},
+            {"access_control",        "has_permissions({path})"},
+            {"tool_discovery",        "tool_in_path"},
+            {"path_type_awareness",   "path_type_known({path})"},
+            {"build_dependencies",    "dependencies_met"},
+            {"dependency_resolution", "dependencies_met"},
+            {"resource_discovery",    "resource_located"},
+            {"state_awareness",       "state_current"},
+            {"debugging",             "code_validated"},
+            {"language_syntax",       "syntax_valid"},
+        };
+        auto it = mapping.find(capability);
+        return (it != mapping.end()) ? it->second : "";
+    }
+
+    // domain_to_postcondition is defined below (shared with domain_resolve)
+
+    void handle_precondition_discovery(const json& j) {
+        std::string domain = j.value("domain", "");
+        std::string required_cap = j.value("required_capability", "");
+        int evidence = j.value("evidence_count", 1);
+
+        if (domain.empty() || required_cap.empty()) return;
+
+        // Only act on discoveries with enough evidence (≥3 observations)
+        if (evidence < 3) return;
+
+        // Translate to operator-level precondition
+        std::string precondition = capability_to_precondition(required_cap);
+        if (precondition.empty()) return;
+
+        // Find operators that serve this domain (by postcondition match)
+        std::string domain_post = domain_to_postcondition(domain);
+        if (domain_post.empty()) return;
+
+        auto operators = registry_.find_by_postcondition(domain_post);
+        int enriched = 0;
+
+        for (auto* op : operators) {
+            // Check if this precondition already exists
+            bool already_has = false;
+            for (const auto& pre : op->preconditions) {
+                if (pre.find(precondition.substr(0, precondition.find('('))) != std::string::npos) {
+                    already_has = true;
+                    break;
+                }
+            }
+            if (!already_has) {
+                op->preconditions.push_back(precondition);
+                enriched++;
+            }
+        }
+
+        if (enriched > 0) {
+            registry_.save_full();
+            std::cout << "[PRIMORDIAL] PRECONDITION ENRICHMENT: " << enriched << " operators in '"
+                      << domain << "' now require '" << precondition
+                      << "' (evidence: " << evidence << "x)" << std::endl;
+
+            // Add the capability to world state if we can satisfy it
+            // This makes the Planner aware of what we can provide
+            world_state_.insert(precondition);
         }
     }
 
@@ -1349,9 +1629,9 @@ private:
             {"cat ",    "can_read_file"},   {"head ",   "can_read_file"},
             {"tail ",   "can_read_file"},   {"wc ",     "can_read_file"},
             {"stat ",   "can_read_file"},   {"file ",   "can_read_file"},
-            {"echo ",   "can_write_file"},  {"tee ",    "can_write_file"},
-            {"touch ",  "can_write_file"},  {"cp ",     "can_write_file"},
-            {"mv ",     "can_write_file"},  {"mkdir ",  "can_write_file"},
+            {"tee ",    "can_write_file"},
+            {"cp ",     "can_write_file"},
+            {"mv ",     "can_write_file"},
             {"find ",   "can_search_files"},{"grep ",   "can_search_files"},
             {"rg ",     "can_search_files"},
             {"ps ",     "can_see_processes"},{"pgrep",  "can_see_processes"},
@@ -1410,11 +1690,14 @@ private:
         size_t output_hash = std::hash<std::string>{}(r.output);
         auto s = surprise_.compute(context, success, output_hash);
 
-        // Learn if successful and named
+        // Learn if successful and named (templatize)
         if (success && !op_name.empty() && !registry_.find(op_name)) {
+            auto ptmpl = templatize_command(cmd);
             Operator op;
             op.name = op_name;
-            op.command_template = cmd;
+            op.command_template = ptmpl.was_templatized ? ptmpl.template_cmd : cmd;
+            op.parameters = ptmpl.param_names;
+            op.preconditions = infer_preconditions(ptmpl.param_names);
             op.language = "bash";
             op.learned_from = "external_probe";
             op.record_use(true, r.duration_ms);
@@ -1543,10 +1826,13 @@ private:
                             auto r = exec(safe_cmd);
 
                             if (r.exit_code == 0) {
-                                // SUCCESS — promote to operator
+                                // SUCCESS — promote to operator (templatized)
+                                auto otmpl = templatize_command(oracle_result.command);
                                 Operator new_op;
                                 new_op.name = infer_operator_name(oracle_result.command);
-                                new_op.command_template = oracle_result.command;
+                                new_op.command_template = otmpl.was_templatized ? otmpl.template_cmd : oracle_result.command;
+                                new_op.parameters = otmpl.param_names;
+                                new_op.preconditions = infer_preconditions(otmpl.param_names);
                                 new_op.language = oracle_result.language;
                                 new_op.postconditions = {gap};
                                 new_op.learned_from = "llm_oracle";
@@ -1651,6 +1937,7 @@ private:
     // Test a candidate via dream sandbox (runtime) or inline (bootstrap)
     bool test_candidate_sandboxed(const VariationEngine::Candidate& candidate) {
         if (is_dangerous(candidate.command)) return false;
+        if (is_degenerate(candidate.command)) return false;
         // Extract first token (binary name) and skip GUI/interactive programs
         std::string bin = candidate.command.substr(0, candidate.command.find(' '));
         if (is_gui_or_interactive(bin)) return false;
@@ -1662,19 +1949,24 @@ private:
         auto s = surprise_.compute(context, dr.success, output_hash);
 
         if (dr.success && s.is_novel && !dr.output.empty()) {
+            auto tmpl = templatize_command(candidate.command);
             std::string op_name = infer_operator_name(candidate.command);
             if (!registry_.find(op_name)) {
                 Operator op;
                 op.name = op_name;
-                op.command_template = candidate.command;
+                op.command_template = tmpl.was_templatized ? tmpl.template_cmd : candidate.command;
+                op.parameters = tmpl.param_names;
+                op.preconditions = infer_preconditions(tmpl.param_names);
                 op.language = "bash";
                 op.learned_from = "dream_" + candidate.origin;
                 op.record_use(true, 0);
                 registry_.add(op);
                 variation_.sync_fragments(registry_);
 
-                std::cout << "[PRIMORDIAL]   DREAM EVOLVED: \"" << candidate.command << "\""
-                          << " via " << candidate.origin << std::endl;
+                std::cout << "[PRIMORDIAL]   DREAM EVOLVED: \"" << candidate.command << "\"";
+                if (tmpl.was_templatized)
+                    std::cout << " → TEMPLATE: \"" << tmpl.template_cmd << "\"";
+                std::cout << " via " << candidate.origin << std::endl;
                 return true;
             }
         }
@@ -1704,7 +1996,7 @@ private:
         // Map domain to postcondition patterns for targeted search
         std::string target_postcondition = domain_to_postcondition(domain);
 
-        auto candidates = variation_.targeted_variation(target_postcondition, registry_, 15);
+        auto candidates = variation_.targeted_variation(target_postcondition, registry_, 5);
         for (const auto& c : candidates) {
             candidates_tested++;
             if (test_candidate_sandboxed(c)) {
@@ -1716,6 +2008,8 @@ private:
         // Stage 2: Mutate the failed commands directly — they were close to working
         std::cout << "[PRIMORDIAL]   Stage 2: Mutating failed commands..." << std::endl;
         for (const auto& failed_cmd : failed_commands) {
+            // Skip degenerate base commands — mutating mkdir yields more mkdir
+            if (is_degenerate(failed_cmd)) continue;
             // Create a temporary operator from the failed command to mutate it
             Operator temp_op;
             temp_op.name = "failed_" + domain;
@@ -1726,7 +2020,7 @@ private:
             std::string frag;
             while (iss >> frag) temp_op.fragments.push_back(frag);
 
-            auto mutations = variation_.mutate(temp_op, 5);
+            auto mutations = variation_.mutate(temp_op, 3);
             for (const auto& m : mutations) {
                 candidates_tested++;
                 if (test_candidate_sandboxed(m)) {
@@ -1771,9 +2065,12 @@ private:
                 std::string safe_cmd = "timeout 5 bash -c " + shell_escape(result.command);
                 auto r = exec(safe_cmd);
                 if (r.exit_code == 0) {
+                    auto dtmpl = templatize_command(result.command);
                     Operator new_op;
                     new_op.name = infer_operator_name(result.command);
-                    new_op.command_template = result.command;
+                    new_op.command_template = dtmpl.was_templatized ? dtmpl.template_cmd : result.command;
+                    new_op.parameters = dtmpl.param_names;
+                    new_op.preconditions = infer_preconditions(dtmpl.param_names);
                     new_op.language = result.language;
                     new_op.postconditions = {target_postcondition};
                     new_op.learned_from = "llm_oracle_domain_resolve";
@@ -1818,17 +2115,23 @@ private:
             {"file_write",          "can_write_file"},
             {"file_read",           "can_read_file"},
             {"file_search",         "can_search_files"},
+            {"search",              "can_search_files"},
             {"process_inspection",  "can_see_processes"},
+            {"process_mgmt",        "can_see_processes"},
             {"network_diagnostics", "network_info_available"},
+            {"network",             "network_info_available"},
             {"source_modification", "can_modify_source"},
             {"compilation",         "can_create_tool"},
             {"git_operations",      "know_git_state"},
+            {"git",                 "know_git_state"},
             {"system_monitoring",   "know_system_state"},
             {"data_analysis",       "can_analyse_data"},
             {"script_creation",     "can_create_script"},
+            {"scripting",           "can_run_script"},
             {"self_inspection",     "know_self_state"},
             {"memory_analysis",     "can_analyse_memory"},
-            {"log_analysis",        "can_analyse_logs"}
+            {"log_analysis",        "can_analyse_logs"},
+            {"disk",                "know_disk_space"},
         };
         auto it = mapping.find(domain);
         return it != mapping.end() ? it->second : domain;

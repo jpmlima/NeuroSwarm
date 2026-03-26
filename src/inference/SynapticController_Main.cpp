@@ -45,7 +45,8 @@ int main(int argc, char** argv) {
         // Load specialist model slots — scan models/ for known patterns
         const std::string models_dir = "/home/xenomai/Documents/NeuroSwarm/models/";
 
-        // "coder" slot: prefer Qwen2.5-Coder, fall back to Qwen2.5-Instruct (smaller/faster for command gen)
+        // "coder" slot: prefer Qwen2.5-Coder if available, otherwise use base model (7B)
+        // The 1.5B fallback generated too many degenerate commands (id, whoami) — 7B is needed
         bool coder_loaded = false;
         for (const auto& entry : fs::directory_iterator(models_dir)) {
             std::string name = entry.path().filename().string();
@@ -54,15 +55,8 @@ int main(int argc, char** argv) {
                 break;
             }
         }
-        if (!coder_loaded) {
-            // Fall back to Qwen2.5-1.5B-instruct — a smaller, faster model well-suited for command generation
-            std::string qwen_fallback = models_dir + "qwen2.5-1.5b-instruct-q4_k_m.gguf";
-            if (fs::exists(qwen_fallback) && qwen_fallback != gen_model) {
-                coder_loaded = brain.add_model("coder", qwen_fallback);
-            }
-            if (!coder_loaded)
-                std::cout << "[BRAIN] No coder model found. 'coder' adapter will fall back to base model." << std::endl;
-        }
+        if (!coder_loaded)
+            std::cout << "[BRAIN] No dedicated coder model. 'coder' adapter uses base model (7B)." << std::endl;
 
         // "critic" slot: scan for any model with "critic" in the name
         bool critic_loaded = false;

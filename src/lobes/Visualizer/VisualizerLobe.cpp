@@ -341,15 +341,16 @@ body {
             </div>
         </div>
 
-        <!-- Learning Curve -->
+        <!-- Learning Curve + Dopamine -->
         <div style="margin-top:14px;">
-            <div class="section-label" style="margin-bottom:4px;">Learning Curve</div>
-            <canvas id="learning-chart" width="240" height="80" style="width:100%;height:80px;border-radius:8px;background:var(--bg);border:1px solid var(--panel-border);"></canvas>
+            <div class="section-label" style="margin-bottom:4px;">Learning Curve + Dopamine</div>
+            <canvas id="learning-chart" width="240" height="120" style="width:100%;height:120px;border-radius:8px;background:var(--bg);border:1px solid var(--panel-border);"></canvas>
             <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);margin-top:3px;">
                 <span id="lc-time-start">—</span>
-                <span style="color:var(--success);font-weight:500;">success rate %</span>
+                <span><span style="color:var(--success);font-weight:500;">● success</span> <span style="color:#d97706;font-weight:500;">● dopamine</span></span>
                 <span id="lc-time-end">now</span>
             </div>
+            <div style="font-size:9px;color:var(--text-dim);margin-top:2px;text-align:center;" id="habituation-count">0 novel / 0 suppressed</div>
         </div>
     </div>
 </div>
@@ -975,6 +976,10 @@ let apoptosisCount = 0;
 let activeSpecialists = 0;
 const LC_MAX = 120;
 const lcData = [];
+const daData = [];        // dopamine signal history
+let daTotal = 0;          // total dopamine signals
+let daSuppressed = 0;     // habituation-suppressed count
+let daNovel = 0;          // novel reward count
 
 function hexFromNode(key) { return (NODES[key]||dynamicNodes[key]||{}).color || '#94a3b8'; }
 
@@ -1067,6 +1072,25 @@ function processEvent(ev) {
         drawLearningCurve();
     }
 
+    // Dopamine signal — track for learning curve overlay
+    if (intent === 'dopamine_signal') {
+        daTotal++;
+        const mag = ev.magnitude || 0;
+        const reason = ev.reason || '';
+        const domain = ev.domain || '';
+        daData.push({t:Date.now(), mag:mag});
+        while (daData.length > LC_MAX) daData.shift();
+        if (mag > 0.05) {
+            daNovel++;
+        } else {
+            daSuppressed++;
+        }
+        // Update habituation counter
+        const habEl = document.getElementById('habituation-count');
+        if (habEl) habEl.textContent = daNovel + ' novel / ' + daSuppressed + ' suppressed';
+        drawLearningCurve();
+    }
+
     // Drive level from BasalGanglia
     if (intent === 'intrinsic_goal') {
         const drive = ev.drive_level || ev.context && ev.context.match(/Drive: (\w+)/) && RegExp.$1 || '';
@@ -1154,43 +1178,83 @@ function updateSpikeTask(id, intent, status, domain) {
 ═══════════════════════════════════════════════════════ */
 function drawLearningCurve() {
     const cvs = document.getElementById('learning-chart');
-    if (!cvs || lcData.length < 2) return;
+    if (!cvs || (lcData.length < 2 && daData.length < 2)) return;
     const c = cvs.getContext('2d');
     const CW = cvs.width, CH = cvs.height;
     const pad = {t:8,b:14,l:4,r:4};
     const gW = CW-pad.l-pad.r, gH = CH-pad.t-pad.b;
     c.clearRect(0,0,CW,CH);
 
+    // Grid lines
     c.strokeStyle = '#e2e8f0'; c.lineWidth = 0.5;
     [0.25,0.5,0.75].forEach(v => {
         const y = pad.t + gH*(1-v);
         c.beginPath(); c.moveTo(pad.l,y); c.lineTo(pad.l+gW,y); c.stroke();
     });
 
-    const grad = c.createLinearGradient(0,pad.t,0,pad.t+gH);
-    grad.addColorStop(0,'rgba(5,150,105,0.15)');
-    grad.addColorStop(1,'rgba(5,150,105,0.02)');
-    c.beginPath(); c.moveTo(pad.l,pad.t+gH);
-    for (let i=0;i<lcData.length;i++) {
-        c.lineTo(pad.l+(i/(LC_MAX-1))*gW, pad.t+gH*(1-lcData[i].sr));
-    }
-    c.lineTo(pad.l+((lcData.length-1)/(LC_MAX-1))*gW, pad.t+gH);
-    c.closePath(); c.fillStyle = grad; c.fill();
+    // ── Success rate fill + line (green) ──
+    if (lcData.length >= 2) {
+        const grad = c.createLinearGradient(0,pad.t,0,pad.t+gH);
+        grad.addColorStop(0,'rgba(5,150,105,0.15)');
+        grad.addColorStop(1,'rgba(5,150,105,0.02)');
+        c.beginPath(); c.moveTo(pad.l,pad.t+gH);
+        for (let i=0;i<lcData.length;i++) {
+            c.lineTo(pad.l+(i/(LC_MAX-1))*gW, pad.t+gH*(1-lcData[i].sr));
+        }
+        c.lineTo(pad.l+((lcData.length-1)/(LC_MAX-1))*gW, pad.t+gH);
+        c.closePath(); c.fillStyle = grad; c.fill();
 
-    c.beginPath();
-    for (let i=0;i<lcData.length;i++) {
-        const x = pad.l+(i/(LC_MAX-1))*gW, y = pad.t+gH*(1-lcData[i].sr);
-        i===0 ? c.moveTo(x,y) : c.lineTo(x,y);
-    }
-    c.strokeStyle = '#059669'; c.lineWidth = 1.5; c.stroke();
+        c.beginPath();
+        for (let i=0;i<lcData.length;i++) {
+            const x = pad.l+(i/(LC_MAX-1))*gW, y = pad.t+gH*(1-lcData[i].sr);
+            i===0 ? c.moveTo(x,y) : c.lineTo(x,y);
+        }
+        c.strokeStyle = '#059669'; c.lineWidth = 1.5; c.stroke();
 
-    if (lcData.length > 0) {
-        const lx = pad.l+((lcData.length-1)/(LC_MAX-1))*gW;
-        const ly = pad.t+gH*(1-lcData[lcData.length-1].sr);
-        c.beginPath(); c.arc(lx,ly,3,0,Math.PI*2);
-        c.fillStyle = '#059669'; c.fill();
-        c.strokeStyle = '#ffffff'; c.lineWidth = 1.5; c.stroke();
+        // Dot at end
+        if (lcData.length > 0) {
+            const lx = pad.l+((lcData.length-1)/(LC_MAX-1))*gW;
+            const ly = pad.t+gH*(1-lcData[lcData.length-1].sr);
+            c.beginPath(); c.arc(lx,ly,3,0,Math.PI*2);
+            c.fillStyle = '#059669'; c.fill();
+            c.strokeStyle = '#ffffff'; c.lineWidth = 1.5; c.stroke();
+        }
     }
+
+    // ── Dopamine signal (amber/orange bars + line) ──
+    if (daData.length >= 1) {
+        // Dopamine is 0..0.3 range, normalize to 0..1 for display
+        const daMax = 0.35;
+
+        // Draw as vertical bars (impulse-like, biological)
+        for (let i=0;i<daData.length;i++) {
+            const x = pad.l+(i/(LC_MAX-1))*gW;
+            const h = (daData[i].mag / daMax) * gH;
+            const alpha = Math.min(0.8, daData[i].mag / daMax + 0.1);
+            c.fillStyle = 'rgba(217,119,6,' + alpha + ')';
+            c.fillRect(x-1, pad.t+gH-h, 2, h);
+        }
+
+        // Dopamine line overlay
+        c.beginPath();
+        for (let i=0;i<daData.length;i++) {
+            const x = pad.l+(i/(LC_MAX-1))*gW;
+            const y = pad.t+gH*(1-Math.min(1, daData[i].mag / daMax));
+            i===0 ? c.moveTo(x,y) : c.lineTo(x,y);
+        }
+        c.strokeStyle = '#d97706'; c.lineWidth = 1; c.stroke();
+
+        // Dot at end
+        if (daData.length > 0) {
+            const last = daData[daData.length-1];
+            const lx = pad.l+((daData.length-1)/(LC_MAX-1))*gW;
+            const ly = pad.t+gH*(1-Math.min(1, last.mag / daMax));
+            c.beginPath(); c.arc(lx,ly,2.5,0,Math.PI*2);
+            c.fillStyle = '#d97706'; c.fill();
+            c.strokeStyle = '#ffffff'; c.lineWidth = 1; c.stroke();
+        }
+    }
+
     if (lcData.length > 1) {
         const ago = Math.round((Date.now()-lcData[0].t)/1000);
         document.getElementById('lc-time-start').textContent = ago>60 ? Math.round(ago/60)+'m ago' : ago+'s ago';

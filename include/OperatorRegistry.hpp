@@ -174,6 +174,44 @@ public:
         return pruned;
     }
 
+    // Purge degenerate operators (trivial commands that pollute the genome)
+    int purge_degenerate() {
+        int purged = 0;
+        for (auto it = operators_.begin(); it != operators_.end(); ) {
+            const std::string& cmd = it->second.command_template;
+            std::string trimmed = cmd;
+            while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+            while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(trimmed.begin());
+
+            bool degen = false;
+            // Trivial single commands
+            static const std::vector<std::string> trivials = {
+                "whoami", "id", "hostname", "pwd", "uname", "uname -a",
+                "date", "uptime", "true", "false"
+            };
+            for (const auto& t : trivials) {
+                if (trimmed == t) { degen = true; break; }
+            }
+            // mkdir spam
+            if (trimmed.find("mkdir") == 0 && trimmed.find("&&") == std::string::npos) degen = true;
+            // Pure echo
+            if (trimmed.find("echo ") == 0 && trimmed.find("&&") == std::string::npos
+                && trimmed.find("|") == std::string::npos && trimmed.find(">") == std::string::npos) degen = true;
+            // Corrupted fragments
+            if (!trimmed.empty() && trimmed[0] == '-') degen = true;
+
+            if (degen) {
+                by_name_.erase(it->second.name);
+                it = operators_.erase(it);
+                purged++;
+            } else {
+                ++it;
+            }
+        }
+        if (purged > 0) save_full();
+        return purged;
+    }
+
     size_t size() const { return operators_.size(); }
 
     // Persist full registry to disk
