@@ -9,6 +9,9 @@
 #include <vector>
 #include <unordered_map>
 #include <fstream>
+#include <iostream>
+#include <cstdio>
+#include <cerrno>
 #include <chrono>
 #include <algorithm>
 #include <nlohmann/json.hpp>
@@ -216,10 +219,20 @@ public:
 
     // Persist full registry to disk
     void save_full() const {
-        std::ofstream f(persist_path_, std::ios::trunc);
-        for (const auto& [id, op] : operators_) {
-            f << op.to_json().dump() << "\n";
+        FILE* fp = fopen(persist_path_.c_str(), "w");
+        if (!fp) {
+            fprintf(stderr, "[OPERATOR_REGISTRY] save_full fopen FAILED '%s' errno=%d\n",
+                    persist_path_.c_str(), errno);
+            return;
         }
+        for (const auto& [id, op] : operators_) {
+            std::string line = op.to_json().dump() + "\n";
+            fwrite(line.c_str(), 1, line.size(), fp);
+        }
+        fflush(fp);
+        fclose(fp);
+        fprintf(stderr, "[OPERATOR_REGISTRY] save_full wrote %zu operators to '%s'\n",
+                operators_.size(), persist_path_.c_str());
     }
 
 private:
@@ -251,8 +264,21 @@ private:
     }
 
     void save_append(const Operator& op) const {
-        std::ofstream f(persist_path_, std::ios::app);
-        f << op.to_json().dump() << "\n";
+        // Debug: use C FILE* instead of ofstream to rule out C++ stream issues
+        FILE* fp = fopen(persist_path_.c_str(), "a");
+        if (!fp) {
+            fprintf(stderr, "[OPERATOR_REGISTRY] fopen FAILED '%s' errno=%d\n",
+                    persist_path_.c_str(), errno);
+            return;
+        }
+        std::string line = op.to_json().dump() + "\n";
+        size_t written = fwrite(line.c_str(), 1, line.size(), fp);
+        fflush(fp);
+        if (written != line.size()) {
+            fprintf(stderr, "[OPERATOR_REGISTRY] fwrite incomplete: %zu/%zu\n",
+                    written, line.size());
+        }
+        fclose(fp);
     }
 
     static std::vector<std::string> extract_fragments(const std::string& cmd) {

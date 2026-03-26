@@ -14,6 +14,8 @@
 #include <climits>
 #include <regex>
 #include <set>
+#include <unordered_map>
+#include <algorithm>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -38,7 +40,7 @@ public:
             "inference_result", "metabolic_alert", "goal_plan",
             "primordial_ready", "dopamine_signal",
             "concept_transfer", "concept_response",
-            "command_validated"
+            "command_validated", "surgery_proposal"
         });
 
         load_system_knowledge();
@@ -181,6 +183,10 @@ public:
                 }
                 else if (origin == "concept_lobe" && intent == "concept_response") {
                     handle_concept_response(j);
+                }
+                // MetaCognition proposes code surgery for persistent gaps
+                else if (origin == "metacognition" && intent == "surgery_proposal") {
+                    handle_surgery_proposal(j);
                 }
                 // BK-tree validation response from BasalGanglia (async feedback)
                 else if (origin == "basal_ganglia" && intent == "command_validated") {
@@ -622,19 +628,43 @@ private:
                 std::cout << "[EXECUTIVE] Dream simulation SUCCESS. Collapsing to reality..." << std::endl;
                 commit_to_reality(cid);
             } else if (!state.plan.empty()) {
-                // Planner has more steps queued — execute next
-                std::string next_cmd = state.plan.front();
-                state.plan.erase(state.plan.begin());
-                state.last_cmd = next_cmd;
-                state.history += "\n[PLANNER] Next operator: " + next_cmd;
-                std::cout << "[EXECUTIVE] Planner step OK. Next: " << next_cmd
-                          << " (" << state.plan.size() << " remaining)" << std::endl;
-                json exec_req = {
-                    {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-                    {"command", next_cmd}, {"mode", "reality"},
-                    {"domain", state.domain}
-                };
-                dispatch_to_all(exec_req);
+                // Planner has more steps queued — resolve templates if needed
+                std::string next_cmd;
+                while (!state.plan.empty()) {
+                    next_cmd = state.plan.front();
+                    state.plan.erase(state.plan.begin());
+                    if (next_cmd.find('{') == std::string::npos || next_cmd.find('}') == std::string::npos) {
+                        break;  // concrete command found
+                    }
+                    // Try to resolve template
+                    std::string resolved = resolve_template(next_cmd, state.goal, state.domain);
+                    if (!resolved.empty()) {
+                        std::cout << "[EXECUTIVE] Resolved template step: " << next_cmd
+                                  << " → " << resolved << std::endl;
+                        next_cmd = resolved;
+                        break;
+                    }
+                    std::cout << "[EXECUTIVE] SKIP unresolvable template step: " << next_cmd << std::endl;
+                    next_cmd.clear();
+                }
+                if (next_cmd.empty()) {
+                    // All remaining steps were unresolvable templates — treat as success
+                    std::cout << "[EXECUTIVE] Reality Check: SUCCESS (no more concrete steps)." << std::endl;
+                    publish_intrinsic_result(cid, true);
+                    active_goals.erase(cid);
+                    broadcast_idle_if_empty();
+                } else {
+                    state.last_cmd = next_cmd;
+                    state.history += "\n[PLANNER] Next operator: " + next_cmd;
+                    std::cout << "[EXECUTIVE] Planner step OK. Next: " << next_cmd
+                              << " (" << state.plan.size() << " remaining)" << std::endl;
+                    json exec_req = {
+                        {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
+                        {"command", next_cmd}, {"mode", "reality"},
+                        {"domain", state.domain}
+                    };
+                    dispatch_to_all(exec_req);
+                }
             } else {
                 std::cout << "[EXECUTIVE] Reality Check: SUCCESS." << std::endl;
                 if (state.last_mode == "neuro_surgery") {
@@ -872,6 +902,104 @@ private:
         dispatch_to_all(mem_req);
     }
 
+    // ─── Template Resolution ───
+    // Resolve {param} placeholders in operator templates using goal context.
+    // Returns resolved command, or empty string if resolution fails.
+    std::string resolve_template(const std::string& tmpl, const std::string& goal,
+                                  const std::string& domain) {
+        // Extract all {param} placeholders from template
+        std::vector<std::string> params;
+        size_t pos = 0;
+        while ((pos = tmpl.find('{', pos)) != std::string::npos) {
+            size_t end = tmpl.find('}', pos);
+            if (end == std::string::npos) break;
+            params.push_back(tmpl.substr(pos + 1, end - pos - 1));
+            pos = end + 1;
+        }
+        if (params.empty()) return tmpl;  // no placeholders
+
+        std::unordered_map<std::string, std::string> bindings;
+
+        // Extract file paths from goal text (absolute or relative)
+        std::vector<std::string> paths_in_goal;
+        std::regex path_re(R"((/[^\s'"]+\.\w+|src/[^\s'"]+|include/[^\s'"]+|data/[^\s'"]+|build/[^\s'"]+))");
+        std::sregex_iterator it(goal.begin(), goal.end(), path_re);
+        std::sregex_iterator end_it;
+        for (; it != end_it; ++it) {
+            paths_in_goal.push_back((*it)[0].str());
+        }
+
+        // Bind file/path parameters
+        int path_idx = 0;
+        for (const auto& p : params) {
+            if (p == "file" || p == "path" || p == "source" || p == "file_a") {
+                if (path_idx < (int)paths_in_goal.size()) {
+                    bindings[p] = paths_in_goal[path_idx++];
+                }
+            } else if (p == "destination" || p == "file_b") {
+                if (path_idx < (int)paths_in_goal.size()) {
+                    bindings[p] = paths_in_goal[path_idx++];
+                }
+            } else if (p == "output") {
+                // For compilation templates
+                if (!paths_in_goal.empty()) {
+                    std::string src = paths_in_goal[0];
+                    // Derive output name from source
+                    size_t dot = src.rfind('.');
+                    if (dot != std::string::npos) {
+                        bindings[p] = src.substr(0, dot);
+                    }
+                }
+            }
+        }
+
+        // Domain-specific defaults for common parameters
+        if (domain == "self_inspection" || domain == "source_modification") {
+            if (bindings.find("path") == bindings.end() && bindings.find("file") == bindings.end()) {
+                // Default to project source directory
+                if (std::find(params.begin(), params.end(), "path") != params.end())
+                    bindings["path"] = "src/";
+            }
+        }
+
+        // Check if all params are bound
+        std::string resolved = tmpl;
+        bool all_bound = true;
+        for (const auto& p : params) {
+            std::string placeholder = "{" + p + "}";
+            if (bindings.count(p)) {
+                size_t rpos;
+                while ((rpos = resolved.find(placeholder)) != std::string::npos) {
+                    resolved.replace(rpos, placeholder.size(), bindings[p]);
+                }
+            } else {
+                all_bound = false;
+                break;
+            }
+        }
+
+        if (all_bound) {
+            // Safety: reject resolved commands that could be destructive
+            // tee/truncate without pipe input → destroys target file via popen
+            if (resolved.find("tee ") == 0 || resolved.find("tee -") == 0) {
+                std::cout << "[EXECUTIVE] SAFETY: blocked bare tee (truncates file via popen): "
+                          << resolved << std::endl;
+                return "";
+            }
+            // Never resolve rm -rf or dangerous patterns
+            if (resolved.find("rm -rf") != std::string::npos ||
+                resolved.find("> /") != std::string::npos) {
+                std::cout << "[EXECUTIVE] SAFETY: blocked destructive command: "
+                          << resolved << std::endl;
+                return "";
+            }
+            return resolved;
+        }
+
+        // Partial resolution failed — return empty (caller will use LLM)
+        return "";
+    }
+
     // ─── Autopoiesis: Planner-first execution ───
     // Before using LLM, ask PrimordialLoop if a plan exists from learned operators.
     // Maps domain to postcondition, sends goal_request, handles plan response.
@@ -961,6 +1089,31 @@ private:
                 if (!step_cmd.empty()) state.plan.push_back(step_cmd);
             }
 
+            // Resolve parametric templates — extract {param} placeholders and fill from context
+            if (cmd.find('{') != std::string::npos && cmd.find('}') != std::string::npos) {
+                std::string resolved = resolve_template(cmd, state.goal, state.domain);
+                if (!resolved.empty()) {
+                    std::cout << "[EXECUTIVE] PLANNER: template resolved: " << cmd
+                              << " → " << resolved << std::endl;
+                    cmd = resolved;
+                } else {
+                    // Template can't be resolved heuristically — use LLM with template hint
+                    std::cout << "[EXECUTIVE] PLANNER: template needs LLM instantiation: " << cmd << std::endl;
+                    state.history += "\n[PLANNER] Template operator available: " + cmd;
+                    // Collect all template steps as hints for the LLM
+                    std::string templates_hint = "LEARNED OPERATORS (fill in parameters from goal context):\n- " + cmd;
+                    for (const auto& ps : state.plan) {
+                        if (ps.find('{') != std::string::npos && ps.find('}') != std::string::npos) {
+                            templates_hint += "\n- " + ps;
+                        }
+                    }
+                    state.plan.clear();
+                    // LLM gets the templates as structural hints
+                    request_thought(cid, templates_hint + "\nUse one of these operator templates with concrete values to achieve the goal.");
+                    return;
+                }
+            }
+
             state.last_cmd = cmd;
             state.last_mode = "reality";
             state.history += "\n[PLANNER] Executing learned operator: " + cmd;
@@ -1010,6 +1163,24 @@ private:
 
         std::string cmd = state.suggested_commands.front();
         state.suggested_commands.erase(state.suggested_commands.begin());
+
+        // Resolve parametric templates — {param} placeholders filled from goal context
+        if (cmd.find('{') != std::string::npos && cmd.find('}') != std::string::npos) {
+            std::string resolved = resolve_template(cmd, state.goal, state.domain);
+            if (!resolved.empty()) {
+                std::cout << "[EXECUTIVE] SUGGESTED: template resolved: " << cmd
+                          << " → " << resolved << std::endl;
+                cmd = resolved;
+            } else {
+                std::cout << "[EXECUTIVE] SKIP template (unresolvable): " << cmd << std::endl;
+                if (!state.suggested_commands.empty()) {
+                    try_suggested_commands(cid);
+                } else {
+                    fallback_to_llm(cid);
+                }
+                return;
+            }
+        }
 
         std::cout << "[EXECUTIVE] SUGGESTED CMD: " << cmd
                   << " (" << state.suggested_commands.size() << " remaining)" << std::endl;
@@ -1443,6 +1614,57 @@ private:
     }
 
     int bk_rejections = 0;  // counter for observability
+
+    // ─── Neuro-Surgery Handler ───────────────────────────────
+    // MetaCognition identified a persistent gap and proposes code modification.
+    // FrontalExecutive creates a goal that uses the LLM to generate a concrete
+    // patch, then executes it via neuro_surgery mode (MotorLobe rebuilds after).
+
+    void handle_surgery_proposal(const json& j) {
+        std::string domain = j.value("domain", "");
+        std::string gap_id = j.value("gap_id", "");
+        std::string context = j.value("context", "");
+        std::string missing_cap = j.value("missing_capability", "");
+        std::string error_pattern = j.value("error_pattern", "");
+        int occurrence_count = j.value("occurrence_count", 0);
+
+        std::cout << "[EXECUTIVE] SURGERY PROPOSAL received from MetaCognition: domain='"
+                  << domain << "' gap='" << gap_id << "' failures=" << occurrence_count << std::endl;
+
+        // Don't attempt surgery during high stress or low stamina
+        if (system_stress > 0.7f || current_stamina < 30.0f) {
+            std::cout << "[EXECUTIVE] Surgery deferred: stress=" << system_stress
+                      << " stamina=" << (int)current_stamina << "%" << std::endl;
+            return;
+        }
+
+        // Don't attempt surgery while already processing goals
+        if (!active_goals.empty()) {
+            std::cout << "[EXECUTIVE] Surgery deferred: " << active_goals.size() << " active goals." << std::endl;
+            return;
+        }
+
+        // Create a surgery goal — the LLM will analyze the problem and propose a sed/patch command
+        std::string goal =
+            "NEURO-SURGERY: The '" + domain + "' domain has failed " +
+            std::to_string(occurrence_count) + " times with error pattern '" + error_pattern +
+            "'. Missing capability: '" + missing_cap +
+            "'. Analyze the relevant source files in src/ and generate a SINGLE sed command " +
+            "that fixes the root cause. Output JSON with {\"command\":\"sed -i ...\",\"mode\":\"neuro_surgery\"}. " +
+            "Be surgical — change only what's needed. The build system will auto-rebuild after.";
+
+        json stimulus = {
+            {"cid", "surgery_" + gap_id},
+            {"origin", "metacognition"},
+            {"intent", "stimulus"},
+            {"text", goal},
+            {"priority", "high"},
+            {"surgery", true}
+        };
+
+        start_new_goal(stimulus);
+        std::cout << "[EXECUTIVE] Surgery goal initiated for gap '" << gap_id << "'" << std::endl;
+    }
 
     void dispatch_to_all(const json& data) {
         routing::publish(pub, data);

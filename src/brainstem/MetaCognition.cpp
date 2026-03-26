@@ -801,11 +801,79 @@ private:
         }
     }
 
+    // ─── Neuro-Surgery Proposal ─────────────────────────────
+    // When a knowledge gap is persistent and severe, MetaCognition proposes
+    // a concrete code modification. This is the bridge to Phase 4: the system
+    // identifies WHAT to change about itself and publishes the intent.
+    // FrontalExecutive + MotorLobe execute it via neuro_surgery mode.
+
+    std::time_t last_surgery_proposal = 0;
+    static constexpr int SURGERY_INTERVAL = 900;  // propose at most every 15 min
+    std::set<std::string> attempted_surgeries;     // avoid repeating same fix
+
+    void propose_neuro_surgery() {
+        std::time_t now = std::time(nullptr);
+        if (now - last_surgery_proposal < SURGERY_INTERVAL) return;
+
+        // Find the most severe persistent gap
+        std::string worst_gap_id;
+        float worst_importance = 0.0f;
+        KnowledgeGap* worst_gap = nullptr;
+
+        for (auto& [id, gap] : gaps) {
+            if (gap.importance > worst_importance &&
+                gap.occurrence_count >= 10 &&
+                attempted_surgeries.find(id) == attempted_surgeries.end()) {
+                worst_importance = gap.importance;
+                worst_gap_id = id;
+                worst_gap = &gap;
+            }
+        }
+
+        if (!worst_gap) return;
+        last_surgery_proposal = now;
+
+        // Build a surgery proposal — ask the LLM to generate a concrete fix
+        // The LLM gets context about what fails and the system's architecture
+        std::string surgery_context =
+            "NEURO-SURGERY PROPOSAL: Domain '" + worst_gap->domain +
+            "' has failed " + std::to_string(worst_gap->occurrence_count) +
+            " times. Error pattern: " + worst_gap->error_pattern +
+            ". Root cause: " + worst_gap->root_cause +
+            ". Missing capability: " + worst_gap->missing_capability +
+            ". Strategy: " + worst_gap->exploration_strategy;
+
+        json proposal = {
+            {"origin", "metacognition"},
+            {"intent", "surgery_proposal"},
+            {"domain", worst_gap->domain},
+            {"gap_id", worst_gap_id},
+            {"importance", worst_gap->importance},
+            {"occurrence_count", worst_gap->occurrence_count},
+            {"error_pattern", worst_gap->error_pattern},
+            {"missing_capability", worst_gap->missing_capability},
+            {"root_cause", worst_gap->root_cause},
+            {"strategy", worst_gap->exploration_strategy},
+            {"context", surgery_context}
+        };
+
+        routing::publish(pub, proposal);
+        attempted_surgeries.insert(worst_gap_id);
+
+        record_reflection("SURGERY PROPOSED: " + surgery_context);
+        std::cout << "[META-COGNITION] SURGERY PROPOSAL for gap '" << worst_gap_id
+                  << "' (importance=" << worst_gap->importance
+                  << ", failures=" << worst_gap->occurrence_count << ")" << std::endl;
+    }
+
     // ─── Periodic Reflection ────────────────────────────────
 
     void periodic_reflection() {
         // Run self-modification analysis during reflection
         self_modification_analysis();
+
+        // Check if any persistent gaps warrant code modification
+        propose_neuro_surgery();
 
         std::string mood = (last_stress > 0.5f) ? "Stressed/Unstable" : "Optimal/Efficient";
         std::string thought = "System state is " + mood + ". Success Rate at " +

@@ -709,8 +709,8 @@ private:
             else if (domain == "data_analysis")   domain_commands[domain] = {"wc -l data/operators.jsonl", "python3 -c 'import json; print(len(open(\"data/operators.jsonl\").readlines()))'"};
             else if (domain == "source_modification") domain_commands[domain] = {"head -5 src/brainstem/PrimordialLoop.cpp", "wc -l src/brainstem/*.cpp"};
             else if (domain == "script_creation") domain_commands[domain] = {"python3 -c 'print(\"hello from neuroswarm\")'", "bash -c 'for i in 1 2 3; do echo $i; done'"};
-            else if (domain == "log_analysis")    domain_commands[domain] = {"tail -10 data/engrams/global_stream.jsonl 2>/dev/null || echo 'no logs yet'"};
-            else if (domain == "memory_analysis") domain_commands[domain] = {"ls -la data/engrams/ | tail -10", "du -sh data/"};
+            else if (domain == "log_analysis")    domain_commands[domain] = {"tail -20 data/engrams/global_stream.jsonl", "wc -l data/engrams/*.jsonl | tail -5"};
+            else if (domain == "memory_analysis") domain_commands[domain] = {"cat data/self_model.json | python3 -c \"import sys,json; sm=json.load(sys.stdin); print(len(sm),'domains')\"", "wc -l data/operators.jsonl data/concept_space.jsonl data/trajectories.jsonl"};
             else domain_commands[domain] = {"ls -la", "cat /proc/loadavg"};
         }
 
@@ -733,7 +733,7 @@ private:
             {"script_creation",     {"#!/", "chmod +x"}},
             {"file_search",         {"find ", "grep ", "locate ", "which ", "whereis ", "fd ", "rg "}},
             {"file_write",          {"tee ", "cp ", "mv ", "touch ", "mkdir ", ">>"}},
-            {"file_read",           {"cat ", "less ", "more ", "wc -l", "file ", "stat ", "md5sum", "sha256sum", "readlink"}}
+            {"file_read",           {"cat ", "less ", "more ", "wc -l", "wc ", "file ", "stat ", "md5sum", "sha256sum", "readlink", "head ", "tail "}}
         };
     }
 
@@ -890,6 +890,9 @@ private:
 
     // Semantic validation: reject degenerate commands that "succeed" without doing real work
     bool is_substantive_success(const std::string& cmd, const std::string& output) {
+        // Uninstantiated parametric templates — {param} placeholders executed literally
+        if (cmd.find('{') != std::string::npos && cmd.find('}') != std::string::npos) return false;
+
         // Corrupted fragments starting with hyphens
         if (cmd.find("-") == 0) return false;
 
@@ -934,8 +937,19 @@ private:
             if (trimmed_out == echo_val) return false;
         }
 
-        // Commands that produce no output are suspicious
-        if (output.size() < 3) return false;
+        // Commands that produce no output are suspicious — UNLESS they're write operations
+        // cp, mv, touch, tee, >, >> all succeed silently with exit 0
+        if (output.size() < 3) {
+            bool is_write_cmd = (cmd.find("cp ") == 0 || cmd.find("mv ") == 0 ||
+                                 cmd.find("touch ") == 0 || cmd.find("tee ") == 0 ||
+                                 cmd.find("cat ") != std::string::npos && cmd.find(">") != std::string::npos ||
+                                 cmd.find("sed -i") != std::string::npos ||
+                                 cmd.find("patch ") == 0 ||
+                                 cmd.find("chmod ") == 0 || cmd.find("chown ") == 0 ||
+                                 cmd.find(">>") != std::string::npos ||
+                                 cmd.find("> ") != std::string::npos);
+            if (!is_write_cmd) return false;
+        }
 
         // Output is just placeholder text
         if (output.find("Running '") == 0 || output.find("Running \"") == 0)
@@ -1087,6 +1101,28 @@ private:
             if (success) tracker.post_injection_success++;
             else         tracker.post_injection_failure++;
             tracker.evaluation_cycle++;
+        }
+
+        // Phase 9: Staleness recovery — when a domain is completely stuck,
+        // reset its command history to break habituation and allow fresh exploration.
+        // Biological analogue: synaptic rescaling during sleep.
+        if (d.attempts_since_substantive_success >= 50) {
+            auto hit = domain_command_history.find(domain);
+            if (hit != domain_command_history.end() && hit->second.size() > 5) {
+                std::cout << "[BASAL_GANGLIA] Staleness recovery: resetting command history for '"
+                          << domain << "' (stale=" << d.attempts_since_substantive_success
+                          << ")" << std::endl;
+                // Keep only last 3 commands to preserve some memory
+                auto& hist = hit->second;
+                if (hist.size() > 3) {
+                    hist.erase(hist.begin(), hist.end() - 3);
+                }
+                // Halve the staleness counter — gives another 50 attempts
+                d.attempts_since_substantive_success /= 2;
+                // Reset cooldown so the domain can be selected again
+                d.cooldown_until = 0;
+                d.consecutive_failures = 0;
+            }
         }
 
         // Phase 4: Update genome fitness for executed command
@@ -2616,6 +2652,23 @@ int main() {
                         d.example_commands.push_back(cmd.get<std::string>());
                     }
                 }
+            }
+
+            // Phase 9: Cap stale counters on load — prevents domains from being
+            // permanently stuck from previous sessions. Max staleness = 25,
+            // giving each domain a fair chance to be selected and recover.
+            int capped = 0;
+            for (auto& [dom, ds] : self_model) {
+                if (ds.attempts_since_substantive_success > 25) {
+                    ds.attempts_since_substantive_success = 25;
+                    ds.cooldown_until = 0;
+                    ds.consecutive_failures = std::min(ds.consecutive_failures, 2);
+                    capped++;
+                }
+            }
+            if (capped > 0) {
+                std::cout << "[BASAL_GANGLIA] Capped staleness for " << capped
+                          << " domains (max=25 on load)" << std::endl;
             }
 
             std::cout << "[BASAL_GANGLIA] Loaded self-model from " << self_model_path << std::endl;

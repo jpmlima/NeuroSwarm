@@ -109,6 +109,9 @@ public:
             phase_tool_discovery();
         }
 
+        // Always ensure self-modification operators exist (idempotent)
+        ensure_self_modification_operators();
+
         // Phase 5: Active Exploration — scaled by experience
         // With many operators already known, reduce exploration to stay fast
         int probe_count = incremental ? 5 : 20;  // 5 probes if experienced, 20 if fresh
@@ -536,9 +539,94 @@ private:
             std::cout << "[PRIMORDIAL]   DISCOVERY: CMake available." << std::endl;
         }
 
+        // Self-modification operators now registered in ensure_self_modification_operators()
+        // (runs regardless of incremental mode, see start())
+
         std::cout << "[PRIMORDIAL]   Languages available: ";
         for (const auto& l : self_.languages) std::cout << l << " ";
         std::cout << std::endl;
+    }
+
+    // ─── Self-Modification Operators (always registered, idempotent) ───
+    void ensure_self_modification_operators() {
+        // Skip if already registered (idempotent across incremental restarts)
+        if (registry_.find("sed_replace") != nullptr) return;
+
+        // SAFETY: Commands use sed (in-place edit) and cp (backup).
+        // NEVER register tee — it truncates files when run via popen (no stdin).
+        {
+            Operator op;
+            op.name = "sed_replace";
+            op.command_template = "sed -i 's/{pattern}/{replacement}/' {file}";
+            op.parameters = {"pattern", "replacement", "file"};
+            op.preconditions = {"file_exists({file})"};
+            op.postconditions = {"can_modify_source", "source_modified"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        {
+            Operator op;
+            op.name = "diff_files";
+            op.command_template = "diff -u {file_a} {file_b}";
+            op.parameters = {"file_a", "file_b"};
+            op.preconditions = {"file_exists({file_a})", "file_exists({file_b})"};
+            op.postconditions = {"can_compare_files"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        {
+            Operator op;
+            op.name = "copy_file";
+            op.command_template = "cp {source} {destination}";
+            op.parameters = {"source", "destination"};
+            op.preconditions = {"file_exists({source})"};
+            op.postconditions = {"can_write_file", "file_backed_up"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        {
+            Operator op;
+            op.name = "rebuild_self";
+            op.command_template = "cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1 | tail -5";
+            op.parameters = {};
+            op.preconditions = {"source_modified"};
+            op.postconditions = {"can_create_tool", "self_recompiled"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        {
+            Operator op;
+            op.name = "read_source";
+            op.command_template = "head -50 {file}";
+            op.parameters = {"file"};
+            op.preconditions = {"file_exists({file})"};
+            op.postconditions = {"can_read_file", "know_source_content"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        {
+            Operator op;
+            op.name = "grep_source";
+            op.command_template = "grep -rn '{pattern}' {path}";
+            op.parameters = {"pattern", "path"};
+            op.preconditions = {};
+            op.postconditions = {"can_search_files", "know_source_content"};
+            op.language = "bash";
+            op.learned_from = "bootstrap";
+            op.record_use(true, 0);
+            registry_.add(op);
+        }
+        std::cout << "[PRIMORDIAL]   Self-modification operators ensured (6 ops)." << std::endl;
     }
 
     // ─── Phase 5: Active Exploration ───
