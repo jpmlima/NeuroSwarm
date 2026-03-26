@@ -524,6 +524,7 @@ private:
         GoalState state;
         state.goal   = goal;
         state.active = true;
+        state.domain = data.value("domain", "");
 
         // Delegate to Spike worker if capacity allows and not a user stimulus
         if (!is_user_stimulus && active_workers < MAX_SPIKE_WORKERS) {
@@ -1455,6 +1456,72 @@ private:
         std::cout << "[EXECUTIVE] Ralph Loop — task " << task_id << " PASSED and committed." << std::endl;
     }
 
+    // Read a snippet from a source file (first N lines) for LLM context
+    std::string read_source_snippet(const std::string& path, int max_lines = 30) {
+        std::ifstream f(path);
+        if (!f.is_open()) return "";
+        std::string result, line;
+        int n = 0;
+        while (std::getline(f, line) && n < max_lines) {
+            result += std::to_string(n + 1) + ": " + line + "\n";
+            n++;
+        }
+        return result;
+    }
+
+    // Build source context for source_modification goals so the LLM can write real sed commands
+    std::string get_source_modification_context(const std::string& goal, const std::string& history) {
+        // Pick a target file from the goal text or history
+        std::string target;
+        std::regex path_re(R"((src/[^\s'"]+\.(?:cpp|hpp|h))|(include/[^\s'"]+\.(?:hpp|h)))");
+        std::smatch m;
+        std::string search = goal + " " + history;
+        if (std::regex_search(search, m, path_re)) {
+            target = m[0].str();
+        }
+
+        // If no file mentioned, pick a random improvement target from key files
+        if (target.empty()) {
+            static const std::vector<std::string> key_files = {
+                "src/brainstem/PrimordialLoop.cpp",
+                "src/brainstem/FrontalExecutive.cpp",
+                "src/lobes/BasalGanglia/BasalGangliaLobe.cpp",
+                "include/OperatorRegistry.hpp",
+                "src/brainstem/MetaCognition.cpp"
+            };
+            target = key_files[std::time(nullptr) % key_files.size()];
+        }
+
+        // Read a meaningful section (not just the top — pick middle for variety)
+        std::ifstream f(target);
+        if (!f.is_open()) return "";
+
+        // Count lines first
+        std::string line;
+        std::vector<std::string> lines;
+        while (std::getline(f, line)) lines.push_back(line);
+        if (lines.empty()) return "";
+
+        // Pick a window: for large files, start at a random offset
+        int total = lines.size();
+        int window = std::min(40, total);
+        int start = 0;
+        if (total > window) {
+            start = (std::time(nullptr) / 60) % (total - window);  // changes each minute
+        }
+
+        std::string snippet;
+        for (int i = start; i < start + window && i < total; i++) {
+            snippet += std::to_string(i + 1) + ": " + lines[i] + "\n";
+        }
+
+        return "\n\nSOURCE FILE: " + target + " (lines " + std::to_string(start + 1)
+             + "-" + std::to_string(start + window) + " of " + std::to_string(total) + ")\n"
+             + snippet
+             + "\nIMPORTANT: Write a sed -i command targeting EXACT text from the file above. "
+               "The pattern must match a real line. Example: sed -i 's/old_exact_text/new_text/' " + target + "\n";
+    }
+
     void request_thought(const std::string& cid, const std::string& extra_prompt = "") {
         if (active_goals.find(cid) == active_goals.end()) return;
         auto& state = active_goals[cid];
@@ -1469,6 +1536,12 @@ private:
             return;
         }
 
+        // Inject source file context for source_modification goals
+        std::string source_ctx;
+        if (state.domain == "source_modification") {
+            source_ctx = get_source_modification_context(state.goal, state.history);
+        }
+
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", "coder"},
@@ -1477,7 +1550,7 @@ private:
              + (system_knowledge.empty() ? "" : system_knowledge + "\n")
              + "<|end|>\n<|user|>\n"
              + (current_timestamp.empty() ? "" : "T:" + current_timestamp + " ")
-             + "GOAL: " + state.goal + state.memory_context + "\n" + (state.history.empty() ? "" : "HISTORY:" + state.history.substr(0, 500) + "\n") + extra_prompt + "<|end|>\n<|assistant|>\n"}
+             + "GOAL: " + state.goal + state.memory_context + "\n" + (state.history.empty() ? "" : "HISTORY:" + state.history.substr(0, 500) + "\n") + source_ctx + extra_prompt + "<|end|>\n<|assistant|>\n"}
         };
         dispatch_to_all(req);
     }
@@ -1682,7 +1755,8 @@ private:
             {"intent", "stimulus"},
             {"text", goal},
             {"priority", "high"},
-            {"surgery", true}
+            {"surgery", true},
+            {"domain", "source_modification"}
         };
 
         start_new_goal(stimulus);
