@@ -47,7 +47,9 @@ public:
         routing::subscribe(sub, {"initiate_sleep_cycle"});
 
         fs::create_directories("./data");
-        std::cout << "[REM] Sleep & Self-Improvement Engine online." << std::endl;
+        load_export_state();
+        std::cout << "[REM] Sleep & Self-Improvement Engine online. "
+                  << "Last export count: " << last_export_count << std::endl;
     }
 
     void start_circadian_loop() {
@@ -72,13 +74,50 @@ private:
     static constexpr const char* FINETUNE_BIN    = "./external/llama.cpp/build/bin/llama-finetune";
     static constexpr const char* BASE_MODEL      = "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
     static constexpr const char* FINETUNED_DIR   = "./models/finetuned/";
-    static constexpr const char* LORA_DIR        = "./models/lora/";
-    static constexpr int         ANALYSIS_WINDOW = 100; // last N execution events
-    static constexpr int         MIN_NEW_TRACES  = 20;  // minimum new successes before export
+    static constexpr int         ANALYSIS_WINDOW = 500; // last N execution events (increased for training)
+    static constexpr int         MIN_NEW_TRACES  = 50;  // minimum new successes before triggering fine-tune
     static constexpr const char* GENOME_PATH     = "./data/command_genome.json";
+    static constexpr const char* EXPORT_STATE    = "./data/training/.export_state";
 
     int last_export_count = 0; // successful traces at last export
     pid_t training_pid    = 0; // PID of active llama-finetune subprocess
+
+    // Trivial commands that pollute training data — not worth fine-tuning on
+    const std::vector<std::string> TRIVIAL_CMDS = {
+        "whoami", "id", "pwd", "hostname", "date", "uptime", "uname",
+        "echo", "true", "false", "yes", "no", "clear", "reset"
+    };
+
+    void load_export_state() {
+        if (!fs::exists(EXPORT_STATE)) return;
+        std::ifstream f(EXPORT_STATE);
+        std::string line;
+        if (std::getline(f, line)) {
+            try { last_export_count = std::stoi(line); } catch (...) {}
+        }
+    }
+
+    void save_export_state() {
+        fs::create_directories(TRAINING_DIR);
+        std::ofstream f(EXPORT_STATE);
+        f << last_export_count;
+    }
+
+    bool is_trivial_command(const std::string& cmd) const {
+        // Extract base command (first token, strip path)
+        std::string base = cmd;
+        auto sp = base.find(' ');
+        if (sp != std::string::npos) base = base.substr(0, sp);
+        auto slash = base.rfind('/');
+        if (slash != std::string::npos) base = base.substr(slash + 1);
+
+        for (const auto& t : TRIVIAL_CMDS) {
+            if (base == t) return true;
+        }
+        // Also skip very short commands (< 4 chars total)
+        if (cmd.size() < 4) return true;
+        return false;
+    }
 
     // -----------------------------------------------------------------------
     struct ExecutionTrace {
@@ -118,13 +157,17 @@ private:
         // Step 2b: Phase 4 — Genome crossover & pruning
         evolve_genome(traces);
 
-        // Step 3: Export training data if enough new successes
-        int successes = std::count_if(traces.begin(), traces.end(),
-                                      [](const auto& t){ return t.success && t.mode == "reality"; });
+        // Step 3: Export training data if enough new quality successes
+        int successes = 0;
+        for (const auto& t : traces) {
+            if (t.success && t.mode == "reality" && !is_trivial_command(t.command))
+                ++successes;
+        }
         if (successes >= last_export_count + MIN_NEW_TRACES) {
             std::string training_file = export_training_data(traces);
             if (!training_file.empty()) {
                 last_export_count = successes;
+                save_export_state();
                 // Step 4: Trigger fine-tune if not already running
                 trigger_finetune(training_file);
             }
@@ -141,7 +184,10 @@ private:
     }
 
     // -----------------------------------------------------------------------
-    // Export successful reality-mode traces as chat-template training data
+    // Export successful reality-mode traces as plain-text training data.
+    // llama-finetune expects a single text file (-f), not JSONL.
+    // We concatenate chat-template conversations so the model learns
+    // the mapping: GOAL → {thought, command} JSON.
     std::string export_training_data(const std::vector<ExecutionTrace>& traces) {
         fs::create_directories(TRAINING_DIR);
 
@@ -157,14 +203,11 @@ private:
                     if (j.value("intent", "") == "inference_request") {
                         std::string cid  = j.value("cid", "");
                         std::string text = j.value("text", "");
-                        // Extract GOAL from prompt text
                         auto pos = text.find("GOAL:");
                         if (pos != std::string::npos) {
                             std::string goal = text.substr(pos + 5);
-                            // Trim to first newline
                             auto nl = goal.find('\n');
                             if (nl != std::string::npos) goal = goal.substr(0, nl);
-                            // Trim whitespace
                             while (!goal.empty() && goal.front() == ' ') goal.erase(goal.begin());
                             if (!goal.empty()) cid_to_goal[cid] = goal;
                         }
@@ -173,54 +216,74 @@ private:
             }
         }
 
-        // Deduplicate by command hash
+        // Deduplicate by normalized command, filter trivial/junk
         std::set<std::string> seen_cmds;
         std::ostringstream out;
-        int count = 0;
+        int count = 0, skipped_trivial = 0, skipped_dup = 0;
 
         for (const auto& t : traces) {
             if (!t.success || t.mode != "reality") continue;
             if (t.command.empty()) continue;
-            if (seen_cmds.count(t.command)) continue;
-            seen_cmds.insert(t.command);
+            if (is_trivial_command(t.command)) { ++skipped_trivial; continue; }
+            // Normalize: collapse whitespace for dedup
+            std::string norm_cmd = t.command;
+            // Skip commands with absolute paths outside project (potential sensitive data)
+            if (norm_cmd.find("/home/") != std::string::npos &&
+                norm_cmd.find("/home/xenomai/Documents/NeuroSwarm") == std::string::npos) {
+                continue;
+            }
+            if (seen_cmds.count(norm_cmd)) { ++skipped_dup; continue; }
+            seen_cmds.insert(norm_cmd);
 
             std::string goal = cid_to_goal.count(t.cid) ? cid_to_goal[t.cid] : t.command;
+            // Truncate overly long goals (keep training samples compact)
+            if (goal.size() > 200) goal = goal.substr(0, 200);
 
-            // Escape command for JSON embedding
+            // Escape command for JSON embedding within the training text
             std::string escaped_cmd = t.command;
             for (size_t p = 0; (p = escaped_cmd.find('"', p)) != std::string::npos; p += 2)
                 escaped_cmd.insert(p, "\\");
 
-            // JSONL format: one training sample per line
-            json sample = {{"text",
-                "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture. Reply ONLY with JSON: "
-                "{\"thought\":\"brief\",\"command\":\"REAL_BASH_CMD\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
-                "Rules: command MUST be executable bash. No placeholders.\n<|end|>\n"
-                "<|user|>\nGOAL: " + goal + "\n<|end|>\n"
-                "<|assistant|>\n{\"thought\":\"execute\",\"command\":\"" + escaped_cmd + "\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n<|end|>"}};
-            out << sample.dump() << "\n";
+            // Plain-text chat template — llama-finetune tokenizes this directly.
+            // Each sample is a complete conversation that teaches: given GOAL → produce JSON action.
+            out << "<|im_start|>system\n"
+                << "You are NeuroSwarm, an autonomous cognitive architecture. "
+                << "Reply ONLY with compact JSON: "
+                << "{\"thought\":\"brief\",\"command\":\"bash_cmd\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
+                << "Rules: command MUST be real executable bash. No placeholders.\n"
+                << "<|im_end|>\n"
+                << "<|im_start|>user\n"
+                << "GOAL: " << goal << "\n"
+                << "<|im_end|>\n"
+                << "<|im_start|>assistant\n"
+                << "{\"thought\":\"execute\",\"command\":\"" << escaped_cmd
+                << "\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
+                << "<|im_end|>\n";
             ++count;
         }
 
         if (count == 0) {
-            std::cout << "[REM] No new unique successful traces to export." << std::endl;
+            std::cout << "[REM] No new unique successful traces to export "
+                      << "(trivial=" << skipped_trivial << " dup=" << skipped_dup << ")." << std::endl;
             return "";
         }
 
         auto now = std::chrono::system_clock::now();
         auto epoch = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        std::string filename = std::string(TRAINING_DIR) + "rem_training_" + std::to_string(epoch) + ".jsonl";
+        std::string filename = std::string(TRAINING_DIR) + "rem_training_" + std::to_string(epoch) + ".txt";
 
         std::ofstream f(filename);
         f << out.str();
-        std::cout << "[REM] Exported " << count << " training pairs to " << filename << std::endl;
+        std::cout << "[REM] Exported " << count << " training samples to " << filename
+                  << " (skipped: " << skipped_trivial << " trivial, " << skipped_dup << " dup)" << std::endl;
         return filename;
     }
 
     // -----------------------------------------------------------------------
-    // Spawn llama-finetune as a CPU-only subprocess
+    // Spawn llama-finetune as a GPU-accelerated subprocess.
+    // Produces a full fine-tuned GGUF model (llama-finetune does not support
+    // LoRA output — it trains all weights and saves via llama_model_save_to_file).
     void trigger_finetune(const std::string& training_file) {
-        // Check lockfile — don't run two fine-tunes concurrently
         if (fs::exists(LOCKFILE)) {
             std::cout << "[REM] Fine-tuning already in progress (lockfile exists). Skipping." << std::endl;
             return;
@@ -234,20 +297,22 @@ private:
             return;
         }
 
+        // Verify training file has meaningful content
+        {
+            std::ifstream tf(training_file);
+            std::string first_line;
+            std::getline(tf, first_line);
+            if (first_line.size() < 20) {
+                std::cout << "[REM] Training file too small. Skipping fine-tune." << std::endl;
+                return;
+            }
+        }
+
         auto epoch = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
-        // Try LoRA fine-tuning first (lighter, hot-loadable)
-        bool use_lora = true;
-        std::string output_path;
-
-        if (use_lora) {
-            fs::create_directories(LORA_DIR);
-            output_path = std::string(LORA_DIR) + "rem_lora_" + std::to_string(epoch) + ".gguf";
-        } else {
-            fs::create_directories(FINETUNED_DIR);
-            output_path = std::string(FINETUNED_DIR) + "qwen2.5-rem-" + std::to_string(epoch) + ".gguf";
-        }
+        fs::create_directories(FINETUNED_DIR);
+        std::string output_path = std::string(FINETUNED_DIR) + "qwen2.5-rem-" + std::to_string(epoch) + ".gguf";
 
         pid_t pid = fork();
         if (pid < 0) {
@@ -256,42 +321,40 @@ private:
         }
 
         if (pid == 0) {
-            // Child process — exec llama-finetune
-            if (use_lora) {
-                execl(FINETUNE_BIN, "llama-finetune",
-                      "-m", BASE_MODEL,
-                      "-f", training_file.c_str(),
-                      "--lora-out", output_path.c_str(),
-                      "-ngl", "0",
-                      "-c", "512",
-                      "-b", "4",
-                      "-ub", "4",
-                      "--epochs", "2",
-                      "--learning-rate", "1e-5",
-                      (char*)nullptr);
-            } else {
-                execl(FINETUNE_BIN, "llama-finetune",
-                      "-m", BASE_MODEL,
-                      "-f", training_file.c_str(),
-                      "-o", output_path.c_str(),
-                      "-ngl", "0",
-                      "-c", "512",
-                      "-b", "4",
-                      "-ub", "4",
-                      "--epochs", "2",
-                      "--learning-rate", "1e-5",
-                      (char*)nullptr);
-            }
+            // Child process — exec llama-finetune with correct CLI flags:
+            //   -m MODEL        base model GGUF
+            //   -f FILE         training text (plain text, not JSONL)
+            //   -o FILE         output fine-tuned GGUF
+            //   -c 512          context window for training samples
+            //   -b 8 -ub 8      batch sizes (small for 11GB VRAM)
+            //   -epochs 3       training epochs
+            //   -lr 1e-5        learning rate
+            //   -val-split 0.1  hold out 10% for validation
+            //   -fa on          flash attention for memory efficiency
+            execl(FINETUNE_BIN, "llama-finetune",
+                  "-m", BASE_MODEL,
+                  "-f", training_file.c_str(),
+                  "-o", output_path.c_str(),
+                  "-c", "512",
+                  "-b", "8",
+                  "-ub", "8",
+                  "-epochs", "3",
+                  "-lr", "1e-5",
+                  "-val-split", "0.1",
+                  "-fa", "on",
+                  (char*)nullptr);
             // exec failed
             _exit(1);
         }
 
-        // Parent — record PID, type, and output path in lockfile
+        // Parent — record PID, output path and type in lockfile
         training_pid = pid;
-        std::ofstream lock(LOCKFILE);
-        lock << pid << "\n" << output_path << "\n" << (use_lora ? "lora" : "model");
-        std::cout << "[REM] Fine-tuning started (PID " << pid << ", "
-                  << (use_lora ? "LoRA" : "full model") << "). Output: " << output_path << std::endl;
+        {
+            std::ofstream lock(LOCKFILE);
+            lock << pid << "\n" << output_path << "\n" << "model";
+        }
+        std::cout << "[REM] Fine-tuning started (PID " << pid
+                  << ", full model). Output: " << output_path << std::endl;
     }
 
     // -----------------------------------------------------------------------
@@ -333,20 +396,28 @@ private:
             if (training_type.empty()) training_type = "model";
         }
 
-        if (result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        if (result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0
+            && !output_model.empty() && fs::exists(output_model)) {
+            auto fsize = fs::file_size(output_model);
             std::cout << "[REM] Fine-tuning complete! Output: " << output_model
-                      << " (type: " << training_type << ")" << std::endl;
+                      << " (type: " << training_type << ", size: "
+                      << (fsize / (1024*1024)) << "MB)" << std::endl;
 
             json tc = {
                 {"origin", "rem_engine"},
                 {"intent", "training_complete"},
                 {"model_path", output_model},
                 {"type", training_type},
-                {"adapter_name", "rem_latest"}
+                {"adapter_name", "finetuned"}
             };
             dispatch(tc);
         } else {
             std::cerr << "[REM] Fine-tuning failed or was killed (PID " << training_pid << ")." << std::endl;
+            // Clean up partial output
+            if (!output_model.empty() && fs::exists(output_model)) {
+                fs::remove(output_model);
+                std::cout << "[REM] Cleaned up partial output: " << output_model << std::endl;
+            }
         }
 
         training_pid = 0;

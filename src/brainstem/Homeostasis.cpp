@@ -110,6 +110,22 @@ public:
                 is_sleeping = false;  // CPU active — no longer idle/sleeping
             }
 
+            // Circadian rhythm: trigger sleep every ~10 minutes regardless of load.
+            // This ensures memory consolidation, genome evolution, and fine-tuning
+            // happen even when the system is continuously active.
+            circadian_ticks_++;
+            if (circadian_ticks_ >= 600 && !is_sleeping) {  // 600s = 10 min
+                json sleep_req = {
+                    {"origin", "homeostasis"},
+                    {"intent", "initiate_sleep_cycle"},
+                    {"reason", "circadian_rhythm"}
+                };
+                dispatch(sleep_req);
+                is_sleeping = true;
+                circadian_ticks_ = 0;
+                std::cout << "[HOMEOSTASIS] Circadian sleep cycle triggered (10-min interval)" << std::endl;
+            }
+
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
@@ -119,6 +135,7 @@ private:
     zmq::socket_t pub;
     zmq::socket_t sub;
     int idle_ticks = 0;
+    int circadian_ticks_ = 0;  // time since last sleep cycle
 
     // Phase 5: Metabolic Cost Accounting
     float stamina = 100.0f;  // 0-100 energy scale
@@ -135,6 +152,7 @@ private:
             std::string intent = j.value("intent", "");
             if (intent == "sleep_cycle_complete") {
                 is_sleeping = false;
+                circadian_ticks_ = 0;  // reset circadian timer after successful sleep
             } else if (intent == "initiate_sleep_cycle") {
                 is_sleeping = true;
             } else if (intent == "inference_result") {

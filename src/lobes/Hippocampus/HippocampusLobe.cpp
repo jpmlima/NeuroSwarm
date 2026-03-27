@@ -11,6 +11,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -39,9 +40,19 @@ public:
     }
 
     void start() {
+        int maintenance_tick = 0;
         while (true) {
-            auto j = routing::receive(sub);
-            if (j.is_null()) continue;
+            auto j = routing::receive(sub, zmq::recv_flags::dontwait);
+            if (j.is_null()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                // Periodic maintenance every ~5 minutes (6000 ticks * 50ms)
+                if (++maintenance_tick % 6000 == 0) {
+                    cleanup_pending_embeds();
+                    compact_memory_index();
+                    finalize_stale_trajectories();
+                }
+                continue;
+            }
             try {
                 process_neural_event(j);
             } catch (...) {}
@@ -56,8 +67,12 @@ private:
     std::mutex io_mutex;
 
     // Pending embedding requests: embed_cid → engram waiting to be indexed
-    struct PendingEmbed { json engram; };
+    struct PendingEmbed { json engram; long created_ts = 0; };
     std::map<std::string, PendingEmbed> pending_embeds;
+    static constexpr int PENDING_EMBED_TIMEOUT_SECS = 60;  // expire after 60s
+    static constexpr size_t MEMORY_INDEX_MAX_ENTRIES = 50000;  // cap indexed memories
+    static constexpr double IMPORTANCE_ARCHIVE_THRESHOLD = 0.5;  // below this → archive
+    static constexpr int CONSOLIDATION_KEEP_RECENT = 200;  // keep N most recent per ledger
 
     // Phase 7: Trajectory memory — track command sequences per goal CID
     struct TrajectoryStep {
@@ -87,7 +102,15 @@ private:
             handle_search(event);
         }
         else if (intent == "consolidate_memories") {
+            // Consolidate the specific CID
             handle_consolidation(cid);
+            // Also consolidate any large ledgers that have accumulated
+            auto large = find_large_ledgers();
+            for (const auto& lcid : large) {
+                if (lcid != cid) handle_consolidation(lcid);
+            }
+            // Compact the memory index if oversized
+            compact_memory_index();
         }
         // Resolve a pending embedding: store the indexed memory
         else if (intent == "embedding_result" && pending_embeds.count(cid)) {
@@ -268,7 +291,7 @@ private:
         };
 
         std::string embed_cid = "hip_embed_" + std::to_string(std::time(nullptr)) + "_" + cid;
-        pending_embeds[embed_cid] = {seed};
+        pending_embeds[embed_cid] = {seed, (long)std::time(nullptr)};
 
         json req = {
             {"cid", embed_cid}, {"origin", "hippocampus"},
@@ -302,20 +325,198 @@ private:
         fs::path archive = base_dir / (cid + "_consolidated.jsonl");
 
         std::cout << "[HIPPOCAMPUS] Consolidating engrams for: " << cid << " (REM Phase)" << std::endl;
-        
-        // In a real biological scenario, this would involve summarizing with an LLM.
-        // For now, we move old engrams to an archive to keep the active ledger fast.
-        if (fs::exists(ledger)) {
-            fs::rename(ledger, archive);
-            std::ofstream new_ledger(ledger); // Reset active memory
+
+        if (!fs::exists(ledger)) {
+            json resp = {{"cid", cid}, {"origin", "hippocampus"}, {"intent", "consolidation_complete"}};
+            dispatch(resp);
+            return;
         }
+
+        // Load all engrams from the ledger
+        std::vector<json> engrams;
+        {
+            std::ifstream f(ledger);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.empty()) continue;
+                try { engrams.push_back(json::parse(line)); } catch (...) {}
+            }
+        }
+
+        size_t original_count = engrams.size();
+        if (original_count == 0) {
+            json resp = {{"cid", cid}, {"origin", "hippocampus"}, {"intent", "consolidation_complete"}};
+            dispatch(resp);
+            return;
+        }
+
+        // Sort by importance (desc), then by timestamp (desc) for tie-breaking
+        std::sort(engrams.begin(), engrams.end(), [](const json& a, const json& b) {
+            double ia = a.value("importance", 1.0);
+            double ib = b.value("importance", 1.0);
+            if (ia != ib) return ia > ib;
+            return a.value("synapse_ts", 0L) > b.value("synapse_ts", 0L);
+        });
+
+        // Split: keep recent + high-importance in active ledger, archive the rest
+        std::vector<json> keep;
+        std::vector<json> to_archive;
+
+        for (size_t i = 0; i < engrams.size(); ++i) {
+            double importance = engrams[i].value("importance", 1.0);
+            bool is_success = engrams[i].value("success", true);
+
+            // Keep: recent entries, high-importance, or successful executions
+            if (i < (size_t)CONSOLIDATION_KEEP_RECENT || importance >= IMPORTANCE_ARCHIVE_THRESHOLD || is_success) {
+                keep.push_back(engrams[i]);
+            } else {
+                to_archive.push_back(engrams[i]);
+            }
+        }
+
+        // Cap the keep list if still too large (keep only the top entries)
+        if (keep.size() > (size_t)CONSOLIDATION_KEEP_RECENT * 2) {
+            to_archive.insert(to_archive.end(),
+                keep.begin() + CONSOLIDATION_KEEP_RECENT * 2, keep.end());
+            keep.resize(CONSOLIDATION_KEEP_RECENT * 2);
+        }
+
+        // Append archived engrams to consolidated file
+        if (!to_archive.empty()) {
+            std::ofstream af(archive, std::ios::app);
+            if (af.is_open()) {
+                for (const auto& e : to_archive) af << e.dump() << "\n";
+            }
+        }
+
+        // Rewrite active ledger with kept engrams
+        {
+            std::ofstream lf(ledger, std::ios::trunc);
+            if (lf.is_open()) {
+                for (const auto& e : keep) lf << e.dump() << "\n";
+            }
+        }
+
+        std::cout << "[HIPPOCAMPUS] Consolidated " << cid << ": "
+                  << original_count << " → " << keep.size() << " active, "
+                  << to_archive.size() << " archived" << std::endl;
+
+        // Also clean up stale pending embeds
+        cleanup_pending_embeds();
 
         json resp = {
             {"cid", cid},
             {"origin", "hippocampus"},
-            {"intent", "consolidation_complete"}
+            {"intent", "consolidation_complete"},
+            {"kept", (int)keep.size()},
+            {"archived", (int)to_archive.size()}
         };
         dispatch(resp);
+    }
+
+    // Expire pending embed requests that never got a response
+    void cleanup_pending_embeds() {
+        long now = std::time(nullptr);
+        int expired = 0;
+        for (auto it = pending_embeds.begin(); it != pending_embeds.end(); ) {
+            if (now - it->second.created_ts > PENDING_EMBED_TIMEOUT_SECS) {
+                it = pending_embeds.erase(it);
+                expired++;
+            } else {
+                ++it;
+            }
+        }
+        if (expired > 0) {
+            std::cout << "[HIPPOCAMPUS] Expired " << expired << " stale embedding requests" << std::endl;
+        }
+    }
+
+    // Compact memory_index.jsonl when it exceeds the max entry cap.
+    // Keeps highest-importance + most-recent entries; archives the rest.
+    void compact_memory_index() {
+        std::lock_guard<std::mutex> lock(io_mutex);
+        fs::path index_path = base_dir / "memory_index.jsonl";
+        if (!fs::exists(index_path)) return;
+
+        // Count entries first (cheap check)
+        size_t count = 0;
+        {
+            std::ifstream f(index_path);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (!line.empty()) count++;
+            }
+        }
+
+        if (count <= MEMORY_INDEX_MAX_ENTRIES) return;
+
+        std::cout << "[HIPPOCAMPUS] Memory index compaction: " << count
+                  << " entries (cap=" << MEMORY_INDEX_MAX_ENTRIES << ")" << std::endl;
+
+        // Load all entries
+        std::vector<json> entries;
+        entries.reserve(count);
+        {
+            std::ifstream f(index_path);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.empty()) continue;
+                try { entries.push_back(json::parse(line)); } catch (...) {}
+            }
+        }
+
+        // Score: importance * 0.6 + recency_score * 0.3 + success * 0.1
+        long now = std::time(nullptr);
+        auto score = [now](const json& e) -> double {
+            double importance = e.value("importance", 1.0);
+            long ts = e.value("synapse_ts", 0L);
+            double age_hours = std::max(1.0, (double)(now - ts) / 3600.0);
+            double recency = 1.0 / std::log2(age_hours + 1.0);  // diminishing decay
+            double success_bonus = e.value("success", true) ? 0.1 : 0.0;
+            return importance * 0.6 + recency * 0.3 + success_bonus;
+        };
+
+        std::sort(entries.begin(), entries.end(),
+            [&score](const json& a, const json& b) { return score(a) > score(b); });
+
+        // Keep top entries, discard the rest (they're already in per-CID archives)
+        size_t keep = MEMORY_INDEX_MAX_ENTRIES;
+        entries.resize(keep);
+
+        // Rewrite atomically via temp file
+        fs::path tmp = index_path;
+        tmp += ".tmp";
+        {
+            std::ofstream f(tmp, std::ios::trunc);
+            for (const auto& e : entries) f << e.dump() << "\n";
+        }
+        fs::rename(tmp, index_path);
+
+        std::cout << "[HIPPOCAMPUS] Memory index compacted: " << count
+                  << " → " << keep << " entries" << std::endl;
+    }
+
+    // Collect CIDs of largest ledgers for bulk consolidation
+    std::vector<std::string> find_large_ledgers(size_t min_bytes = 100 * 1024, int max_count = 20) {
+        std::vector<std::pair<std::string, uintmax_t>> ledgers;
+        for (const auto& entry : fs::directory_iterator(base_dir)) {
+            if (entry.path().extension() == ".jsonl" &&
+                entry.path().filename().string().find("_consolidated") == std::string::npos &&
+                entry.path().filename() != "memory_index.jsonl") {
+                auto size = entry.file_size();
+                if (size >= min_bytes) {
+                    ledgers.push_back({entry.path().stem().string(), size});
+                }
+            }
+        }
+        std::sort(ledgers.begin(), ledgers.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
+
+        std::vector<std::string> cids;
+        for (size_t i = 0; i < std::min(ledgers.size(), (size_t)max_count); ++i) {
+            cids.push_back(ledgers[i].first);
+        }
+        return cids;
     }
 
     // ── Phase 7: Trajectory Memory ──────────────────────────────────────

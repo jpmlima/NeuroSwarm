@@ -49,6 +49,7 @@ struct CausalNode {
     std::string content;           // normalized command or effect description
     int observation_count = 0;
     double last_seen = 0.0;        // epoch seconds
+    std::set<std::string> parents; // parent node IDs in the causal DAG
 };
 
 struct CausalEdge {
@@ -56,8 +57,12 @@ struct CausalEdge {
     std::string target_id;         // effect node
     int co_occurrences = 0;
     int source_total = 0;          // total times source was observed
-    double confidence = 0.0;       // co_occurrences / source_total
-    double causal_lift = 0.0;      // confidence - base_rate(effect)
+    int source_absent_effect_present = 0;  // counterfactual: effect without action
+    int source_present_effect_absent = 0;  // counterfactual: action without effect
+    double confidence = 0.0;       // P(effect | action) — observational
+    double interventional = 0.0;   // P(effect | do(action)) — backdoor-adjusted
+    double causal_lift = 0.0;      // interventional - base_rate(effect)
+    double causal_strength = 0.0;  // Wilson lower bound on interventional
     double last_updated = 0.0;
 };
 
@@ -67,6 +72,13 @@ struct RecentAction {
     int exit_code;
     bool success;
     double timestamp;              // epoch seconds
+};
+
+// Per-observation-window snapshot: which actions and effects were active
+struct ObservationWindow {
+    std::set<std::string> actions_present;
+    std::set<std::string> effects_present;
+    double timestamp = 0.0;
 };
 
 // ─── CausalLobe ─────────────────────────────────────────────────
@@ -134,15 +146,24 @@ private:
     // ─── Graph State ────────────────────────────────────────────
     std::map<std::string, CausalNode> nodes;
     std::map<std::string, CausalEdge> edges;   // keyed by "src->tgt"
-    std::map<std::string, double> effect_base_rates; // effect_id -> observation ratio
+    std::map<std::string, double> effect_base_rates; // effect_id → EMA observation ratio
     int total_observation_windows = 0;
+
+    // Confounder tracking: for each pair of actions that co-occur, track count
+    std::map<std::string, int> action_cooccurrence; // "a1|a2" → count (sorted order)
+
+    // Rolling observation windows for backdoor adjustment
+    std::deque<ObservationWindow> observation_history;
+    static constexpr int MAX_OBSERVATION_HISTORY = 500;
 
     // ─── Temporal Correlation ───────────────────────────────────
     std::deque<RecentAction> recent_actions;
-    static constexpr double CORRELATION_WINDOW = 90.0;  // seconds
-    static constexpr double DECAY_HALF_LIFE = 30.0;     // seconds for exponential decay
+    static constexpr double CORRELATION_WINDOW = 60.0;   // tighter window (was 90)
+    static constexpr double DECAY_HALF_LIFE = 15.0;      // faster decay (was 30)
     static constexpr int MAX_NODES = 2000;
     static constexpr int MAX_RECENT = 50;
+    static constexpr int MIN_EVIDENCE = 3;               // minimum co-occurrences for causal claim
+    static constexpr double WILSON_Z = 1.96;             // 95% confidence interval
 
     int total_observations = 0;
 
@@ -240,25 +261,223 @@ private:
             edges[key] = edge;
         }
         auto& e = edges[key];
-        e.co_occurrences += (int)weight;
+        e.co_occurrences++;
         e.last_updated = now_epoch();
 
-        // Update confidence from source total
+        // Record parent relationship in DAG
+        if (nodes.count(tgt_id)) {
+            nodes[tgt_id].parents.insert(src_id);
+        }
+
+        // Update observational confidence: P(Y|X)
         if (nodes.count(src_id)) {
             e.source_total = nodes[src_id].observation_count;
             e.confidence = (double)e.co_occurrences / std::max(1, e.source_total);
         }
     }
 
-    void update_causal_lifts() {
-        // Compute base rates: P(effect) = times_effect_seen / total_windows
+    // ─── Wilson Lower Bound ─────────────────────────────────────
+    // Statistical confidence: given n observations with p success rate,
+    // what's the lower bound of the confidence interval?
+    static double wilson_lower(double p, int n) {
+        if (n == 0) return 0.0;
+        double z2 = WILSON_Z * WILSON_Z;
+        double denom = 1.0 + z2 / n;
+        double center = p + z2 / (2.0 * n);
+        double spread = WILSON_Z * std::sqrt((p * (1.0 - p) + z2 / (4.0 * n)) / n);
+        return std::max(0.0, (center - spread) / denom);
+    }
+
+    // ─── Do-Calculus: P(Y | do(X)) via Backdoor Adjustment ─────
+    //
+    // Pearl's backdoor criterion: if Z blocks all backdoor paths from X to Y,
+    // then P(Y|do(X)) = Σ_z P(Y|X,Z=z) P(Z=z)
+    //
+    // We identify confounders as actions that co-occur with X and also
+    // have edges to Y. These form the adjustment set Z.
+
+    std::set<std::string> find_confounders(const std::string& action_id,
+                                            const std::string& effect_id) {
+        std::set<std::string> confounders;
+
+        // A confounder Z for X→Y must:
+        // 1. Co-occur with X (temporally correlated actions)
+        // 2. Have its own edge to Y (Z→Y exists)
+        // 3. Not be a descendant of X (no post-treatment bias)
+
+        for (auto& [pair_key, count] : action_cooccurrence) {
+            if (count < MIN_EVIDENCE) continue;
+
+            // Parse the pair
+            size_t sep = pair_key.find('|');
+            if (sep == std::string::npos) continue;
+            std::string a1 = pair_key.substr(0, sep);
+            std::string a2 = pair_key.substr(sep + 1);
+
+            std::string other;
+            if (a1 == action_id) other = a2;
+            else if (a2 == action_id) other = a1;
+            else continue;
+
+            // Check if 'other' also has an edge to the same effect
+            std::string other_edge_key = other + "->" + effect_id;
+            if (edges.count(other_edge_key) && edges[other_edge_key].co_occurrences >= MIN_EVIDENCE) {
+                // Verify 'other' is not a descendant of action_id (avoid post-treatment)
+                if (!is_descendant(other, action_id)) {
+                    confounders.insert(other);
+                }
+            }
+        }
+        return confounders;
+    }
+
+    // BFS: is 'candidate' a descendant of 'ancestor' in the causal DAG?
+    bool is_descendant(const std::string& candidate, const std::string& ancestor) {
+        std::set<std::string> visited;
+        std::deque<std::string> queue;
+        queue.push_back(ancestor);
+
+        while (!queue.empty()) {
+            std::string current = queue.front();
+            queue.pop_front();
+            if (visited.count(current)) continue;
+            visited.insert(current);
+
+            // Find all children of 'current' (edges where current is source)
+            for (auto& [key, edge] : edges) {
+                if (edge.source_id == current) {
+                    if (edge.target_id == candidate) return true;
+                    if (nodes.count(edge.target_id) && nodes[edge.target_id].type == "action") {
+                        queue.push_back(edge.target_id);
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // Compute P(Y|do(X)) using observation windows + backdoor adjustment
+    double compute_do_probability(const std::string& action_id,
+                                   const std::string& effect_id,
+                                   const std::set<std::string>& confounders) {
+        if (observation_history.empty()) return 0.0;
+
+        // If no confounders, interventional = observational
+        if (confounders.empty()) {
+            std::string key = action_id + "->" + effect_id;
+            return edges.count(key) ? edges[key].confidence : 0.0;
+        }
+
+        // Backdoor adjustment: P(Y|do(X)) = Σ_z P(Y|X, Z=z) P(Z=z)
+        // We stratify by confounder presence/absence patterns
+
+        // Build confounder strata from observation history
+        // Each stratum is a binary pattern of confounder presence
+        struct Stratum {
+            int x_and_y = 0;    // action+effect present
+            int x_no_y = 0;     // action present, effect absent
+            int total = 0;      // total windows in this stratum
+        };
+        std::map<std::string, Stratum> strata; // pattern → counts
+
+        for (const auto& window : observation_history) {
+            // Build confounder pattern for this window
+            std::string pattern;
+            for (const auto& z : confounders) {
+                pattern += window.actions_present.count(z) ? "1" : "0";
+            }
+
+            auto& s = strata[pattern];
+            s.total++;
+            bool x_present = window.actions_present.count(action_id) > 0;
+            bool y_present = window.effects_present.count(effect_id) > 0;
+
+            if (x_present && y_present) s.x_and_y++;
+            else if (x_present && !y_present) s.x_no_y++;
+        }
+
+        // Compute weighted average: Σ_z P(Y|X,Z=z) * P(Z=z)
+        double p_do = 0.0;
+        int total_windows = (int)observation_history.size();
+
+        for (auto& [pattern, s] : strata) {
+            int x_in_stratum = s.x_and_y + s.x_no_y;
+            if (x_in_stratum < 2) continue;  // insufficient data in stratum
+
+            double p_y_given_x_z = (double)s.x_and_y / x_in_stratum;
+            double p_z = (double)s.total / total_windows;
+            p_do += p_y_given_x_z * p_z;
+        }
+
+        return std::min(1.0, std::max(0.0, p_do));
+    }
+
+    // ─── Full Causal Recompute ───────────────────────────────────
+    // Called during maintenance: update all edges with interventional scores
+
+    void update_causal_scores() {
         if (total_observation_windows < 1) return;
+
+        // Update base rates symmetrically using observation windows
+        // Count how many recent windows each effect appeared in
+        if (!observation_history.empty()) {
+            std::map<std::string, int> effect_window_counts;
+            for (const auto& w : observation_history) {
+                for (const auto& eid : w.effects_present) {
+                    effect_window_counts[eid]++;
+                }
+            }
+            int n_windows = (int)observation_history.size();
+            for (auto& [eid, count] : effect_window_counts) {
+                effect_base_rates[eid] = (double)count / n_windows;
+            }
+            // Decay base rates for effects NOT seen in recent windows
+            for (auto it = effect_base_rates.begin(); it != effect_base_rates.end(); ) {
+                if (!effect_window_counts.count(it->first)) {
+                    it->second *= 0.95;  // gradual decay
+                    if (it->second < 0.001) { it = effect_base_rates.erase(it); continue; }
+                }
+                ++it;
+            }
+        }
+
+        // Compute interventional scores for all edges
         for (auto& [key, edge] : edges) {
+            // Find confounders for this X→Y edge
+            auto confounders = find_confounders(edge.source_id, edge.target_id);
+
+            // Compute P(Y|do(X)) via backdoor adjustment
+            edge.interventional = compute_do_probability(
+                edge.source_id, edge.target_id, confounders);
+
+            // If no observation history yet, fall back to observational
+            if (observation_history.empty()) {
+                edge.interventional = edge.confidence;
+            }
+
+            // Causal lift: interventional - base_rate
             double base_rate = 0.0;
             if (effect_base_rates.count(edge.target_id)) {
                 base_rate = effect_base_rates[edge.target_id];
             }
-            edge.causal_lift = edge.confidence - base_rate;
+            edge.causal_lift = edge.interventional - base_rate;
+
+            // Wilson lower bound on interventional confidence
+            edge.causal_strength = (edge.co_occurrences >= MIN_EVIDENCE)
+                ? wilson_lower(edge.interventional, edge.co_occurrences)
+                : 0.0;
+
+            // Track counterfactual counts from observation history
+            int absent_action_present_effect = 0;
+            int present_action_absent_effect = 0;
+            for (const auto& w : observation_history) {
+                bool x = w.actions_present.count(edge.source_id) > 0;
+                bool y = w.effects_present.count(edge.target_id) > 0;
+                if (!x && y) absent_action_present_effect++;
+                if (x && !y) present_action_absent_effect++;
+            }
+            edge.source_absent_effect_present = absent_action_present_effect;
+            edge.source_present_effect_absent = present_action_absent_effect;
         }
     }
 
@@ -355,28 +574,49 @@ private:
         auto changes = parse_file_changes(text);
         if (changes.empty()) return;
 
-        for (const auto& change : changes) {
-            auto& effect = get_or_create_node("effect", change);
-
-            // Update base rate for this effect
-            effect_base_rates[effect.id] =
-                (effect_base_rates[effect.id] * (total_observation_windows - 1) + 1.0)
-                / total_observation_windows;
-
-            // Correlate with all recent actions (exponential decay by time distance)
-            for (const auto& action : recent_actions) {
-                double dt = now - action.timestamp;
-                if (dt > CORRELATION_WINDOW) continue;
-
-                double weight = std::exp(-dt / DECAY_HALF_LIFE);
-                if (weight < 0.05) continue;  // negligible
-
-                strengthen_edge(action.node_id, effect.id, weight > 0.5 ? 1.0 : 0.0);
+        // Build observation window snapshot for backdoor adjustment
+        ObservationWindow window;
+        window.timestamp = now;
+        for (const auto& ra : recent_actions) {
+            if (now - ra.timestamp <= CORRELATION_WINDOW) {
+                window.actions_present.insert(ra.node_id);
             }
         }
 
-        // Also update base rates for effects NOT seen (they remain at previous rate)
-        // This happens naturally since we only increment on observation.
+        // Track action co-occurrence for confounder detection
+        std::vector<std::string> present_actions(window.actions_present.begin(),
+                                                  window.actions_present.end());
+        for (size_t i = 0; i < present_actions.size(); ++i) {
+            for (size_t j = i + 1; j < present_actions.size(); ++j) {
+                // Sorted pair key for canonical ordering
+                std::string a = present_actions[i], b = present_actions[j];
+                if (a > b) std::swap(a, b);
+                action_cooccurrence[a + "|" + b]++;
+            }
+        }
+
+        for (const auto& change : changes) {
+            auto& effect = get_or_create_node("effect", change);
+            window.effects_present.insert(effect.id);
+
+            // Correlate with recent actions using continuous decay (no binary threshold)
+            for (const auto& action : recent_actions) {
+                double dt = now - action.timestamp;
+                if (dt > CORRELATION_WINDOW || dt < 0) continue;
+
+                double weight = std::exp(-dt / DECAY_HALF_LIFE);
+                if (weight < 0.05) continue;
+
+                // Continuous weighting: the closer in time, the stronger the signal
+                strengthen_edge(action.node_id, effect.id, weight);
+            }
+        }
+
+        // Store observation window for backdoor adjustment computations
+        observation_history.push_back(window);
+        while (observation_history.size() > MAX_OBSERVATION_HISTORY) {
+            observation_history.pop_front();
+        }
     }
 
     std::vector<std::string> parse_file_changes(const std::string& text) {
@@ -422,38 +662,52 @@ private:
 
         json predicted_effects = json::array();
         double predicted_success = 0.5;  // default: uncertain
+        double interventional_success = 0.5;
         int observations = 0;
+        int confounders_detected = 0;
 
         if (nodes.count(action_id)) {
             observations = nodes[action_id].observation_count;
 
             // Collect all outgoing edges from this action
-            std::vector<std::pair<double, json>> effects;
+            struct EffectEntry { double sort_key; json data; };
+            std::vector<EffectEntry> effects;
+
             for (auto& [key, edge] : edges) {
                 if (edge.source_id != action_id) continue;
                 if (!nodes.count(edge.target_id)) continue;
 
                 auto& tgt = nodes[edge.target_id];
+                auto confounders = find_confounders(action_id, tgt.id);
+
                 json eff = {
                     {"effect", tgt.content},
-                    {"confidence", std::round(edge.confidence * 100) / 100.0},
+                    {"p_observational", std::round(edge.confidence * 100) / 100.0},
+                    {"p_interventional", std::round(edge.interventional * 100) / 100.0},
+                    {"causal_strength", std::round(edge.causal_strength * 100) / 100.0},
                     {"causal_lift", std::round(edge.causal_lift * 100) / 100.0},
-                    {"observations", edge.co_occurrences}
+                    {"observations", edge.co_occurrences},
+                    {"confounders", (int)confounders.size()}
                 };
-                effects.push_back({edge.confidence, eff});
 
-                // Extract success rate from status edges
+                // Use causal_strength (Wilson lower bound on interventional) for sorting
+                double sort_key = edge.causal_strength;
+                effects.push_back({sort_key, eff});
+                confounders_detected += (int)confounders.size();
+
+                // Extract success rate — prefer interventional over observational
                 if (tgt.content == "status:success") {
                     predicted_success = edge.confidence;
+                    interventional_success = edge.interventional;
                 }
             }
 
-            // Sort by confidence descending
+            // Sort by causal_strength descending (statistically robust causal signal)
             std::sort(effects.begin(), effects.end(),
-                      [](auto& a, auto& b) { return a.first > b.first; });
+                      [](auto& a, auto& b) { return a.sort_key > b.sort_key; });
 
             for (size_t i = 0; i < effects.size() && i < 10; ++i) {
-                predicted_effects.push_back(effects[i].second);
+                predicted_effects.push_back(effects[i].data);
             }
         } else {
             // No exact match — try to find similar actions by verb
@@ -461,20 +715,21 @@ private:
             for (auto& [id, node] : nodes) {
                 if (node.type != "action") continue;
                 if (extract_verb(node.content) == verb) {
-                    // Found a verb match — use its edges as approximate prediction
                     for (auto& [key, edge] : edges) {
                         if (edge.source_id != id || !nodes.count(edge.target_id)) continue;
-                        if (edge.confidence < 0.2) continue;
+                        if (edge.causal_strength < 0.1 && edge.confidence < 0.2) continue;
 
                         auto& tgt = nodes[edge.target_id];
                         predicted_effects.push_back({
                             {"effect", tgt.content},
-                            {"confidence", std::round(edge.confidence * 50) / 100.0},  // halved for approximation
+                            {"p_observational", std::round(edge.confidence * 50) / 100.0},
+                            {"p_interventional", std::round(edge.interventional * 50) / 100.0},
                             {"approximate", true}
                         });
 
                         if (tgt.content == "status:success") {
                             predicted_success = edge.confidence;
+                            interventional_success = edge.interventional;
                         }
                     }
                     observations = node.observation_count;
@@ -491,7 +746,9 @@ private:
             {"normalized", normalized},
             {"predicted_effects", predicted_effects},
             {"predicted_success_rate", std::round(predicted_success * 100) / 100.0},
-            {"observations", observations}
+            {"interventional_success_rate", std::round(interventional_success * 100) / 100.0},
+            {"observations", observations},
+            {"confounders_detected", confounders_detected}
         };
         dispatch(response);
     }
@@ -499,21 +756,35 @@ private:
     // ─── Maintenance ────────────────────────────────────────────
 
     void maintain() {
-        update_causal_lifts();
+        update_causal_scores();
         prune();
+        prune_cooccurrence();
         save_state();
         broadcast_update();
 
+        // Count edges with genuine causal signal
+        int causal_edges = 0;
+        for (auto& [key, edge] : edges) {
+            if (edge.causal_strength > 0.0 && edge.co_occurrences >= MIN_EVIDENCE) causal_edges++;
+        }
+
         std::cout << "[CAUSAL] Maintenance: " << nodes.size() << " nodes, "
-                  << edges.size() << " edges, " << total_observations << " observations"
+                  << edges.size() << " edges (" << causal_edges << " causal), "
+                  << total_observations << " obs, "
+                  << observation_history.size() << " windows"
                   << std::endl;
     }
 
     void prune() {
-        // Remove weak edges (noise)
+        // Remove weak edges: single-observation edges older than 1 hour,
+        // or edges with zero causal strength and minimal evidence
+        double now = now_epoch();
         std::vector<std::string> dead_edges;
         for (auto& [key, edge] : edges) {
-            if (edge.co_occurrences < 2 && edge.confidence < 0.05) {
+            bool stale_single = (edge.co_occurrences < 2 && (now - edge.last_updated) > 3600);
+            bool no_signal = (edge.co_occurrences >= MIN_EVIDENCE &&
+                              edge.causal_strength < 0.01 && edge.causal_lift < 0.01);
+            if (stale_single || no_signal) {
                 dead_edges.push_back(key);
             }
         }
@@ -554,21 +825,42 @@ private:
         }
     }
 
+    // Prune stale action co-occurrence entries
+    void prune_cooccurrence() {
+        // Remove pairs where both actions no longer exist
+        std::vector<std::string> dead;
+        for (auto& [key, count] : action_cooccurrence) {
+            size_t sep = key.find('|');
+            if (sep == std::string::npos) { dead.push_back(key); continue; }
+            std::string a1 = key.substr(0, sep);
+            std::string a2 = key.substr(sep + 1);
+            if (!nodes.count(a1) || !nodes.count(a2)) dead.push_back(key);
+        }
+        for (auto& k : dead) action_cooccurrence.erase(k);
+    }
+
     void broadcast_update() {
-        // Collect top causal relationships by lift
+        // Collect top causal relationships by causal_strength (Wilson-adjusted interventional)
         std::vector<std::pair<double, json>> top_links;
+        int causal_count = 0;
         for (auto& [key, edge] : edges) {
             if (!nodes.count(edge.source_id) || !nodes.count(edge.target_id)) continue;
-            if (edge.co_occurrences < 2) continue;
+            if (edge.co_occurrences < MIN_EVIDENCE) continue;
+
+            auto confounders = find_confounders(edge.source_id, edge.target_id);
 
             json link = {
                 {"action", nodes[edge.source_id].content},
                 {"effect", nodes[edge.target_id].content},
-                {"confidence", std::round(edge.confidence * 100) / 100.0},
-                {"causal_lift", std::round(edge.causal_lift * 100) / 100.0},
-                {"observations", edge.co_occurrences}
+                {"p_obs", std::round(edge.confidence * 100) / 100.0},
+                {"p_do", std::round(edge.interventional * 100) / 100.0},
+                {"strength", std::round(edge.causal_strength * 100) / 100.0},
+                {"lift", std::round(edge.causal_lift * 100) / 100.0},
+                {"n", edge.co_occurrences},
+                {"confounders", (int)confounders.size()}
             };
-            top_links.push_back({edge.causal_lift, link});
+            top_links.push_back({edge.causal_strength, link});
+            if (edge.causal_strength > 0.0) causal_count++;
         }
 
         std::sort(top_links.begin(), top_links.end(),
@@ -592,7 +884,10 @@ private:
             {"action_nodes", action_count},
             {"effect_nodes", effect_count},
             {"total_edges", (int)edges.size()},
+            {"causal_edges", causal_count},
             {"total_observations", total_observations},
+            {"observation_windows", (int)observation_history.size()},
+            {"confounder_pairs", (int)action_cooccurrence.size()},
             {"top_causal_links", links}
         };
         dispatch(update);
@@ -608,11 +903,14 @@ private:
         // Nodes
         json jnodes = json::object();
         for (auto& [id, node] : nodes) {
+            json jparents = json::array();
+            for (const auto& p : node.parents) jparents.push_back(p);
             jnodes[id] = {
                 {"type", node.type},
                 {"content", node.content},
                 {"observation_count", node.observation_count},
-                {"last_seen", node.last_seen}
+                {"last_seen", node.last_seen},
+                {"parents", jparents}
             };
         }
         doc["nodes"] = jnodes;
@@ -625,23 +923,34 @@ private:
                 {"target_id", edge.target_id},
                 {"co_occurrences", edge.co_occurrences},
                 {"source_total", edge.source_total},
+                {"source_absent_effect_present", edge.source_absent_effect_present},
+                {"source_present_effect_absent", edge.source_present_effect_absent},
                 {"confidence", edge.confidence},
+                {"interventional", edge.interventional},
                 {"causal_lift", edge.causal_lift},
+                {"causal_strength", edge.causal_strength},
                 {"last_updated", edge.last_updated}
             };
         }
         doc["edges"] = jedges;
 
-        // Base rates
+        // Base rates & co-occurrence
         doc["effect_base_rates"] = effect_base_rates;
+        doc["action_cooccurrence"] = action_cooccurrence;
         doc["metadata"] = {
             {"total_observations", total_observations},
             {"total_observation_windows", total_observation_windows},
             {"last_save", now_epoch()}
         };
 
-        std::ofstream f("data/causal_graph.json");
-        if (f.is_open()) f << doc.dump(2);
+        // Write atomically via temp file
+        fs::path tmp("data/causal_graph.json.tmp");
+        std::ofstream f(tmp);
+        if (f.is_open()) {
+            f << doc.dump(2);
+            f.close();
+            fs::rename(tmp, "data/causal_graph.json");
+        }
 
         std::cout << "[CAUSAL] State saved: " << nodes.size() << " nodes, "
                   << edges.size() << " edges" << std::endl;
@@ -663,6 +972,12 @@ private:
                     node.content = jn.value("content", "");
                     node.observation_count = jn.value("observation_count", 0);
                     node.last_seen = jn.value("last_seen", 0.0);
+                    // Load parent set (new field, graceful fallback)
+                    if (jn.contains("parents")) {
+                        for (const auto& p : jn["parents"]) {
+                            node.parents.insert(p.get<std::string>());
+                        }
+                    }
                     nodes[id] = node;
                 }
             }
@@ -675,8 +990,12 @@ private:
                     edge.target_id = je.value("target_id", "");
                     edge.co_occurrences = je.value("co_occurrences", 0);
                     edge.source_total = je.value("source_total", 0);
+                    edge.source_absent_effect_present = je.value("source_absent_effect_present", 0);
+                    edge.source_present_effect_absent = je.value("source_present_effect_absent", 0);
                     edge.confidence = je.value("confidence", 0.0);
+                    edge.interventional = je.value("interventional", 0.0);
                     edge.causal_lift = je.value("causal_lift", 0.0);
+                    edge.causal_strength = je.value("causal_strength", 0.0);
                     edge.last_updated = je.value("last_updated", 0.0);
                     edges[key] = edge;
                 }
@@ -685,6 +1004,11 @@ private:
             // Load base rates
             if (doc.contains("effect_base_rates")) {
                 effect_base_rates = doc["effect_base_rates"].get<std::map<std::string, double>>();
+            }
+
+            // Load action co-occurrence (new field, graceful fallback)
+            if (doc.contains("action_cooccurrence")) {
+                action_cooccurrence = doc["action_cooccurrence"].get<std::map<std::string, int>>();
             }
 
             if (doc.contains("metadata")) {

@@ -462,7 +462,7 @@ private:
         // Recursive: does the required capability itself have unmet preconditions?
         // Check if we have gaps for the required capability
         for (auto& [key, gap] : gaps) {
-            if (gap.missing_capability == required && gap.occurrence_count > 2) {
+            if (gap.missing_capability == required) {
                 std::cout << "[META-COGNITION] RECURSIVE GAP: '" << required
                           << "' is itself blocked by '" << gap.error_pattern
                           << "' in domain '" << gap.domain << "'" << std::endl;
@@ -596,7 +596,7 @@ private:
 
             bool found_deeper = false;
             for (auto& link : precondition_chain) {
-                if (link.capability == current_req && link.evidence_count >= 2) {
+                if (link.capability == current_req) {
                     chain.push_back("→ which requires: " + link.requires);
                     current_req = link.requires;
                     found_deeper = true;

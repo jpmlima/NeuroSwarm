@@ -14,6 +14,8 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
 #include <OperatorRegistry.hpp>
 
 namespace neuroswarm {
@@ -37,9 +39,123 @@ struct PlanResult {
     std::string failure_reason;
 };
 
+// Runtime precondition verifier — fast filesystem/system probes before plan execution.
+// Converts symbolic preconditions into concrete checks, preventing invalid plans
+// from executing when world state is stale.
+class PreconditionVerifier {
+public:
+    struct VerifyResult {
+        bool passed;
+        std::string precondition;
+        std::string reason;  // empty if passed
+    };
+
+    // Verify a list of preconditions. Returns results for each.
+    static std::vector<VerifyResult> verify(const std::vector<std::string>& preconditions) {
+        std::vector<VerifyResult> results;
+        for (const auto& pre : preconditions) {
+            results.push_back(verify_one(pre));
+        }
+        return results;
+    }
+
+    // Check if a world state fact is transient (can become stale) vs capability (persistent)
+    static bool is_transient_fact(const std::string& fact) {
+        return fact.find("file_exists(") == 0 ||
+               fact.find("path_exists(") == 0 ||
+               fact.find("binary_exists(") == 0;
+    }
+
+    // Re-verify a transient world state fact. Returns true if still valid.
+    static bool reverify_fact(const std::string& fact) {
+        std::string path = extract_path(fact);
+        if (path.empty()) return true;  // can't verify, assume valid
+
+        if (fact.find("file_exists(") == 0) {
+            return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
+        }
+        if (fact.find("path_exists(") == 0) {
+            return std::filesystem::exists(path);
+        }
+        if (fact.find("binary_exists(") == 0) {
+            return std::filesystem::exists(path) &&
+                   (std::filesystem::status(path).permissions() & std::filesystem::perms::owner_exec) != std::filesystem::perms::none;
+        }
+        return true;
+    }
+
+    // Classify execution error output into a precondition failure type.
+    // Returns the precondition predicate that was violated, or empty string.
+    static std::string classify_failure(const std::string& error_output) {
+        if (error_output.find("No such file or directory") != std::string::npos)
+            return "path_exists";
+        if (error_output.find("Permission denied") != std::string::npos)
+            return "has_permissions";
+        if (error_output.find("command not found") != std::string::npos)
+            return "tool_in_path";
+        if (error_output.find("Is a directory") != std::string::npos)
+            return "file_exists";  // expected file, got directory
+        if (error_output.find("not a directory") != std::string::npos)
+            return "path_exists";
+        return "";
+    }
+
+private:
+    // Extract path from predicates like "path_exists(/home/x)" or "file_exists({file})"
+    static std::string extract_path(const std::string& predicate) {
+        auto open = predicate.find('(');
+        auto close = predicate.rfind(')');
+        if (open == std::string::npos || close == std::string::npos || close <= open + 1)
+            return "";
+        std::string path = predicate.substr(open + 1, close - open - 1);
+        // Skip unresolved templates like {path}
+        if (!path.empty() && path[0] == '{') return "";
+        return path;
+    }
+
+    static VerifyResult verify_one(const std::string& precondition) {
+        VerifyResult r;
+        r.precondition = precondition;
+        r.passed = true;
+
+        std::string path = extract_path(precondition);
+
+        // Unresolved template — can't verify at runtime, pass optimistically
+        if (path.empty() && precondition.find('{') != std::string::npos) {
+            return r;
+        }
+
+        if (precondition.find("path_exists(") == 0 && !path.empty()) {
+            if (!std::filesystem::exists(path)) {
+                r.passed = false;
+                r.reason = "path does not exist: " + path;
+            }
+        }
+        else if (precondition.find("file_exists(") == 0 && !path.empty()) {
+            if (!std::filesystem::exists(path)) {
+                r.passed = false;
+                r.reason = "file does not exist: " + path;
+            }
+        }
+        else if (precondition.find("binary_exists(") == 0 && !path.empty()) {
+            if (!std::filesystem::exists(path)) {
+                r.passed = false;
+                r.reason = "binary does not exist: " + path;
+            }
+        }
+        // Soft preconditions — always pass (capability-level, not path-level)
+        // source_modified, dependencies_met, has_network, tool_in_path, etc.
+
+        return r;
+    }
+};
+
 class Planner {
 public:
     explicit Planner(OperatorRegistry& registry) : registry_(registry) {}
+
+    static constexpr int MAX_NODES = 500;     // hard cap on nodes explored per plan() call
+    static constexpr int TOP_K_CANDIDATES = 5; // max operators to try per sub-goal
 
     // Plan a sequence of operators to achieve goal_conditions from current_state.
     PlanResult plan(const WorldState& current_state,
@@ -92,7 +208,10 @@ public:
         result.success = result.gaps.empty();
 
         if (!result.success) {
-            result.failure_reason = "No operators found for: ";
+            if (result.nodes_explored >= MAX_NODES) {
+                result.failure_reason = "Node budget exhausted (" + std::to_string(MAX_NODES) + " nodes). ";
+            }
+            result.failure_reason += "No operators found for: ";
             for (const auto& g : result.gaps) result.failure_reason += g + ", ";
         }
 
@@ -131,6 +250,19 @@ private:
         return false;
     }
 
+    // Wilson lower-bound score: favors operators with high success AND sufficient evidence.
+    // An operator with 5/5 successes scores higher than one with 1/1.
+    static double wilson_score(const Operator* op) {
+        double n = op->times_used + 2.0;  // +2 Laplace smoothing
+        double p = (op->successes + 1.0) / n;
+        // Wilson lower bound with z=1.0 (68% confidence)
+        double z = 1.0;
+        double denom = 1.0 + z * z / n;
+        double centre = p + z * z / (2.0 * n);
+        double spread = z * std::sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n));
+        return (centre - spread) / denom;
+    }
+
     bool solve_goal(const std::string& goal,
                     const WorldState& current_state,
                     std::vector<PlanStep>& plan,
@@ -139,6 +271,7 @@ private:
                     int depth) {
 
         if (depth <= 0) return false;
+        if (nodes_explored >= MAX_NODES) return false;  // budget exhausted
         if (state_satisfies(current_state, goal)) return true;
         if (visited.count(goal)) return false;
 
@@ -147,12 +280,20 @@ private:
 
         auto candidates = registry_.find_by_postcondition(goal);
 
+        // Sort by Wilson score (proven quality over raw success_rate)
         std::sort(candidates.begin(), candidates.end(),
             [](const Operator* a, const Operator* b) {
-                return a->success_rate > b->success_rate;
+                return wilson_score(a) > wilson_score(b);
             });
 
+        // Top-K pruning: only try the best candidates to prevent branching explosion
+        if ((int)candidates.size() > TOP_K_CANDIDATES) {
+            candidates.resize(TOP_K_CANDIDATES);
+        }
+
         for (auto* op : candidates) {
+            if (nodes_explored >= MAX_NODES) return false;  // check budget inside loop
+
             bool all_preconds_met = true;
             std::vector<PlanStep> sub_plan;
             WorldState extended_state = current_state;

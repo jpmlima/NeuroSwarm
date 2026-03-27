@@ -140,7 +140,7 @@ public:
         broadcast_phase("bootstrap_complete", "Learned " + std::to_string(registry_.size()) + " operators.");
 
         // Phase 6: Self-test — verify the planner works with a simple goal
-        std::cout << "[PRIMORDIAL] Phase 6 — Planner self-test." << std::endl;
+        std::cout << "[PRIMORDIAL] Phase X — Experimentation initialization." << std::endl;
         phase_planner_selftest();
 
         // Persist world state after all phases (world_state_ populated by selftest)
@@ -1216,8 +1216,26 @@ private:
     void execute_plan(const PlanResult& plan) {
         for (const auto& step : plan.steps) {
             std::string cmd = step.command;
-            // Resolve any remaining placeholders with defaults
-            // (in a full system, bindings come from the goal context)
+
+            // ── Runtime precondition verification ──
+            // Check that concrete preconditions (file/path existence) are still true
+            // before executing. Prevents plans based on stale world state.
+            auto checks = PreconditionVerifier::verify(step.preconditions);
+            bool precond_failed = false;
+            for (const auto& check : checks) {
+                if (!check.passed) {
+                    std::cout << "[PRIMORDIAL]     PRECONDITION FAILED: " << check.precondition
+                              << " — " << check.reason << std::endl;
+                    // Remove stale fact from world state
+                    invalidate_stale_fact(check.precondition);
+                    precond_failed = true;
+                }
+            }
+            if (precond_failed) {
+                std::cout << "[PRIMORDIAL]     Aborting plan at step: " << step.operator_name
+                          << " (precondition violated)" << std::endl;
+                break;
+            }
 
             std::cout << "[PRIMORDIAL]     Step: " << step.operator_name
                       << " → " << cmd << std::endl;
@@ -1242,10 +1260,101 @@ private:
                 }
                 save_world_state();
             } else {
+                // ── Failure feedback: invalidate stale facts + strengthen preconditions ──
+                handle_plan_step_failure(step, r.output, op);
                 std::cout << "[PRIMORDIAL]     Plan execution failed at step: "
                           << step.operator_name << std::endl;
                 break;
             }
+        }
+    }
+
+    // Remove a stale world state fact that matches a failed precondition
+    void invalidate_stale_fact(const std::string& precondition) {
+        // Direct match
+        if (world_state_.erase(precondition) > 0) {
+            std::cout << "[PRIMORDIAL]     STALE FACT REMOVED: " << precondition << std::endl;
+            save_world_state();
+            return;
+        }
+        // Prefix match: "path_exists(/home/x)" → look for "path_exists(*)" facts
+        auto paren = precondition.find('(');
+        if (paren != std::string::npos) {
+            std::string prefix = precondition.substr(0, paren);
+            for (auto it = world_state_.begin(); it != world_state_.end(); ) {
+                if (it->find(prefix) == 0 && *it == precondition) {
+                    std::cout << "[PRIMORDIAL]     STALE FACT REMOVED: " << *it << std::endl;
+                    it = world_state_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            save_world_state();
+        }
+    }
+
+    // When a plan step fails, analyze the error and strengthen the operator's preconditions
+    void handle_plan_step_failure(const PlanStep& step, const std::string& error_output,
+                                  Operator* op) {
+        std::string failure_type = PreconditionVerifier::classify_failure(error_output);
+        if (failure_type.empty()) return;
+
+        // Remove any world state facts that match the failure type
+        std::vector<std::string> to_remove;
+        for (const auto& fact : world_state_) {
+            if (fact.find(failure_type) == 0) {
+                // Verify it's actually stale before removing
+                if (PreconditionVerifier::is_transient_fact(fact) &&
+                    !PreconditionVerifier::reverify_fact(fact)) {
+                    to_remove.push_back(fact);
+                }
+            }
+        }
+        for (const auto& fact : to_remove) {
+            world_state_.erase(fact);
+            std::cout << "[PRIMORDIAL]     STALE FACT REMOVED (from error): " << fact << std::endl;
+        }
+        if (!to_remove.empty()) save_world_state();
+
+        // Strengthen operator preconditions: if the operator doesn't have this type
+        // of precondition, add it so future plans won't repeat the same failure
+        if (op) {
+            std::string needed_pre = failure_type + "({path})";
+            bool already_has = false;
+            for (const auto& pre : op->preconditions) {
+                if (pre.find(failure_type) != std::string::npos) {
+                    already_has = true;
+                    break;
+                }
+            }
+            if (!already_has) {
+                op->preconditions.push_back(needed_pre);
+                registry_.save_full();
+                std::cout << "[PRIMORDIAL]     PRECONDITION STRENGTHENED: " << step.operator_name
+                          << " now requires '" << needed_pre << "'" << std::endl;
+            }
+        }
+    }
+
+    // ── World State Staleness Sweep ──
+    // Re-verify all transient facts (file/path existence). Called periodically.
+    void sweep_stale_facts() {
+        std::vector<std::string> stale;
+        for (const auto& fact : world_state_) {
+            if (PreconditionVerifier::is_transient_fact(fact)) {
+                if (!PreconditionVerifier::reverify_fact(fact)) {
+                    stale.push_back(fact);
+                }
+            }
+        }
+        for (const auto& fact : stale) {
+            world_state_.erase(fact);
+            std::cout << "[PRIMORDIAL] STALENESS SWEEP: removed '" << fact << "'" << std::endl;
+        }
+        if (!stale.empty()) {
+            save_world_state();
+            std::cout << "[PRIMORDIAL] Staleness sweep: removed " << stale.size()
+                      << " stale facts. World state: " << world_state_.size() << " facts." << std::endl;
         }
     }
 
@@ -1525,6 +1634,8 @@ private:
                 if (pruned > 0) {
                     std::cout << "[PRIMORDIAL] Pruned " << pruned << " dead operators." << std::endl;
                 }
+                // Re-verify transient facts (file_exists, path_exists) and remove stale ones
+                sweep_stale_facts();
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

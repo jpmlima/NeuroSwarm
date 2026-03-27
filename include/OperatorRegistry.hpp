@@ -107,6 +107,7 @@ public:
         }
         operators_[op.id] = op;
         by_name_[op.name] = op.id;
+        index_operator(operators_[op.id]);
         save_append(op);
         return op.id;
     }
@@ -120,8 +121,45 @@ public:
         return &oit->second;
     }
 
-    // Find operators whose postconditions match a goal
+    // Find operators whose postconditions match a goal — O(1) lookup via inverted index
     std::vector<Operator*> find_by_postcondition(const std::string& postcondition) {
+        // 1. Exact match in index
+        auto it = postcond_index_.find(postcondition);
+        if (it != postcond_index_.end() && !it->second.empty()) {
+            auto results = it->second;
+            std::sort(results.begin(), results.end(),
+                [](const Operator* a, const Operator* b) {
+                    return a->success_rate > b->success_rate;
+                });
+            return results;
+        }
+
+        // 2. Prefix match fallback: extract predicate prefix before '('
+        //    e.g. "file_exists(/tmp/x)" matches index key "file_exists"
+        std::string prefix = postcondition;
+        auto paren = prefix.find('(');
+        if (paren != std::string::npos) {
+            prefix = prefix.substr(0, paren);
+            // Search all index keys that start with this prefix
+            std::vector<Operator*> results;
+            for (auto& [key, ops] : postcond_index_) {
+                if (key.find(prefix) == 0) {
+                    for (auto* op : ops) results.push_back(op);
+                }
+            }
+            if (!results.empty()) {
+                // Deduplicate (an operator may appear under multiple keys)
+                std::sort(results.begin(), results.end());
+                results.erase(std::unique(results.begin(), results.end()), results.end());
+                std::sort(results.begin(), results.end(),
+                    [](const Operator* a, const Operator* b) {
+                        return a->success_rate > b->success_rate;
+                    });
+                return results;
+            }
+        }
+
+        // 3. Substring fallback for unusual patterns (legacy compat, still O(N) but rare)
         std::vector<Operator*> results;
         for (auto& [id, op] : operators_) {
             for (const auto& post : op.postconditions) {
@@ -131,7 +169,6 @@ public:
                 }
             }
         }
-        // Sort by success rate descending
         std::sort(results.begin(), results.end(),
             [](const Operator* a, const Operator* b) {
                 return a->success_rate > b->success_rate;
@@ -173,7 +210,10 @@ public:
                 ++it;
             }
         }
-        if (pruned > 0) save_full();
+        if (pruned > 0) {
+            rebuild_postcond_index();
+            save_full();
+        }
         return pruned;
     }
 
@@ -211,7 +251,10 @@ public:
                 ++it;
             }
         }
-        if (purged > 0) save_full();
+        if (purged > 0) {
+            rebuild_postcond_index();
+            save_full();
+        }
         return purged;
     }
 
@@ -239,7 +282,26 @@ private:
     std::string persist_path_;
     std::unordered_map<std::string, Operator> operators_;
     std::unordered_map<std::string, std::string> by_name_;  // name → id
+    std::unordered_map<std::string, std::vector<Operator*>> postcond_index_; // postcondition → operators
     int next_id_ = 1;
+
+    // Rebuild the postcondition inverted index from scratch
+    void rebuild_postcond_index() {
+        postcond_index_.clear();
+        for (auto& [id, op] : operators_) {
+            if (op.postconditions.empty()) continue; // skip invisible operators
+            for (const auto& post : op.postconditions) {
+                postcond_index_[post].push_back(&op);
+            }
+        }
+    }
+
+    // Incrementally add a single operator to the postcondition index
+    void index_operator(Operator& op) {
+        for (const auto& post : op.postconditions) {
+            postcond_index_[post].push_back(&op);
+        }
+    }
 
     void load() {
         std::ifstream f(persist_path_);
@@ -253,7 +315,6 @@ private:
                 if (!op.id.empty()) {
                     operators_[op.id] = op;
                     by_name_[op.name] = op.id;
-                    // Track next_id_
                     if (op.id.substr(0, 3) == "op_") {
                         int num = std::stoi(op.id.substr(3));
                         if (num >= next_id_) next_id_ = num + 1;
@@ -261,6 +322,7 @@ private:
                 }
             } catch (...) {}
         }
+        rebuild_postcond_index();
     }
 
     void save_append(const Operator& op) const {

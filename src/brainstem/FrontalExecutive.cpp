@@ -40,7 +40,8 @@ public:
             "inference_result", "metabolic_alert", "goal_plan",
             "primordial_ready", "dopamine_signal",
             "concept_transfer", "concept_response",
-            "command_validated", "surgery_proposal"
+            "command_validated", "surgery_proposal",
+            "training_complete"
         });
 
         load_system_knowledge();
@@ -69,7 +70,7 @@ public:
                         if (!state.memory_searched && elapsed >= 3) {
                             std::cout << "[EXECUTIVE] Memory recall timeout for CID " << cid << ". Proceeding without context." << std::endl;
                             state.memory_searched = true;
-                            request_thought(cid, "Initial task breakdown for goal: " + state.goal);
+request_thought(cid, "Thought analysis triggered by trajectory recall.");
                         }
                         // Stale goal: no progress for 60 seconds — likely lost message
                         if (elapsed >= 60) {
@@ -136,6 +137,14 @@ public:
                     std::cout << "[EXECUTIVE] System knowledge updated by REM Engine ("
                               << j.value("learned_from", 0) << " traces)." << std::endl;
                 }
+                else if (origin == "rem_engine" && intent == "training_complete") {
+                    std::string model_path = j.value("model_path", "");
+                    std::string type = j.value("type", "model");
+                    finetuned_available = true;
+                    std::cout << "[EXECUTIVE] Fine-tuned model available! "
+                              << type << ": " << model_path
+                              << " — switching inference adapter to 'finetuned'." << std::endl;
+                }
                 else if (origin == "chronos" && intent == "time_pulse") {
                     current_timestamp = j.value("timestamp", "");
                     current_uptime = j.value("uptime_human", "");
@@ -198,7 +207,7 @@ public:
                         handle_critic_feedback(j);
                     } else if (adapter == "nlu_specialist") {
                         start_new_goal(j);
-                    } else if (adapter == "executive" || adapter == "coder" || adapter == "default") {
+                    } else if (adapter == "executive" || adapter == "coder" || adapter == "default" || adapter == "finetuned") {
                         decide_next_step(j);
                     }
                 }
@@ -256,6 +265,7 @@ private:
     bool is_night = false;
     int total_successes = 0;
     static constexpr int REM_TRIGGER_INTERVAL = 5;
+    bool finetuned_available = false; // set true when SynapticController loads a fine-tuned model
 
     // Spike worker management
     int active_workers = 0;
@@ -505,7 +515,7 @@ private:
         // Use LLM with free-form prompt (no JSON grammar, no bash command)
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
-            {"adapter", "default"},
+            {"adapter", finetuned_available ? "finetuned" : "default"},
             {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture that bootstraps from zero knowledge. "
                      "You are a distributed system of C++ lobes communicating via ZeroMQ, with intrinsic motivation, "
                      "neurogenesis, dream sandbox testing, and semantic memory. You run on the user's local machine. "
@@ -577,7 +587,7 @@ private:
                 state.memory_context = "";
         }
 
-        request_thought(cid, "Initial task breakdown for goal: " + state.goal);
+request_thought(cid, "Thought analysis triggered by trajectory recall.");
     }
 
     // Phase 7: Inject trajectory context into goal memory
@@ -1548,9 +1558,13 @@ private:
             source_ctx = get_source_modification_context(state.goal, state.history);
         }
 
+        // Prefer fine-tuned model when available — it has learned from successful executions.
+        // Falls back to "coder" slot (or base model) if no fine-tuning has completed yet.
+        std::string adapter = finetuned_available ? "finetuned" : "coder";
+
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
-            {"adapter", "coder"},
+            {"adapter", adapter},
             {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
             {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture. Your working directory is /home/xenomai/Documents/NeuroSwarm/.\nReply ONLY with compact JSON: {\"thought\":\"brief\",\"command\":\"bash_cmd\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nRules:\n- command MUST be a real, executable bash command. No placeholders like REAL_BASH_CMD.\n- Only access files within the project directory or /tmp/.\n- Never use sudo. Never reference paths outside the project.\n- Keep commands simple and direct.\nExamples:\n{\"thought\":\"list source files\",\"command\":\"find src/ -name '*.cpp'\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"compile\",\"command\":\"cmake --build build -j$(nproc)\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"check status\",\"command\":\"git status\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
              + (system_knowledge.empty() ? "" : system_knowledge + "\n")
@@ -1592,6 +1606,9 @@ private:
 
         // Placeholder/template patterns that LLMs love to hallucinate
         static const std::vector<std::string> blacklist = {
+    "unknown_error";
+    "unknown_error";
+    "unknown_error";
             "/path/to/", "REAL_BASH_CMD", "your_file", "example_",
             "<file>", "<path>", "<command>", "<url>", "<directory>",
             "INSERT_", "TODO_", "${VARIABLE}", "placeholder",
