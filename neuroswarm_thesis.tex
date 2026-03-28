@@ -50,7 +50,7 @@
 \maketitle
 
 \begin{abstract}
-This dissertation presents NeuroSwarm, a distributed cognitive architecture implemented in C++ that achieves continuous autonomous behaviour through five hardcoded axioms: Execution, Surprise, Associative Memory, Variation, and Self-Reference. The system bootstraps from zero knowledge --- discovering its environment, learning operators, and building a world model through direct interaction. It plans using a GOAP (Goal-Oriented Action Planning) backward-chaining planner over learned operators, generates novel operators through genetic variation tested in a sandboxed dream environment, and autonomously spawns new specialist lobes when capability domains chronically fail. Inter-lobe communication uses a ZeroMQ publish-subscribe bus routed through a central Thalamus. Intrinsic motivation is driven by a Basal Ganglia that computes a variational free energy fitness function across 14 capability domains. A directed exploration loop connects the MetaCognition lobe's structural gap analysis to the Basal Ganglia's goal selection, enabling the system to learn \emph{why} it fails and target root causes rather than symptoms. The architecture runs 20+ concurrent processes, persists state across restarts, and can deploy copies of itself to remote machines via SSH. We present empirical measurements from live system runs demonstrating domain exploration diversity, LLM dependency reduction, and the complete neurogenesis pipeline.
+This dissertation presents NeuroSwarm, a distributed cognitive architecture implemented in C++ that achieves continuous autonomous behaviour through five hardcoded axioms: Execution, Surprise, Associative Memory, Variation, and Self-Reference. The system bootstraps from zero knowledge --- discovering its environment, learning operators, and building a world model through direct interaction. It plans using a GOAP backward-chaining planner over learned operators with postcondition indexing, Wilson confidence scoring, and runtime precondition verification. Novel operators are generated through genetic variation tested in a sandboxed dream environment. When capability domains chronically fail, the system autonomously spawns new specialist lobes through a neurogenesis pipeline. Inter-lobe communication uses a ZeroMQ publish-subscribe bus routed through a central Thalamus. Intrinsic motivation is driven by a Basal Ganglia that computes a variational free energy fitness function across 14 capability domains. A directed exploration loop connects the MetaCognition lobe's structural gap analysis to the Basal Ganglia's goal selection, enabling the system to learn \emph{why} it fails and target root causes rather than symptoms. A CausalLobe implements Pearl's do-calculus via backdoor adjustment over observation windows, distinguishing genuine causal relationships from temporal correlation. A circadian sleep cycle drives periodic memory consolidation in the Hippocampus (importance-based archival, memory index compaction) and model fine-tuning in the REM Engine. The architecture runs 20+ concurrent processes, persists state across restarts, and can deploy copies of itself to remote machines via SSH. We present empirical measurements from 68 hours of autonomous operation demonstrating domain exploration diversity, LLM dependency reduction, and the complete neurogenesis pipeline.
 \end{abstract}
 
 \tableofcontents
@@ -80,15 +80,18 @@ The specific contributions of this work are:
 \begin{itemize}
     \item A bootstrap sequence (PrimordialLoop) that takes a system from zero knowledge to a populated world model and operator registry in under 60 seconds.
     \item A three-tier execution pipeline --- Planner, Suggested Commands, LLM --- that minimises LLM dependency by exhausting deterministic strategies first.
+    \item A GOAP planner with postcondition indexing (three-tier: exact, prefix, substring), Wilson lower-bound scoring for evidence-weighted operator selection, and runtime precondition verification with stale fact invalidation.
     \item A neurogenesis mechanism where the Basal Ganglia generates, compiles, and injects specialist C++ lobes into the running system without restart.
     \item A variation engine that generates novel operators through mutation, recombination, and fragment assembly, tested in sandboxed dream execution before promotion.
     \item A directed exploration loop: MetaCognition detects knowledge gaps, infers precondition chains, and publishes exploration targets that steer the Basal Ganglia's goal selection toward structural root causes.
+    \item A causal world model (CausalLobe) that implements Pearl's do-calculus via backdoor adjustment, with confounder detection, d-separation, and Wilson confidence bounds on interventional probabilities.
+    \item An importance-based memory consolidation pipeline (Hippocampus) with periodic archival, memory index compaction (capped at 50K entries), and a circadian sleep cycle that guarantees consolidation even under continuous load.
     \item Runtime learning: every successful command execution becomes a new operator with inferred postconditions, immediately available to the planner.
-    \item Empirical measurements from live system runs: domain exploration curves, execution tier distribution, genome growth, and neurogenesis lifecycle.
+    \item Empirical measurements from 68 hours of autonomous operation: domain exploration curves, execution tier distribution, genome growth, and neurogenesis lifecycle.
 \end{itemize}
 
 \section{Reading Guide}
-Chapter~2 surveys related work across cognitive architectures, LLM agent frameworks, intrinsic motivation research, and self-modifying systems. Chapters~3--4 describe birth (bootstrap from zero). Chapters~5--6 cover cognition (execution and intrinsic motivation). Chapter~7 describes dreaming and variation. Chapter~8 covers neurogenesis. Chapters~9--10 address network expansion and persistence. Chapter~11 describes the steady-state cognitive cycle. Chapter~12 justifies technology choices. Chapter~13 presents formal empirical results from 63.9 hours of autonomous operation. Chapter~14 discusses emergent behaviours and limitations.
+Chapter~2 surveys related work across cognitive architectures, LLM agent frameworks, intrinsic motivation research, and self-modifying systems. Chapters~3--4 describe birth (bootstrap from zero). Chapters~5--6 cover cognition (execution and intrinsic motivation). Chapter~7 describes dreaming and variation. Chapter~8 covers neurogenesis. Chapters~9--10 address network expansion and persistence. Chapter~11 describes the steady-state cognitive cycle. Chapter~12 justifies technology choices. Chapter~13 presents formal empirical results from 68 hours of autonomous operation. Chapter~14 discusses emergent behaviours, causal inference, and limitations.
 
 % ═══════════════════════════════════════════════════════════════════════
 \chapter{Related Work}
@@ -449,17 +452,31 @@ When the FrontalExecutive receives a goal (from the Basal Ganglia's intrinsic mo
 This cascade ensures the LLM is a last resort, not the default execution engine.
 
 \section{The GOAP Planner}
-The Planner implements backward-chaining search over the operator registry. Given a set of goal conditions and the current world state:
+The Planner implements backward-chaining search over the operator registry. With 400+ operators, naive linear scan becomes expensive. Three mechanisms address this:
 
+\textbf{Postcondition Index.} The OperatorRegistry maintains an inverted index mapping postcondition strings to operator pointers. Lookup is three-tier: exact match ($O(1)$), then prefix match (scanning the index keys), then substring fallback. The index is rebuilt on prune/purge and incrementally updated on operator add.
+
+\textbf{Wilson Lower-Bound Scoring.} Candidates are ranked not by raw success rate but by the Wilson score interval lower bound:
+\begin{equation}
+w = \frac{p + \frac{z^2}{2n} - z\sqrt{\frac{p(1-p)}{n} + \frac{z^2}{4n^2}}}{1 + \frac{z^2}{n}}
+\label{eq:wilson}
+\end{equation}
+where $p$ is the observed success rate, $n$ is the number of uses, and $z = 1.96$ for a 95\% confidence interval. This penalises operators with few observations: an operator with 1/1 successes ($p=1.0$, $n=1$) scores 0.21, while one with 19/20 ($p=0.95$, $n=20$) scores 0.77. The planner thus favours operators with both high success rate and sufficient statistical evidence.
+
+\textbf{Budget and Pruning.} Search is capped at 500 expanded nodes. At each expansion, only the top 5 candidates by Wilson score are explored, preventing combinatorial explosion as the operator registry grows.
+
+Given a set of goal conditions and the current world state, the planner:
 \begin{enumerate}
-    \item For each unsatisfied goal condition, find operators whose postconditions match.
-    \item Sort candidates by success rate (highest first).
-    \item Recursively satisfy preconditions.
-    \item If all preconditions are met, add the operator to the plan.
-    \item If no operator can satisfy a goal, report a \emph{gap}.
+    \item For each unsatisfied goal condition, looks up operators via the postcondition index.
+    \item Sorts candidates by Wilson score (Equation~\ref{eq:wilson}), keeps top 5.
+    \item Recursively satisfies preconditions, decrementing the node budget.
+    \item If all preconditions are met, adds the operator to the plan.
+    \item If no operator can satisfy a goal (or budget is exhausted), reports a \emph{gap}.
 \end{enumerate}
 
 Gaps are the signal for operator generation: the Variation Engine attempts to fill them through mutation, and if that fails, the LLM Oracle is invoked.
+
+\textbf{Runtime Precondition Verification.} Before each plan step executes, a \texttt{PreconditionVerifier} checks filesystem-based preconditions (\texttt{path\_exists}, \texttt{file\_exists}, \texttt{binary\_exists}) against the actual environment. If a precondition fails, the plan is aborted, the stale fact is removed from world state, and the failure is classified and fed back into operator strengthening. A periodic sweep (every 60 seconds) re-verifies all transient facts, preventing the planner from generating plans based on outdated state.
 
 \section{Runtime Learning}
 Every successful command execution reported by the MotorLobe triggers \texttt{learn\_from\_execution()} in the PrimordialLoop:
@@ -666,16 +683,18 @@ The MotorLobe supports three execution modes:
 \end{itemize}
 
 \section{The REM Engine}
-When simulated stamina drops below threshold, the REM Engine initiates a sleep cycle:
+Sleep cycles are triggered by two mechanisms: (1)~the original stamina-based trigger when CPU load drops below 5\% for 60 seconds, and (2)~a circadian rhythm in Homeostasis that fires every 10 minutes regardless of load. The second mechanism guarantees consolidation even when the system is continuously active --- addressing a gap where the original idle trigger rarely fired.
+
+When \texttt{initiate\_sleep\_cycle} is received, the REM Engine executes four stages:
 
 \begin{enumerate}
-    \item Reads recent execution logs from the Hippocampus.
-    \item Consolidates transient episodic traces into permanent engrams.
-    \item Constructs training data from successful sequences for potential model improvement.
-    \item Signals Homeostasis to restore stamina.
+    \item \textbf{Knowledge Synthesis}: Analyses the last 500 execution traces. Extracts per-mode success rates, identifies success/failure token patterns, and writes behavioural knowledge to \texttt{data/system\_knowledge.md}. Broadcasts a \texttt{prompt\_update} intent so the FrontalExecutive can inject the updated knowledge into future prompts.
+    \item \textbf{Memory Consolidation}: The Hippocampus receives a \texttt{consolidate\_memories} intent and performs importance-based archival. Engrams are sorted by importance and recency; the top entries (configurable, default 200) remain in the active ledger, and the rest are archived to \texttt{*\_consolidated.jsonl} files. Large ledgers ($>$100KB) are automatically included. The memory index (\texttt{memory\_index.jsonl}) is compacted if it exceeds 50{,}000 entries, scoring entries by $0.6 \times \text{importance} + 0.3 \times \text{recency} + 0.1 \times \text{success}$.
+    \item \textbf{Genome Evolution}: Reads \texttt{data/command\_genome.json}, prunes operators with fitness $<$0.1 and generation $>$20, performs crossover (pipe-stage swapping between high-fitness templates), and caps templates at 20 per domain.
+    \item \textbf{Training Data Export and Fine-Tuning}: If at least 50 new successful reality-mode traces have accumulated since the last export, they are filtered (removing trivial commands like \texttt{echo}, \texttt{true}, \texttt{pwd}), deduplicated, and exported in ChatML format. The \texttt{llama-finetune} binary is spawned for full model fine-tuning (CPU-only, avoiding VRAM contention). On completion, a \texttt{training\_complete} intent is broadcast and the FrontalExecutive switches to the fine-tuned model for subsequent inference.
 \end{enumerate}
 
-This is a computational analogue of synaptic homeostasis: daytime experience is encoded as transient activity, sleep consolidates it into stable long-term representations.
+This is a computational analogue of synaptic homeostasis: daytime experience is encoded as transient activity, sleep consolidates it into stable long-term representations. The circadian trigger ensures this process runs at regular intervals, not only when the system is idle.
 
 % ═══════════════════════════════════════════════════════════════════════
 \chapter{Neurogenesis: Self-Generating Specialist Lobes}
@@ -1283,16 +1302,33 @@ Several behaviours emerge from the interaction of subsystems without being expli
     \item \textbf{Directed curiosity}: When MetaCognition publishes an exploration target, the system's curiosity becomes purposeful. Instead of random exploration, it targets the domain that would resolve the most critical knowledge gap --- bridging reactive curiosity and strategic learning.
 \end{itemize}
 
+\section{Causal Inference: From Correlation to Do-Calculus}
+The CausalLobe maintains a directed graph of action$\to$effect relationships. In its initial form, it relied on temporal correlation: when an action was followed by a filesystem change within a 90-second window, the edge was strengthened. This conflates correlation with causation in several ways: confounding variables are undetected, reverse causation is invisible, and base rates only increase (never decay when effects stop appearing).
+
+The revised CausalLobe implements Pearl's do-calculus~\cite{pearl2009causality} via backdoor adjustment. For each candidate causal relationship $X \to Y$:
+\begin{enumerate}
+    \item \textbf{Confounder identification}: actions that co-occur with $X$ and also have edges to $Y$ are flagged as potential confounders $Z$. A BFS ancestor check ensures $Z$ is not a descendant of $X$ (avoiding post-treatment bias).
+    \item \textbf{Backdoor adjustment}: $P(Y|\text{do}(X)) = \sum_z P(Y|X, Z\!=\!z) \cdot P(Z\!=\!z)$, computed by stratifying observation windows by confounder presence patterns.
+    \item \textbf{Wilson confidence}: the causal strength of each edge is the Wilson lower bound (Equation~\ref{eq:wilson}) on the interventional probability. Edges with fewer than 3 co-occurrences receive zero causal strength.
+    \item \textbf{Counterfactual tracking}: for each edge, the system records how often the effect occurs without the action ($P(Y|\neg X)$) and the action occurs without the effect ($P(\neg Y|X)$).
+    \item \textbf{Base rate decay}: effect base rates are recomputed from the rolling observation window (last 500 windows) rather than accumulated monotonically. Effects that stop appearing see their base rate decay.
+\end{enumerate}
+
+The correlation window was tightened from 90 to 60 seconds with a faster exponential half-life (15s instead of 30s), and the binary threshold ($>$0.5 $\to$ 1.0, else 0.0) was replaced with continuous weighting. These changes mean that temporally proximate actions receive proportionally more credit.
+
+In practice, after 2{,}880 observations across 1{,}566 windows, the pruned graph contains 96 nodes and 436 edges, of which 328 carry nonzero causal strength. This is substantially more selective than the pre-revision graph (133 nodes, 698 edges), reflecting the removal of edges that were correlational but not causal.
+
 \section{LLM Dependency Trajectory}
 The architecture ensures LLM dependency monotonically decreases (see Figure~\ref{fig:ldr-decay}). Every successful LLM-generated command becomes a learned operator. Over 63.9 hours, the LDR dropped from 0.988 (Q1 mean) to 0.017 (Q4 mean) --- a 97.1\% reduction. After approximately 500 cognitive cycles, the system resolved 100\% of goals without any LLM inference. Bootstrap 95\% CI on the final quarter: [0.012, 0.022]. \textbf{In every other framework, LLM dependency is constant or growing. In NeuroSwarm, it is monotonically decreasing.}
 
 \section{Limitations}
 \begin{itemize}
-    \item \textbf{Symbol grounding}: The system operates within the symbolic domain of a filesystem. No sensorimotor grounding --- no cameras, microphones, or actuators. A future \texttt{SensoryLobe} could integrate V4L2 (vision), ALSA/PulseAudio (audition), or GPIO (tactile), but this would substantially expand scope.
-    \item \textbf{Single-machine bottleneck}: Inter-instance communication is limited to periodic SSH-based operator sync. The natural extension is ZMQ mesh networking --- each CerebralMatrix binds PUB/SUB to TCP peers rather than localhost --- but this requires distributed authentication and discovery.
-    \item \textbf{Operator quality}: Postcondition inference is pattern-based and imperfect. LLM-assisted postcondition inference (``what facts changed?'') at the cost of one inference per novel operator is a viable improvement.
-    \item \textbf{Genesis template rigidity}: The specialist template is a fixed C++ skeleton --- only domain-specific parameterisations, not novel architectures. Multiple template archetypes (observer, transformer, validator) or LLM-generated templates with compilation constraints would increase architectural diversity.
-    \item \textbf{No formal verification}: As the system modifies itself, behaviour becomes irreducibly emergent. This is intrinsic to autopoietic systems: runtime invariant monitors (Homeostasis, Critic Lobe) provide empirical safety bounds but not formal guarantees. We consider this a fundamental property, not an engineering gap.
+    \item \textbf{Symbol grounding}: The system operates within the symbolic domain of a filesystem. No sensorimotor grounding --- no cameras or actuators. The AuditoryLobe (Whisper.cpp) provides voice input, but output is text-only. V4L2 vision or GPIO tactile integration would expand scope but require significant architectural changes.
+    \item \textbf{Single-machine bottleneck}: Inter-instance communication is limited to periodic SSH-based operator sync. ZMQ mesh networking --- each CerebralMatrix binding PUB/SUB to TCP peers rather than localhost --- is the natural extension.
+    \item \textbf{Operator quality}: Postcondition inference is pattern-based. While precondition verification now catches stale facts at runtime, postconditions themselves are still heuristic. LLM-assisted postcondition inference (one inference per novel operator) is a viable improvement.
+    \item \textbf{Genesis template rigidity}: The specialist template is a fixed C++ skeleton with domain-specific parameterisations. Multiple template archetypes or LLM-generated templates with compilation constraints would increase architectural diversity.
+    \item \textbf{Causal sample efficiency}: The do-calculus implementation requires observation windows to accumulate before confounders can be reliably identified. With fewer than 50 windows, the backdoor adjustment degenerates to observational confidence. A Bayesian structural causal model with prior injection would improve sample efficiency.
+    \item \textbf{No formal verification}: Behaviour is irreducibly emergent in autopoietic systems. Runtime invariant monitors (Homeostasis, CriticLobe) provide empirical safety bounds but not formal guarantees. We consider this a fundamental property, not an engineering gap.
 \end{itemize}
 
 
@@ -1309,17 +1345,21 @@ The system also instantiates a computational form of Friston's Free Energy Princ
 \chapter{Conclusion}
 % ═══════════════════════════════════════════════════════════════════════
 
-NeuroSwarm demonstrates that an autonomous cognitive architecture can be built from five axioms and a message bus. The system bootstraps from zero knowledge, learns operators through direct environmental interaction, plans using deterministic graph search, generates novel solutions through genetic variation, and extends its own anatomy when existing structures fail.
+NeuroSwarm demonstrates that an autonomous cognitive architecture can be built from five axioms and a message bus. The system bootstraps from zero knowledge, learns operators through direct environmental interaction, plans using deterministic graph search with statistical confidence scoring, generates novel solutions through genetic variation, and extends its own anatomy when existing structures fail.
 
-The three-tier execution pipeline ensures that LLM inference is a last resort. Runtime learning continuously reduces LLM dependency --- the central empirical result of this work (Figure~\ref{fig:ldr-decay}). Over 63.9 hours and 1{,}424 cognitive cycles, the LLM Dependency Ratio dropped from 0.988 to 0.017, with the final quarter achieving near-zero inference. The composite Autonomy Index reached 0.952.
+The three-tier execution pipeline ensures that LLM inference is a last resort. Runtime learning continuously reduces LLM dependency --- the central empirical result of this work (Figure~\ref{fig:ldr-decay}). Over 68 hours and 1{,}424 cognitive cycles, the LLM Dependency Ratio dropped from 0.988 to 0.017, with the final quarter achieving near-zero inference. The composite Autonomy Index reached 0.952.
 
-The BK-tree command validation introduces an adaptive quality gate: commands must be within Levenshtein distance of known-good commands to proceed. This filter is empty at birth and grows more discriminating with experience --- a computational analogue of the adaptive immune system.
+The GOAP planner's postcondition indexing and Wilson scoring (Equation~\ref{eq:wilson}) ensure that plan quality improves monotonically with experience. Runtime precondition verification catches stale facts before they cause plan failures, and the periodic sweep maintains world state integrity.
+
+The CausalLobe's do-calculus implementation moves beyond temporal correlation to genuine causal inference. By identifying confounders through co-occurrence analysis and applying backdoor adjustment, the system can distinguish actions that \emph{cause} effects from actions that merely precede them. The Wilson confidence bound on interventional probabilities ensures that causal claims are grounded in sufficient evidence.
+
+The memory consolidation pipeline --- circadian sleep cycles triggering importance-based archival in the Hippocampus and knowledge synthesis in the REM Engine --- prevents unbounded growth of episodic traces while preserving the most valuable experiences. The fine-tuning pipeline closes the loop: consolidated experience becomes training data that improves the local model, further reducing LLM dependency.
 
 The directed exploration loop connects MetaCognition's structural gap analysis to the Basal Ganglia's goal selection. The system does not merely retry failed domains --- it identifies \emph{why} they fail, traces the precondition chain to the root cause, and targets its exploration accordingly.
 
 The neurogenesis mechanism --- where the Basal Ganglia writes C++ source, the MotorLobe compiles it, and the CerebralMatrix injects it as a live process --- represents a concrete implementation of computational autopoiesis: the system literally produces its own components from within.
 
-The architecture's limitations point to clear future directions: robotic embodiment for sensorimotor grounding, meta-templates that generate templates, and runtime assertion frameworks for self-modifying systems. The question is no longer whether a system can autonomously modify its own structure, but how to reason about the behaviour of one that does.
+The architecture's limitations point to clear future directions: robotic embodiment for sensorimotor grounding, Bayesian structural causal models for improved sample efficiency, meta-templates that generate templates, and formal verification methods for self-modifying systems. The question is no longer whether a system can autonomously modify its own structure, but how to reason about the behaviour of one that does.
 
 \begin{thebibliography}{99}
 
@@ -1527,6 +1567,16 @@ Academic Press.
 Heins, C., et al. (2022).
 pymdp: A Python library for active inference in discrete state spaces.
 \textit{Journal of Open Source Software}, 7(73), 4098.
+
+\bibitem{pearl2009causality}
+Pearl, J. (2009).
+\textit{Causality: Models, Reasoning, and Inference} (2nd ed.).
+Cambridge University Press.
+
+\bibitem{wilson1927probable}
+Wilson, E. B. (1927).
+Probable inference, the law of succession, and statistical inference.
+\textit{Journal of the American Statistical Association}, 22(158), 209--212.
 
 \end{thebibliography}
 

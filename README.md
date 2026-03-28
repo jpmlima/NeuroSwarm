@@ -1,7 +1,7 @@
 # NeuroSwarm: Distributed Cognitive Architecture
 
 <div align="center">
-  <img src="https://img.shields.io/badge/Version-3.0.0-blue?style=for-the-badge" alt="v3.0.0">
+  <img src="https://img.shields.io/badge/Version-3.1.0-blue?style=for-the-badge" alt="v3.1.0">
   <img src="https://img.shields.io/badge/Architecture-Distributed_Cortical_Matrix-green?style=for-the-badge" alt="Architecture">
   <img src="https://img.shields.io/badge/Language-C%2B%2B17-orange?style=for-the-badge" alt="C++17">
   <img src="https://img.shields.io/badge/Inference-Qwen2.5--7B_Q4__K__M-purple?style=for-the-badge" alt="Qwen2.5-7B">
@@ -22,16 +22,16 @@
 
 ## I. Core Concept
 
-NeuroSwarm is a **computational organism** built on five hardcoded axioms: **Execution** (act and observe), **Surprise** (prediction error as drive), **Associative Memory** (store state-action pairs), **Variation** (blind mutation of learned operators), and **Self-Reference** (maintain a boundary between self and world). Everything beyond these axioms — sensors, tools, specialist lobes, world knowledge — is procedurally generated through experience.
+NeuroSwarm is a computational organism built on five hardcoded axioms: **Execution** (act and observe), **Surprise** (prediction error as drive), **Associative Memory** (store state-action pairs), **Variation** (blind mutation of learned operators), and **Self-Reference** (maintain a boundary between self and world). Everything beyond these axioms — sensors, tools, specialist lobes, world knowledge — emerges through experience.
 
-The system starts knowing **nothing** about its host. It discovers users, filesystems, binaries, network topology, and programming languages through direct probing (PrimordialLoop bootstrap). It plans using a **GOAP backward-chaining planner** over learned operators, generates novel operators through **genetic variation** tested in a sandboxed dream environment, and autonomously **spawns new specialist lobes** when capability domains chronically fail.
+The system starts knowing nothing about its host. It discovers users, filesystems, binaries, network topology, and programming languages through direct probing (PrimordialLoop bootstrap). It plans using a GOAP backward-chaining planner over learned operators, generates novel operators through genetic variation tested in a sandboxed dream environment, and autonomously spawns new specialist lobes when capability domains chronically fail.
 
-Each *lobe* is an independent OS process with a precisely scoped cognitive function. Communication is exclusively via ZeroMQ PUB/SUB. No lobe has visibility into the internals of another — only the message schema is shared. This yields a system that is:
+Each lobe is an independent OS process with a precisely scoped cognitive function. Communication is exclusively via ZeroMQ PUB/SUB through a central Thalamus relay. No lobe has visibility into the internals of another — only the message schema is shared. This yields a system that is:
 
 - **Self-bootstrapping** — discovers its environment from zero, persists state, runs incremental bootstrap on restart
-- **Self-planning** — GOAP planner over learned operators, no LLM needed for known goals
+- **Self-planning** — GOAP planner over learned operators with postcondition indexing, Wilson scoring, and runtime precondition verification
 - **Self-extending** — neurogenesis pipeline generates, compiles, and injects specialist C++ lobes at runtime
-- **Self-healing** — crash detection, exponential backoff restart, domain resolution before neurogenesis
+- **Self-healing** — crash detection, exponential backoff restart, stale fact invalidation, circadian memory consolidation
 - **Observable** — all inter-lobe state is visible on the bus and rendered on a real-time dashboard
 - **Distributed** — deploys copies of itself to remote machines via SSH, synchronises learned operators
 
@@ -39,93 +39,168 @@ Each *lobe* is an independent OS process with a precisely scoped cognitive funct
 
 ## II. Architecture
 
-```mermaid
-graph TD
-    subgraph KERNEL ["Autopoiesis Kernel"]
-        PL[PrimordialLoop\nBootstrap · GOAP Planner\nOperator Registry · Variation · Surprise]
-    end
+The system runs 20+ concurrent processes. Rather than one monolithic diagram, the architecture is presented in four views: process topology, cognitive pipeline, learning loop, and memory hierarchy.
 
-    subgraph SENSORY ["Sensory Input"]
-        UI[BrocaChat — Terminal I/O]
-        VL[Visual Lobe — Filesystem Watcher]
-        AL[Auditory Lobe — VAD / Whisper.cpp]
-    end
+### Process Topology
 
-    subgraph BUS ["Neural Bus"]
-        TH{THALAMUS\nZMQ XPUB/XSUB\ntcp:5555 ↔ tcp:5556\nBridge mode for multi-node}
-    end
+All lobes connect to the Thalamus, a ZeroMQ XPUB/XSUB relay on tcp:5555/5556. CerebralMatrix fork-execs every process at startup and monitors them via `waitpid()`.
 
-    subgraph COGNITION ["Cognitive Core"]
-        WN[Wernicke — NLU]
-        FE[Frontal Executive\n3-Tier: Planner → Suggested → LLM\nRLAIF chain tracking]
-        CL[Critic Lobe — Adversarial Validation]
-    end
+```
+                         ┌─────────────────────────────────┐
+                         │        CerebralMatrix           │
+                         │   fork/exec · crash recovery    │
+                         │   neurogenesis injection        │
+                         └──────────────┬──────────────────┘
+                                        │ manages
+        ┌───────────────────────────────┼───────────────────────────────┐
+        │               ┌──────────────┐│┌──────────────┐               │
+        │    SENSORY     │  BrocaChat   │││ Visual Lobe  │  SENSORY     │
+        │    INPUT       │  terminal IO │││ fs watcher   │  INPUT       │
+        │                │  Auditory    │││              │               │
+        │                └──────┬───────┘│└──────┬───────┘              │
+        │                       │        │       │                      │
+        │              ┌────────▼────────▼───────▼────────┐            │
+        │              │                                   │            │
+        │              │    THALAMUS — Neural Bus           │            │
+        │              │    ZMQ XPUB/XSUB relay            │            │
+        │              │    topic-filtered routing          │            │
+        │              │                                   │            │
+        │              └──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬────┘            │
+        │                 │  │  │  │  │  │  │  │  │  │                 │
+┌───────▼──┐ ┌──▼──┐ ┌──▼──┐ ┌▼──┐ ┌▼──┐ ┌▼──┐ ┌▼──┐ ┌──▼──┐ ┌──▼──┐
+│Primordial│ │Front│ │Motor│ │Cri│ │Hip│ │REM│ │BG │ │Meta │ │Home │
+│  Loop    │ │ Exec│ │Lobe │ │tic│ │po │ │Eng│ │   │ │ Cog │ │ost. │
+│bootstrap │ │3-tier│ │exec │ │   │ │   │ │   │ │   │ │     │ │     │
+│GOAP plan │ │pipel.│ │modes│ │3T │ │sem│ │sle│ │fit│ │gaps │ │tele│
+│operators │ │goals │ │     │ │val│ │mem│ │ep │ │nes│ │prec│ │metr│
+└──────────┘ └─────┘ └─────┘ └───┘ └───┘ └───┘ └───┘ └─────┘ └─────┘
+                ┌──▼──┐ ┌──▼──┐ ┌──▼──┐ ┌──▼──┐ ┌──▼──┐ ┌──▼──┐
+                │Wern.│ │Amyg.│ │Causal│ │Conc.│ │Chron│ │Stats│
+                │NLU  │ │prio │ │world │ │clust│ │time │ │metr.│
+                │     │ │gate │ │model │ │abs. │ │pulse│ │     │
+                └─────┘ └─────┘ └──────┘ └─────┘ └─────┘ └─────┘
 
-    subgraph MEMORY ["Memory and Learning"]
-        HP[Hippocampus — Semantic RAG\nNomic-Embed · Cosine Similarity]
-        REM[REM Engine — Sleep Consolidation\nEngram Analysis → LoRA Fine-Tune]
-    end
+              ┌──────┐ ┌──────┐
+              │Spike │ │Speci-│   Ephemeral processes:
+              │Worker│ │alist │   fork+exec'd on demand,
+              │(×N)  │ │lobes │   auto-terminate on completion
+              └──────┘ └──────┘
+```
 
-    subgraph EXECUTION ["Execution"]
-        MT[Motor Lobe — OS Execution\nReality · Dream · Neuro-Surgery]
-        SW[Spike Workers — Ephemeral\nfork+exec per goal]
-    end
+### Cognitive Pipeline
 
-    subgraph MOTIVATION ["Motivation and Evolution"]
-        BG[BasalGanglia — Intrinsic Motivation\nFitness F · Dopamine · RLAIF\nGenome · BK-tree Validation\nNeurogenesis · Lateral Inhibition]
-    end
+A single goal passes through this pipeline. The three-tier execution strategy ensures the LLM is a last resort.
 
-    subgraph REPRESENTATION ["Internal Representations"]
-        CX[ConceptLobe — Concept Space\nOnline Clustering · Abstraction\nPattern Extraction · Transfer]
-        CA[CausalLobe — World Model\nTemporal Correlation · Bayesian\nCausal Lift · Prediction]
-    end
+```
+ ┌─────────────┐     ┌──────────────────────────────────────────────────────┐
+ │ BasalGanglia │     │           FrontalExecutive — 3-Tier Pipeline         │
+ │              │     │                                                      │
+ │ F(d) fitness │────▶│  Tier 1: GOAP Planner                               │
+ │ domain select│     │   postcondition index → backward chain → plan steps  │
+ │ dopamine sig.│     │   PreconditionVerifier checks each step at runtime   │
+ └──────────────┘     │                                                      │
+                      │  Tier 2: Suggested Commands                          │
+                      │   domain-specific templates from command genome       │
+                      │                                                      │
+                      │  Tier 3: LLM Oracle                                  │
+                      │   structured prompt → Qwen2.5-7B → GBNF grammar     │
+                      └─────────────────────┬────────────────────────────────┘
+                                            │
+                                            ▼
+                      ┌──────────────────────────────────────────────────────┐
+                      │              Validation Gate                          │
+                      │                                                      │
+                      │  BK-tree fuzzy match (Levenshtein to known-good)     │
+                      │  CriticLobe 3-tier: blacklist → scope → red-team LLM │
+                      └─────────────────────┬────────────────────────────────┘
+                                            │
+                           ┌────────────────┼────────────────┐
+                           ▼                ▼                ▼
+                      ┌─────────┐    ┌───────────┐    ┌───────────┐
+                      │ REALITY │    │   DREAM   │    │  SURGERY  │
+                      │ execute │    │ sandboxed │    │ self-mod  │
+                      │ observe │    │ /tmp iso. │    │ src patch │
+                      └────┬────┘    └─────┬─────┘    └─────┬─────┘
+                           │               │                │
+                           └───────────────┼────────────────┘
+                                           ▼
+                                  ┌─────────────────┐
+                                  │ execution_result │
+                                  │ → learn operator │
+                                  │ → update model   │
+                                  │ → store engram   │
+                                  └─────────────────┘
+```
 
-    subgraph AUTONOMIC ["Autonomic Regulation"]
-        HM[Homeostasis — Telemetry · Stamina]
-        MC[MetaCognition — Knowledge Gaps\nError Classification · Preconditions]
-        CH[Chronos — Temporal Awareness]
-        ST[Statistics — Metrics Aggregation]
-    end
+### Learning Loop
 
-    subgraph OBSERVE ["Observability"]
-        VZ[Visualizer — 2D Dashboard\nCognitive Pipeline Indicator\nport 8080]
-    end
+Every execution feeds back into the system, closing a loop that makes each cycle more capable than the last.
 
-    PL -->|primordial_ready| TH
-    PL -->|goal_plan| FE
-    UI --> TH
-    VL --> TH
-    AL --> TH
-    TH <--> WN
-    TH <--> FE
-    FE -->|goal_request| PL
-    FE --> CL --> FE
-    FE --> MT --> FE
-    FE -->|rlaif_reinforce| BG
-    FE -->|validate_command| BG
-    FE -.->|fork+exec| SW
-    HP <--> FE
-    REM --> FE
-    BG -->|intrinsic_goal| FE
-    BG -->|dopamine_signal| FE
-    BG -->|domain_resolve_request| PL
-    BG -->|genesis_request| MT
-    BG -->|lobe_terminate| TH
-    HM --> BG
-    HM --> FE
-    MC --> TH
-    CH --> TH
-    ST --> TH
-    TH --> VZ
-    TH --> BG
-    MT -->|execution_result| PL
-    MT -->|execution_result| CX
-    MT -->|execution_result| CA
-    VL -->|visual_stimulus| CA
-    CA -->|causal_prediction| FE
-    CA -->|causal_update| TH
-    CX -->|concept_update| TH
-    CX -->|concept_response| FE
+```
+     ┌──────────────────────────────────────────────────────────────────┐
+     │                                                                  │
+     │   ┌────────────┐    ┌────────────┐    ┌────────────────────┐    │
+     │   │   EXECUTE   │───▶│  OBSERVE   │───▶│     LEARN          │    │
+     │   │  MotorLobe  │    │ exit code  │    │ new operator with  │    │
+     │   │  runs cmd   │    │ output     │    │ postconditions     │    │
+     │   └────────────┘    │ fs changes │    │ (inferred from cmd │    │
+     │                      └────────────┘    │  pattern matching) │    │
+     │                                        └─────────┬──────────┘    │
+     │                                                  │               │
+     │   ┌────────────┐    ┌────────────┐    ┌──────────▼─────────┐    │
+     │   │   SELECT    │◀───│    PLAN    │◀───│  OPERATOR REGISTRY │    │
+     │   │ BasalGanglia│    │   GOAP     │    │  postcond index    │    │
+     │   │ F(d) picks  │    │  backward  │    │  Wilson scoring    │    │
+     │   │ next domain │    │  chain     │    │  ~400 operators    │    │
+     │   └────────────┘    └────────────┘    └────────────────────┘    │
+     │         │                                       ▲               │
+     │         │           ┌────────────┐              │               │
+     │         └──────────▶│  VARIATION  │─────────────┘               │
+     │                     │ mutate      │  dream-tested               │
+     │                     │ recombine   │  candidates promoted        │
+     │                     │ assemble    │  to operator registry       │
+     │                     └────────────┘                              │
+     └──────────────────────────────────────────────────────────────────┘
+```
+
+### Memory Hierarchy
+
+Three memory systems with distinct timescales, unified by the circadian sleep cycle.
+
+```
+ SHORT-TERM                    LONG-TERM                     PROCEDURAL
+ (per-goal, seconds)           (indexed, persistent)         (operators, permanent)
+ ┌──────────────────┐          ┌──────────────────┐          ┌──────────────────┐
+ │ Hippocampus      │          │ Hippocampus      │          │ OperatorRegistry │
+ │ Per-CID ledgers  │ ──────▶ │ memory_index     │          │ operators.jsonl  │
+ │ raw engrams      │ consol. │ 768-dim embeddings│          │ preconditions    │
+ │                  │         │ cosine similarity │          │ postconditions   │
+ └──────────────────┘          │ importance-based  │          │ success rate     │
+                               │ eviction (50K cap)│          │ Wilson scoring   │
+  CAUSAL                       └──────────────────┘          └──────────────────┘
+ ┌──────────────────┐                    │                           │
+ │ CausalLobe       │                    ▼                           │
+ │ do-calculus DAG  │          ┌──────────────────┐                  │
+ │ P(Y|do(X))      │          │ REM Engine        │                  │
+ │ backdoor adjust. │          │ sleep consolidation│                 │
+ │ confounder detect│          │ knowledge synthesis│                 │
+ │ Wilson strength  │          │ model fine-tuning  │                 │
+ └──────────────────┘          └──────────────────┘                  │
+                                        │                            │
+  WORLD STATE                           │ training data              │
+ ┌──────────────────┐                   ▼                            │
+ │ PrimordialLoop   │          ┌──────────────────┐                  │
+ │ world_state.json │          │ Fine-tuned Model  │                  │
+ │ ~18 facts        │          │ Qwen2.5 + domain  │                  │
+ │ sweep every 60s  │          │ knowledge         │                  │
+ │ stale invalidation│         └──────────────────┘                  │
+ └──────────────────┘                                                │
+         ▲                                                           │
+         └──────────── postcondition enrichment ─────────────────────┘
+
+ CIRCADIAN CYCLE: Homeostasis triggers sleep every ~10 min →
+   REM consolidates engrams, evolves genome, exports training data, fine-tunes model
+   Hippocampus archives low-importance engrams, compacts memory index
 ```
 
 ---
@@ -135,22 +210,23 @@ graph TD
 The system runs a continuous autonomous loop with no external prompting:
 
 ```
-1. BasalGanglia evaluates F(d) for all 14 domains → selects highest-priority goal
-2. FrontalExecutive receives goal → enters three-tier execution pipeline:
-      Tier 1 — GOAP Planner: maps domain to postcondition, backward-chains through
-               learned operators. If a plan exists, execute steps sequentially via MotorLobe
-      Tier 2 — Suggested Commands: try BasalGanglia's domain-specific command templates
-      Tier 3 — LLM Oracle: structured prompt → local inference → grammar-constrained output
-3. Command validation gate: local filter (blacklist, prose detection) + async BK-tree
-   fuzzy matching (Levenshtein distance to known-good commands). Rejects garbage.
-4. CriticLobe validates the action (pattern blacklist + scope check + adversarial LLM)
-5. MotorLobe executes (reality / dream / neuro-surgery mode)
-6. PrimordialLoop learns: successful command → new operator with inferred postconditions
-7. BasalGanglia updates domain statistics, prediction errors, and BK-tree
-8. MetaCognition classifies errors, updates knowledge gap graph, infers precondition chains
-9. Hippocampus stores the execution as an episodic engram
-10. If stamina low → REM Engine consolidates memories, fine-tunes local model
-11. If domain chronically failing → domain resolution → variation → neurogenesis
+ 1. BasalGanglia evaluates F(d) for all 14 domains → selects highest-priority goal
+ 2. FrontalExecutive receives goal → enters three-tier pipeline:
+      Tier 1 — GOAP Planner: postcondition index lookup, backward-chain,
+               Wilson-scored operator selection, top-5 candidate pruning
+      Tier 2 — Suggested Commands: domain-specific genome templates
+      Tier 3 — LLM Oracle: structured prompt → local inference → GBNF output
+ 3. Validation: local filter (blacklist, prose detection) + BK-tree fuzzy matching
+ 4. CriticLobe: pattern blacklist + scope check + adversarial LLM review
+ 5. MotorLobe executes (reality / dream / neuro-surgery mode)
+ 6. PreconditionVerifier: runtime filesystem checks before each plan step
+ 7. PrimordialLoop learns: successful command → new operator with postconditions
+ 8. BasalGanglia updates domain statistics, prediction errors, BK-tree
+ 9. MetaCognition classifies errors, updates knowledge gap graph, infers preconditions
+10. CausalLobe strengthens action→effect edges, updates do-calculus scores
+11. Hippocampus stores execution as episodic engram, requests embedding
+12. If circadian timer fires → REM consolidates memories, evolves genome, fine-tunes
+13. If domain chronically failing → resolution pipeline → variation → neurogenesis
 ```
 
 The three-tier pipeline ensures the LLM is a **last resort**. As the operator registry grows, Tier 1 resolves an increasing fraction of goals without any LLM call.
@@ -193,174 +269,178 @@ Drive hierarchy (Maslow-inspired): SURVIVAL → HOMEOSTASIS → EXPLORATION → 
 Before neurogenesis, chronic failures go through a 4-stage resolution pipeline in the PrimordialLoop:
 
 ```
-Variation (blind mutation) → Mutation (targeted) → Planner (find operator chain) → LLM Oracle
+Variation (blind mutation) → Mutation (targeted) → Planner (find chain) → LLM Oracle
 ```
 
 Each stage tests candidates in the Dream Sandbox. Only if all four fail does BasalGanglia trigger neurogenesis.
 
 ---
 
-## V. Memory Architecture
+## V. GOAP Planner
 
-NeuroSwarm maintains three complementary memory systems:
+The planner uses backward-chaining search over learned operators to decompose goals into executable steps.
 
-**Procedural Memory (Operator Registry)**
-Every learned action is stored as an `Operator` — a command template with preconditions, postconditions, success rate, duration stats, and decomposed fragments for genetic recombination. Operators are learned from bootstrap probing, runtime execution, variation, and LLM generation. Operators with success rate ≥80% over ≥5 uses are *stable*; those with <10% over ≥20 uses are *dying* and get pruned (apoptosis). Persisted to `data/operators.jsonl` (append-only JSONL).
+**Postcondition Index** — three-tier lookup: exact match, prefix match, substring fallback. Eliminates linear scan of 400+ operators.
 
-**Episodic Memory (Hippocampus)**
-Successful executions are embedded with `nomic-embed-text-v1.5` (137M parameters) and stored in `data/engrams/`. New tasks query this index via L2-normalised cosine similarity. Recent engrams are weighted higher than stale ones (time-decay via ChronosLobe timestamps).
+**Wilson Scoring** — operators are ranked by a lower confidence bound that balances success rate against evidence:
 
-**Behavioural Learning (REM Engine)**
-During sleep cycles (triggered by low stamina), the REM Engine consolidates transient execution traces into permanent engrams and exports successful sequences as LoRA fine-tuning data for the local model.
+```
+score = (p + z²/2n - z√(p(1-p)/n + z²/4n²)) / (1 + z²/n)
+```
 
-**Runtime Learning**
-Every successful `execution_result` from the MotorLobe triggers `learn_from_execution()` in the PrimordialLoop. New operators are created with inferred postconditions based on command patterns (e.g., `cat` → `can_read_file`, `mkdir` → `can_create_directory`). This closes the learning loop: goals → execution → operators → planner → goals.
+where p = success rate, n = times used, z = 1.96 (95% CI). This favours operators with both high success *and* sufficient evidence over untested ones with 100% on 1 trial.
+
+**Budget and Pruning** — search is capped at 500 nodes. At each expansion step, only the top 5 candidates (by Wilson score) are explored.
+
+**Runtime Precondition Verification** — before each plan step executes, `PreconditionVerifier` checks filesystem-based preconditions (`path_exists`, `file_exists`, `binary_exists`). If a precondition fails:
+- The stale fact is removed from world state
+- The plan is aborted
+- The failure is classified and fed back into operator strengthening
+
+**Periodic Sweep** — every 60 seconds, all transient facts in world state are re-verified. Stale facts (deleted files, moved directories) are invalidated. This prevents the planner from generating plans based on outdated state.
 
 ---
 
-## VI. Neuro-Surgery & Neurogenesis: Runtime Self-Modification
+## VI. Memory Architecture
 
-The system is capable of modifying and extending its own implementation at runtime through two mechanisms:
+### Procedural Memory (Operator Registry)
+
+Every learned action is stored as an `Operator` — a command template with preconditions, postconditions, success rate, duration stats, and decomposed fragments for genetic recombination. Operators are learned from bootstrap probing, runtime execution, variation, and LLM generation. The postcondition index enables O(1) lookup by effect. Operators with success rate ≥80% over ≥5 uses are *stable*; those with <10% over ≥20 uses are *dying* and get pruned (apoptosis). Persisted to `data/operators.jsonl`.
+
+### Episodic Memory (Hippocampus)
+
+Execution traces are embedded with `nomic-embed-text-v1.5` (768-dim) and stored in `data/engrams/`. Memory search uses L2-normalised cosine similarity over the index. The consolidation pipeline runs during sleep cycles:
+
+- **Importance-based archival** — high-importance and successful engrams stay in the active ledger; low-importance ones are moved to `*_consolidated.jsonl` archives
+- **Memory index compaction** — capped at 50,000 entries. When exceeded, entries are scored by `importance×0.6 + recency×0.3 + success×0.1` and the bottom entries are evicted
+- **Bulk consolidation** — on sleep trigger, all per-CID ledgers exceeding 100KB are consolidated
+- **Pending embed cleanup** — embedding requests that receive no response within 60s are expired
+
+### Causal Memory (CausalLobe)
+
+The CausalLobe maintains a directed graph of action→effect relationships. Unlike simple temporal correlation, it implements Pearl's do-calculus for genuine causal inference:
+
+- **P(Y|do(X))** — computed via backdoor adjustment, stratifying by confounder presence patterns across observation windows
+- **Confounder detection** — actions that frequently co-occur and share edges to the same effect are flagged as potential confounders
+- **d-separation** — BFS ancestor check prevents post-treatment variables from entering the adjustment set
+- **Wilson confidence** — causal strength is the lower bound of a 95% CI on the interventional probability. Edges need ≥3 observations to register any causal strength
+- **Counterfactual tracking** — for each edge, the system records how often the effect occurs without the action (and vice versa)
+- **Base rate decay** — effect base rates decay when not observed, preventing convergence to 1.0
+
+### Behavioural Learning (REM Engine)
+
+During sleep cycles (triggered every ~10 minutes by the circadian rhythm in Homeostasis):
+
+1. **Knowledge synthesis** — analyses last 500 execution traces, extracts success/failure patterns, writes to `data/system_knowledge.md`
+2. **Genome evolution** — prunes low-fitness operators, performs crossover of high-fitness templates
+3. **Training data export** — successful reality-mode traces are exported as ChatML-format training data
+4. **Model fine-tuning** — `llama-finetune` produces specialised GGUFs that replace the base model for future inference
+
+---
+
+## VII. Neuro-Surgery & Neurogenesis
 
 ### Neuro-Surgery (Self-Modification)
-1. FrontalExecutive generates a patch (shell command sequence targeting source files)
-2. CriticLobe validates the patch against the three-tier safety pipeline
-3. MotorLobe executes: `patch source → cmake → make -j$(nproc)` inside the `neuro_surgery` execution mode
-4. On successful build, the modified lobe is restarted by CerebralMatrix
+
+1. FrontalExecutive generates a patch (shell command targeting source files)
+2. CriticLobe validates against the three-tier safety pipeline
+3. MotorLobe executes in `neuro_surgery` mode: patch source → `cmake` → `make -j$(nproc)`
+4. CerebralMatrix restarts the modified lobe
 
 ### Neurogenesis (Self-Extension)
-1. BasalGanglia detects chronic failure in a capability domain (<30% success rate over 20+ attempts)
-2. A specialist lobe is generated from a parameterised C++ template with domain-specific knowledge
-3. MotorLobe compiles it as a standalone executable: `g++ -std=c++17 -o build/{NAME}`
-4. CerebralMatrix receives an `inject_lobe` signal, validates the binary, and `fork()`/`exec()`s it as a live process
-5. The specialist monitors its domain on the bus, publishes `specialist_advice` and `specialist_report`
+
+1. BasalGanglia detects chronic failure in a domain (<30% over 20+ attempts)
+2. Specialist lobe is generated from a parameterised C++ template
+3. MotorLobe compiles as standalone executable
+4. CerebralMatrix validates and fork-execs the binary as a live process
+5. Specialist monitors its domain, publishes `specialist_advice` and `specialist_report`
 
 ### Apoptosis (Self-Pruning)
-Lobes that are no longer useful can be terminated via `lobe_terminate` signals. CerebralMatrix sends `SIGTERM`, waits, then `SIGKILL` if necessary.
 
-This enables structural adaptation without system restart — analogous to adult hippocampal neurogenesis and programmed cell death in biological neural development.
+Lobes that are no longer useful are terminated via `lobe_terminate` signals. Lateral inhibition prunes redundant specialists when one handles less than 50% of a rival's commands.
 
 ---
 
-## VII. Component Map
+## VIII. Component Map
 
-| Process | Binary | Cognitive Function |
+| Process | Binary | Function |
 |---|---|---|
-| **CerebralMatrix** | `CerebralMatrix` | Process supervisor — forks all lobes, crash detection with exponential backoff, neurogenesis injection, apoptosis termination, orphan cleanup |
-| **PrimordialLoop** | `primordial_loop` | Autopoiesis kernel — bootstrap from zero, GOAP planner, operator registry, variation engine, surprise engine, runtime learning, network expansion |
-| **Thalamus** | `thalamus` | ZMQ XPUB/XSUB relay — all messages transit this single bottleneck |
-| **SynapticController** | `synaptic_controller` | LLM inference server — Qwen2.5-7B (generative) + Nomic-Embed (semantic), multi-slot ModelManager |
-| **FrontalExecutive** | `frontal_executive` | 3-tier execution: Planner → Suggested Commands → LLM. Goal pursuit, plan execution |
-| **CriticLobe** | `critic_lobe` | Three-tier adversarial validation: pattern blacklist + scope check + red-team LLM |
-| **MotorLobe** | `motor_lobe` | Command execution in 3 modes: reality, dream (sandboxed), neuro-surgery (self-modification) |
-| **Hippocampus** | `hippocampus` | Semantic episodic memory — Nomic-Embed embedding index + cosine retrieval |
-| **REM Engine** | `rem_engine` | Sleep-cycle learning — engram consolidation + LoRA fine-tuning |
-| **Homeostasis** | `homeostasis` | System telemetry — CPU/RAM/GPU monitoring, stamina management, stress signalling |
-| **WernickeLobe** | `wernicke_lobe` | Natural language understanding — intent classification, entity extraction |
-| **Amygdala** | `amygdala` | Emotional gating — priority assignment and stress tagging |
-| **MetaCognition** | `metacognition` | Recursive meta-cognition — error classification, knowledge gap graph, precondition chains, exploration targets |
-| **VisualLobe** | `visual_lobe` | Filesystem watcher — detects environmental state changes |
-| **AuditoryLobe** | `auditory_lobe` | Voice input pipeline via Whisper.cpp |
-| **Visualizer** | `visualizer` | 2D network graph dashboard (Canvas, port 8080) |
-| **ChronosLobe** | `chronos_lobe` | Temporal awareness — time_pulse with ISO timestamp, uptime, circadian phase |
-| **StatisticsLobe** | `statistics_lobe` | Passive bus observer — per-cycle metrics to `data/metrics/` in JSONL |
-| **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — self-model, fitness function, dopamine signals, neurogenesis trigger, BK-tree command validation |
-| **ConceptLobe** | `concept_lobe` | Learned internal representations — online clustering over embeddings, emergent abstractions, parameterised patterns |
-| **CausalLobe** | `causal_lobe` | Learned causal world model — temporal correlation of actions→effects, Bayesian confidence, causal lift, prediction queries |
-| **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd by FE, auto-terminates on completion |
-| *Specialists* | `build/{domain}_specialist` | Runtime-generated lobes for chronically failing domains (via neurogenesis) |
+| **CerebralMatrix** | `CerebralMatrix` | Process supervisor — fork/exec, crash recovery, neurogenesis injection, apoptosis |
+| **PrimordialLoop** | `primordial_loop` | Bootstrap, GOAP planner, operator registry, variation, surprise, runtime learning, precondition sweep |
+| **Thalamus** | `thalamus` | ZMQ XPUB/XSUB relay — all messages transit here |
+| **SynapticController** | `synaptic_controller` | LLM inference — Qwen2.5-7B + Nomic-Embed, multi-slot ModelManager, fine-tuned model loading |
+| **FrontalExecutive** | `frontal_executive` | 3-tier execution pipeline, goal pursuit, spike worker delegation |
+| **CriticLobe** | `critic_lobe` | Three-tier validation: pattern blacklist + scope + red-team LLM |
+| **MotorLobe** | `motor_lobe` | Command execution: reality, dream (sandboxed), neuro-surgery |
+| **Hippocampus** | `hippocampus` | Semantic episodic memory — embedding index, consolidation, trajectory tracking |
+| **REM Engine** | `rem_engine` | Sleep consolidation, knowledge synthesis, genome evolution, model fine-tuning |
+| **Homeostasis** | `homeostasis` | CPU/RAM/GPU telemetry, stamina, circadian sleep trigger (10-min cycle) |
+| **WernickeLobe** | `wernicke_lobe` | NLU — intent classification, entity extraction |
+| **Amygdala** | `amygdala` | Priority gating — urgency assignment, threat detection |
+| **MetaCognition** | `metacognition` | Error classification, knowledge gap graph, precondition chains, exploration targets |
+| **VisualLobe** | `visual_lobe` | Filesystem watcher — environmental state changes |
+| **AuditoryLobe** | `auditory_lobe` | Voice input via Whisper.cpp |
+| **Visualizer** | `visualizer` | 2D Canvas dashboard (port 8080) |
+| **ChronosLobe** | `chronos_lobe` | Temporal awareness — ISO timestamps, uptime, circadian phase |
+| **StatisticsLobe** | `statistics_lobe` | Bus observer — per-cycle metrics to `data/metrics/` |
+| **BasalGanglia** | `basal_ganglia` | Intrinsic motivation — fitness function, dopamine, neurogenesis trigger, BK-tree validation |
+| **ConceptLobe** | `concept_lobe` | Online clustering, abstraction hierarchy, composite operations |
+| **CausalLobe** | `causal_lobe` | Causal world model — do-calculus DAG, backdoor adjustment, confounder detection |
+| **SpikeWorker** | `spike_worker` | Ephemeral per-goal worker — fork+exec'd, CID-isolated, 120s timeout |
+| *Specialists* | `build/{name}` | Runtime-generated lobes for failing domains (neurogenesis) |
 
 ---
 
-## VIII. Message Protocol
+## IX. Message Protocol
 
-Every message on the neural bus is a JSON object with these mandatory fields:
+Every message on the neural bus is a JSON object:
 
 ```json
 {
-  "cid":    "uuid4 — correlation identifier, threads related messages",
+  "cid":    "correlation identifier — threads related messages",
   "origin": "source lobe name",
   "intent": "semantic action descriptor"
 }
 ```
 
-Core intents:
+Core intents (40+ total, grouped by function):
 
-| Intent | Direction | Description |
-|---|---|---|
-| `stimulus` | → FE | Raw user or sensor input |
-| `inference_request` | → SC | Request LLM generation |
-| `inference_result` | SC → | Generated text response |
-| `critic_validate` | → CL | Plan submitted for safety review |
-| `critic_result` | CL → | APPROVED or rejection rationale |
-| `execution_request` | → ML | Command to execute |
-| `execution_result` | ML → | stdout, exit code, mode |
-| `search_memory` | → HP | Semantic query |
-| `search_result` | HP → | Top-k similar engrams |
-| `prompt_update` | REM → | Evolved behavioural context |
-| `initiate_sleep_cycle` | HM → | Trigger REM processing |
-| `time_pulse` | CH → | ISO timestamp, uptime, time-of-day, is_night |
-| `intrinsic_goal_request` | FE → BG | Request next intrinsic motivation goal |
-| `intrinsic_goal` | BG → FE | Domain, fitness score, suggested commands |
-| `intrinsic_goal_result` | FE → BG | Completion/failure report for self-model update |
-| `dopamine_signal` | BG → | Novel capability discovery or prediction error surprise |
-| `self_model_updated` | BG → | Domain state changed in `data/self_model.json` |
-| `spike_ready` | SW → FE | Worker announces readiness after fork+exec |
-| `spike_assign` | FE → SW | Goal assignment dispatched to specific worker |
-| `spike_done` | SW → FE | Worker completed/failed goal, reports result |
-| `genesis_request` | BG → ML | Request compilation of a new specialist lobe |
-| `genesis_result` | ML → BG | Compilation success/failure report |
-| `inject_lobe` | ML → CM | Request CerebralMatrix to spawn a new lobe process |
-| `lobe_injected` | CM → | Confirmation that a new lobe is running |
-| `lobe_terminate` | → CM | Request to terminate a running lobe (apoptosis) |
-| `lobe_terminated` | CM → | Confirmation that a lobe was terminated |
-| `lobe_crash` | CM → | Notification that a lobe process crashed |
-| `lobe_death` | CM → | Lobe exceeded max restarts, marked permanently dead |
-| `specialist_advice` | SP → | Domain-specific pre-validation and command alternatives |
-| `specialist_report` | SP → BG | Periodic specialist performance metrics |
-| `homeostatic_pulse` | HM → | System telemetry: success rate, stamina, CPU/RAM/GPU |
-| `primordial_ready` | PL → | Bootstrap complete — operators and world state available |
-| `goal_plan_request` | FE → PL | Request GOAP plan for a domain postcondition |
-| `goal_plan` | PL → FE | Plan steps (operator sequence) or failure with gaps |
-| `domain_resolve_request` | BG → PL | Try variation/mutation/planner/LLM before neurogenesis |
-| `domain_resolve_result` | PL → BG | Resolution success/failure for chronic domain |
-| `operator_request` | → PL | Request an operator by postcondition |
-| `kernel_deployed` | NE → | Remote kernel binary deployed via SSH |
-| `remote_kernel_started` | NE → | Remote PrimordialLoop instance started |
-| `rlaif_reinforce` | FE → BG | Reinforcement signal with executed command chain and magnitude |
-| `concept_query` | → CL | Query concept space for similar operations |
-| `concept_response` | CL → | Nearest concepts with abstractions, patterns, success rates |
-| `concept_update` | CL → | Periodic broadcast of cluster state changes |
-| `operators_synced` | NE → | Novel operators imported from remote instance |
-| `validate_command` | FE → BG | Request BK-tree fuzzy validation of a command before execution |
-| `command_validated` | BG → FE | Validation result: valid/invalid, Levenshtein distance, nearest alternative |
-| `exploration_target` | MC → | Deepest actionable knowledge gap for directed learning |
-| `knowledge_gap` | MC → | Summary of structural knowledge gaps with precondition chains |
-| `causal_prediction` | CA → FE | Predicted effects of a proposed command with confidence scores |
-| `causal_update` | CA → | Causal graph state changes (new edges, strengthened links) |
+| Group | Intents |
+|---|---|
+| **Cognition** | `stimulus`, `inference_request/result`, `critic_validate/result`, `execution_request/result` |
+| **Planning** | `goal_plan_request/goal_plan`, `operator_request`, `primordial_ready`, `domain_resolve_request/result` |
+| **Motivation** | `intrinsic_goal_request/goal/result`, `dopamine_signal`, `self_model_updated`, `rlaif_reinforce` |
+| **Memory** | `search_memory/result`, `recall_memory/recalled`, `embedding_request/result`, `consolidate_memories/complete` |
+| **Workers** | `spike_ready`, `spike_assign`, `spike_done` |
+| **Neurogenesis** | `genesis_request/result`, `inject_lobe`, `lobe_injected/terminate/terminated/crash/death` |
+| **Specialist** | `specialist_advice`, `specialist_report`, `validate_command/validated` |
+| **Autonomic** | `homeostatic_pulse`, `initiate_sleep_cycle/complete`, `time_pulse`, `exploration_target`, `knowledge_gap` |
+| **World Model** | `causal_query/prediction/update`, `concept_query/response/update`, `visual_stimulus` |
+| **Training** | `training_complete`, `prompt_update` |
 
 Full specification: [`docs/SYNAPTIC_PROTOCOL.md`](docs/SYNAPTIC_PROTOCOL.md)
 
 ---
 
-## IX. Stack
+## X. Stack
 
 | Layer | Technology |
 |---|---|
-| **Neural Bus** | ZeroMQ 4.x — PUB/SUB, non-blocking |
-| **Inference** | llama.cpp (Vulkan/GPU offload) — Qwen2.5-7B-Instruct Q4_K_M |
-| **Embeddings** | nomic-embed-text-v1.5 Q8_0 — dedicated 137M model, mean pooling |
-| **Memory Index** | L2-normalised cosine similarity over JSONL (zero external dependencies) |
-| **Grammar Constraints** | GBNF — llama.cpp grammar-constrained decoding for structured JSON output |
-| **Safety** | Three-tier CriticLobe (blacklist + scope + LLM) + Dream Sandbox filesystem isolation |
-| **Self-Modification** | GCC standalone executable compilation + CerebralMatrix fork/exec injection |
-| **Observability** | HTML5 Canvas + cpp-httplib — 2D network graph with density clusters |
+| **Neural Bus** | ZeroMQ 4.x — PUB/SUB with XPUB/XSUB relay, topic-filtered routing |
+| **Inference** | llama.cpp (Vulkan GPU offload) — Qwen2.5-7B-Instruct Q4_K_M |
+| **Embeddings** | nomic-embed-text-v1.5 Q8_0 — 768-dim, mean-pooled, L2-normalised |
+| **Causal Inference** | Do-calculus with backdoor adjustment, Wilson confidence bounds |
+| **Planning** | GOAP backward-chaining with postcondition indexing and precondition verification |
+| **Grammar** | GBNF — llama.cpp grammar-constrained decoding for structured JSON |
+| **Safety** | Three-tier CriticLobe + Dream Sandbox isolation + BK-tree validation |
+| **Self-Modification** | GCC compilation + CerebralMatrix fork/exec injection |
+| **Observability** | HTML5 Canvas + cpp-httplib — 2D network graph with live metrics |
 | **Build System** | CMake 3.16+ / C++17 |
 | **OS** | Linux (Vulkan compute) |
 
 ---
 
-## X. Deployment
+## XI. Deployment
 
 ```bash
 # 1. Build
@@ -371,79 +451,40 @@ cd ..
 # 2. Download models (first time only)
 python3 -c "
 from huggingface_hub import hf_hub_download
-# Primary: Qwen2.5-7B — best quality/size ratio for <12GB VRAM
 hf_hub_download('Qwen/Qwen2.5-7B-Instruct-GGUF',
                 'qwen2.5-7b-instruct-q4_k_m.gguf', local_dir='models')
-# Semantic memory
 hf_hub_download('nomic-ai/nomic-embed-text-v1.5-GGUF',
                 'nomic-embed-text-v1.5.Q8_0.gguf', local_dir='models')
 "
 
-# 3. Launch all processes
-./start.sh
+# 3. Launch
+./build/CerebralMatrix
 
-# 4. Open a conversation
+# 4. Conversation
 ./build/broca_chat
 
-# 5. Monitor (browser)
+# 5. Dashboard
 xdg-open http://localhost:8080
 ```
 
-**Hardware requirements:** GPU with Vulkan support, ≥8GB VRAM recommended. Tested on GTX 1080 Ti (11GB). CPU fallback available.
+**Hardware:** GPU with Vulkan support, 8GB+ VRAM recommended. Tested on GTX 1080 Ti (11GB). CPU fallback available.
 
 ---
 
-## XI. Roadmap
+## XII. Empirical Results
 
-- [x] **Ralph loop** — `tasks.json`-driven autonomous self-improvement with `git commit` audit trail
-- [x] **Qwen2.5-7B** — primary generative model (7B, Q4_K_M, 4.4GB), priority fallback: Qwen2.5-7B → Phi-4-mini → Qwen2.5-1.5B
-- [x] **Dream Sandbox** — isolated filesystem execution before reality deployment
-- [x] **Neuro-Surgery** — runtime C++ lobe compilation and process injection
-- [x] **Cognitive Dashboard** — 2D network graph with density clusters, Maslow drive hierarchy, neurogenesis/apoptosis metrics, spike task ticker
-- [x] **GBNF grammar constraints** — structured JSON output from LLM inference
-- [x] **Adversarial Critic** — nuclear-only pattern blacklist (~10 catastrophic signatures: disk wipe, fork bombs, credential exfiltration), deterministic scope validation rejecting paths outside the project directory, adversarial red-team LLM prompt with reject-by-default framing. Rate limiting prevents inference flooding during neurotic loops (max 6 evaluations per CID per 60s)
-- [x] **Intrinsic motivation (BasalGanglia)** — self-model tracking 14 capability domains with fitness function F(d) based on Free Energy Principle (coverage, trend, prediction error, novelty, stress). Replaces LLM task generation with deterministic goal selection. Three-tier FrontalExecutive: external tasks → intrinsic goals → epistemic fallback. Dopamine signals on novel capabilities. Learned helplessness cooldowns
-- [x] **ChronosLobe** — temporal awareness for the swarm: broadcasts a `time_pulse` event every second containing ISO timestamp, system uptime, time-of-day, and day-of-week. FrontalExecutive injects current time and task elapsed duration into every prompt, enabling the model to reason about urgency and task staleness. Hippocampus uses timestamps for memory decay — recent engrams weighted higher than stale ones. Foundation for circadian scheduling in Homeostasis (reduced activity at night, deeper REM cycles)
-- [x] **StatisticsLobe** — passive bus observer that records per-cycle metrics to `data/metrics/` in JSONL (Ralph cycle duration, retry count, Critic decisions, Hippocampus similarity scores, inference tokens/sec). Zero interference with cognition. Required for empirical evaluation
-- [x] **Spike workers** — ephemeral fork+exec'd processes per goal, CID-isolated cognitive cycle (memory → thought → critic → dream → reality), 120s idle timeout, max 2 concurrent workers. FrontalExecutive delegates Ralph, intrinsic, and external goals to workers when capacity allows. User stimuli always handled inline for immediate response
-- [x] **Specialised routing** — XPUB/XSUB topic-based intent filtering via Thalamus proxy. Each lobe subscribes only to its relevant intents at the ZMQ transport layer — messages that don't match never leave the Thalamus. Shared `routing.hpp` header provides `publish()`, `subscribe()`, `subscribe_all()`, `receive()` for all 20+ binaries. Monitoring lobes (Statistics, Visualizer, MetaCognition, Amygdala) subscribe to all traffic
-- [x] **Model specialisation** — multi-slot ModelManager with named adapter routing. SynapticController auto-loads specialist GGUFs (Qwen-Coder → "coder" slot, critic model → "critic" slot) with graceful fallback to base model. FrontalExecutive uses "coder" adapter for command generation. CriticLobe Tier 2 LLM validation sends non-safe commands through "critic" adapter with GBNF-constrained safety verdict, 10s fail-open timeout
-- [x] **REM fine-tuning** — REM Engine exports successful reality-mode execution traces as chat-template training data and spawns `llama-finetune` (CPU-only, no VRAM conflict) to produce specialised GGUFs. ModelManager supports LoRA adapter loading via `llama_adapter_lora_init` for externally-trained adapters, with per-inference activation/deactivation. SynapticController auto-loads fine-tuned models from `models/finetuned/` and LoRA adapters from `models/lora/` at startup
-- [x] **Self-preservation** — CerebralMatrix monitors all child processes via `waitpid(WNOHANG)`, detects crashes with signal/exit-code analysis, auto-restarts with exponential backoff (2s→4s→8s→16s), marks lobes permanently dead after 5 consecutive failures. Orphaned processes from previous sessions cleaned up at startup via `/proc` scan. FrontalExecutive reaps zombie spike workers in idle loop
-- [x] **Neurogenesis pipeline** — BasalGanglia detects chronic domain failure (<30% over 20+ attempts) and generates specialist lobes from parameterised C++ templates. MotorLobe compiles as standalone executables. CerebralMatrix validates binaries and injects via `fork()`/`exec()`. Specialists monitor their domain, publish advice and periodic reports. Apoptosis via `lobe_terminate` allows pruning of unneeded specialists
-- [x] **Dashboard v3** — 2D Canvas network graph with 16 core lobe nodes (including ConceptLobe) and cluster density clouds. Right panel: cognitive pipeline step indicator (Goal > Plan > Suggest > LLM > Critic > Dream > Exec) showing real-time execution stage. Left panel: active lobes, Maslow drive hierarchy (colour-coded), system metrics (success rate, stamina, tasks done, REM cycles), neurogenesis stats (specialists/genesis/apoptosis). Bottom: spike task ticker. Dynamic specialist nodes appear/disappear with neurogenesis/apoptosis events. Clean startup via `start.sh` suppresses polkit/GVFS desktop dialogs
-- [x] **Autopoiesis kernel (PrimordialLoop)** — bootstrap from zero knowledge through 7 phases: existence → first contact → capability discovery → sense acquisition → tool discovery → active exploration → planner self-test. 5 axioms hardcoded (Execution, Surprise, Associative Memory, Variation, Self-Reference). Persists world state and self-model across restarts for incremental bootstrap (~10s vs ~60s)
-- [x] **GOAP Planner** — backward-chaining search over learned operators. Maps goal postconditions to operator chains. Reports gaps (unsatisfiable postconditions) that trigger operator generation. No LLM involved — pure graph search
-- [x] **Operator Registry** — persistent procedural memory. Operators learned from bootstrap, runtime execution, variation, and LLM. Track success rate, duration, fragments for recombination. Append-only JSONL with periodic prune (apoptosis for dying operators)
-- [x] **Variation Engine** — 5 strategies: template filling, recombination (crossover), mutation (flag/fragment perturbation), fragment assembly, targeted variation. Candidates tested in Dream Sandbox before promotion
-- [x] **Surprise Engine** — prediction error model combining success/failure prediction (60%) and output novelty (40%). Sliding window trend detection. Global surprise metric for bootstrap completeness
-- [x] **Three-tier execution** — FrontalExecutive: Planner → Suggested Commands → LLM Oracle. Planner gates on `primordial_ready` signal. Multi-step plan execution with per-step result checking. Fallback chain with no delay between tiers
-- [x] **Runtime learning** — every successful `execution_result` creates a new operator with inferred postconditions (pattern-based: `cat`→`can_read_file`, `mkdir`→`can_create_directory`, `g++`→`can_compile`, etc.). Closes the learning loop: goals → execution → operators → planner → goals
-- [x] **Network expansion** — SSH-based self-deployment: discover hosts from `~/.ssh/known_hosts` + `~/.ssh/config`, probe reachability, deploy kernel binary via `scp`, start remote instance via `nohup`. Periodic operator sync imports novel operators from remote instances (horizontal gene transfer)
-- [x] **Domain resolution pipeline** — before neurogenesis, chronic failures go through 4-stage resolution: variation → mutation → planner → LLM. Each stage tests candidates in Dream Sandbox. Neurogenesis only triggers when all stages fail
-- [x] **Postcondition enrichment** — retroactive inference of postconditions for bootstrap-learned operators using command pattern matching. Bridges experiential learning (commands without annotations) and the Planner (requires postconditions)
-- [x] **GUI skip list** — PrimordialLoop skips GUI apps, editors, browsers, terminal emulators, window managers, and interactive interpreters during binary probing and dream testing to avoid launching graphical programs during headless operation
-- [x] **RLAIF chain tracking** — FrontalExecutive records full command chains per goal, caches completed chains, and publishes `rlaif_reinforce` on dopamine signals. BasalGanglia boosts genome template fitness proportionally. Chains are consumed after use and deduplicated per domain to prevent multiplied reinforcement
-- [x] **Semantic success validation** — `is_substantive_success()` rejects degenerate commands that exit 0 without real work: echo-only commands, `/dev/null` no-ops, and empty output. Applied at BasalGanglia level to both execution results and RLAIF chain reinforcement
-- [x] **Lateral inhibition** — competing specialists for overlapping domains are pruned when one handles less than 50% of a rival's commands. Prevents redundant specialist proliferation after neurogenesis
-- [x] **Cross-compilation** — NetworkExpander maps 8 architectures (aarch64, armv7l, riscv64, mips, ppc64le, s390x, x86_64, i686) to GNU cross-toolchain compilers for remote kernel deployment on heterogeneous nodes
-- [x] **Meta-templates** — specialist C++ template evolves genetically. Population of parameter variants (report interval, cache size, keyword count) with crossover and mutation. Fitness feedback from specialist reports drives selection
-- [x] **Runtime assertions** — `NS_ASSERT`, `NS_PRECONDITION`, `NS_POSTCONDITION`, `NS_INVARIANT` macros with JSONL logging to `data/assertions.jsonl`. `ScopedRollback` RAII guard for neuro-surgery. Compilable out with `-DNS_NO_ASSERTIONS`
-- [x] **Full system test** — end-to-end test suite (`full_system_test`) verifying Thalamus connectivity, bus round-trip, intrinsic goal cycle, execution pipeline, dopamine signal flow, self-model persistence, and RLAIF reinforcement delivery
-- [x] **BK-tree command validation** — Burkhard-Keller tree indexes all successful commands in the genome using Levenshtein distance. Three uses: (1) **validation gate** — FrontalExecutive rejects LLM-generated commands that are too far from any known-good command (adaptive threshold: `max(4, 20% of length)`, capped at 15); (2) **fuzzy genome retrieval** — `nearest(cmd, k)` finds the closest successful commands for suggestions; (3) **genome compaction** — clusters commands within distance 3 and keeps only the fittest representative, preventing near-duplicate bloat. Local fast filter catches placeholder patterns (`/path/to/`, `REAL_BASH_CMD`), prose masquerading as commands, and over-long strings. Async BK-tree validation via `validate_command`/`command_validated` intents provides distance metrics and alternative suggestions
-- [x] **Recursive meta-cognition (enhanced)** — MetaCognition now classifies commands locally (mirroring BasalGanglia's keyword rules) to populate domain fields that motor_cortex doesn't include. 16 error pattern types, knowledge gap graph with precondition chain inference, periodic exploration target publication. Gaps auto-resolve when domain success exceeds 70%
+From 68 hours of autonomous operation (see `eval/results/tables.tex`):
 
----
+| Metric | Value |
+|---|---|
+| Total goals attempted | 1,424 |
+| Resolution rate | 99.7% |
+| Success rate | 97.3% |
+| Operators learned | 1,219 |
+| Autonomy index | 0.952 |
+| Mean prediction error | 0.3012 |
 
-## XII. AGI Roadmap — Open Problems
-
-These are the fundamental capability gaps between the current system and general intelligence. Each is a research-grade problem with no known complete solution.
-
-- [x] **1. Internal representations** — ConceptLobe embeds every execution into a 768-dim concept space (Nomic embeddings), clusters similar operations via online cosine-similarity, and infers abstractions automatically (e.g., `cat /etc/hostname` and `cat /etc/os-release` → `read_content:<path>`). Fully integrated: BasalGanglia classifies via concept space before regex fallback, FrontalExecutive receives concept transfer commands, PrimordialLoop uses concept abstractions for postcondition inference. Dynamic domains emerge from experience and persist across restarts.
-- [x] **2. Causal world model** — CausalLobe observes action→effect pairs through temporal correlation: when an `execution_result` is followed by a `visual_stimulus` (filesystem change), a causal link is strengthened with exponential decay weighting (half-life 30s). Bayesian confidence updates track P(effect|action), causal lift filters spurious correlations (P(effect|action) - P(effect)). Handles `causal_query` to predict effects of proposed commands with confidence scores. Persists learned graph to `data/causal_graph.json`, prunes weak edges and orphan nodes, caps at 2000 nodes (LRU). Verb-matching fallback enables approximate predictions for novel commands.
-- [x] **3. Abstraction hierarchy** — ConceptLobe tracks which clusters co-activate within goal sequences. When clusters co-occur frequently (≥4 times, ≥15% of goals), a Level 2 meta-concept is composed (e.g., `read_content` + `search_content` → `information_retrieval`). Meta-concepts that themselves co-occur are further composed into Level 3+ abstractions. Known semantic compositions provide meaningful names; novel compositions are named by shared suffix/prefix analysis. Hierarchy persists to `data/concept_hierarchy.json` with co-occurrence matrix and is broadcast in `concept_update`.
-- [x] **4. Semantic compositionality** — ConceptLobe tracks ordered sequences of cluster activations within goals (subsequences length 2–4). Recurring sequences (≥3 observations) become CompositeOperations with inferred semantic roles: precondition (search, inspect), action (read, write, compile), verification (compare, verify). 20+ known compositions (e.g., `search_filesystem→read_content` = `locate_and_read`, `read_content→copy_resource` = `backup`). Novel compositions named by role structure (`guarded_X`, `prepared_X`, `verified_X`). Persists to `data/concept_hierarchy.json` and broadcast in `concept_update`.
-- [x] **5. Recursive meta-cognition** — MetaCognition (expanded from 110 to ~400 lines) now observes `execution_result` failures, classifies error patterns (16 types: missing_file, permission_denied, missing_tool, link_error, etc.), builds a knowledge gap graph with structural root causes. Precondition chain inference: "file_write fails → needs filesystem_navigation → which requires resource_discovery". Every 5 minutes: analyze gaps by importance (occurrence × recency), walk the precondition chain to find the deepest actionable target, publish `exploration_target` for directed learning and `knowledge_gap` summaries. Gaps auto-resolve when domain success rate exceeds 70%. Persists to `data/knowledge_gaps.json`.
+The autonomy index measures the fraction of goals resolved without LLM calls (Tier 1 + Tier 2). At 0.952, the system handles 95% of its goals through learned operators and genome templates alone.
 
 ---
 

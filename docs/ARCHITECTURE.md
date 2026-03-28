@@ -1,44 +1,83 @@
-# NeuroSwarm Architecture: Distributed Cortical Matrix (v2.2.0)
+# NeuroSwarm Architecture: Distributed Cortical Matrix (v3.1.0)
 
 ## 1. Vision
-NeuroSwarm aims to achieve emergent intelligence by replicating the partitioned, asynchronous, and homeostatic nature of the biological brain. The system is designed to operate as a self-optimizing organism where autonomy arises from the feedback loops between specialized, lightweight cognitive nodes.
+
+NeuroSwarm is a self-bootstrapping cognitive architecture that runs as 20+ concurrent Unix processes communicating via a ZeroMQ message bus. It starts knowing nothing about its host and builds its capabilities through direct interaction — learning operators, constructing plans, and modifying its own structure at runtime.
 
 ## 2. Core Architectural Pillars
 
 ### I. The Neural Bus (Thalamus)
-Following **Global Workspace Theory (GWT)**, all information in NeuroSwarm is broadcast to a shared "workspace" (the Thalamus).
-*   **Protocol:** ZeroMQ PUB/SUB.
-*   **Asynchronicity:** Lobes process information at their own "retinal" or "cognitive" rates without blocking the central bus.
-*   **Routing:** Every message is a JSON "neuro-stimulus" containing a Correlation ID (CID) to track the lineage of a thought.
+
+Following Global Workspace Theory, all information is broadcast through the Thalamus — a ZMQ XPUB/XSUB relay on tcp:5555/5556. Topic-based subscription filtering ensures lobes only receive relevant intents. Every message is a JSON object with a Correlation ID (CID) for lineage tracking.
 
 ### II. Recursive Cognitive Pipeline
-Unlike standard AI pipelines (Input -> Output), NeuroSwarm implements a recursive loop:
-1.  **Semantic Interpretation:** Wernicke Lobe converts user input into structured intents.
-2.  **Adversarial Monologue:** The Frontal Executive proposes a plan; the Critic Lobe (Cingulate Cortex) attempts to find flaws. This iterates until a consensus is reached.
-3.  **World Simulation:** The plan is executed in the **Dream Sandbox**, an isolated environment. The Executive observes the simulation's exit codes and stderr.
-4.  **Reality Collapse:** If verified, the system applies the action to the host OS (Reality).
+
+1. **Semantic Interpretation** — Wernicke Lobe converts user input into structured intents.
+2. **Three-Tier Execution** — FrontalExecutive exhausts deterministic strategies before consulting the LLM:
+   - *Tier 1*: GOAP Planner with postcondition indexing and Wilson-scored operator selection
+   - *Tier 2*: Domain-specific command templates from the evolved genome
+   - *Tier 3*: LLM inference with GBNF grammar constraints
+3. **Validation** — BK-tree fuzzy matching + CriticLobe three-tier adversarial review (blacklist → scope → red-team LLM)
+4. **Dream Sandbox** — plan is executed in an isolated /tmp environment. Exit codes and stderr are observed.
+5. **Reality Collapse** — if verified, the action is applied to the host OS.
+6. **Precondition Verification** — before each plan step, PreconditionVerifier checks filesystem-based facts. Stale facts are invalidated, aborting plans that would fail.
 
 ### III. Intrinsic Motivation (BasalGanglia)
-NeuroSwarm implements a biologically-inspired motivation system based on Karl Friston's **Free Energy Principle**. Rather than relying on a human-authored task list or LLM-generated goals, the **BasalGanglia** lobe maintains a self-model of the system's capabilities across 14 domains and computes a fitness function to select the most informative domain to explore next.
 
-*   **Self-Model:** `data/self_model.json` tracks success/failure counts, predicted vs actual success rates, and novelty scores for each capability domain.
-*   **Fitness Function:** A weighted combination of coverage (under-explored domains), trend (improving competence), prediction error (Free Energy term), novelty (exponential decay), and system stress (suppresses exploration under load).
-*   **Dopamine Signalling:** When the system discovers a novel capability or encounters high prediction error, it emits a `dopamine_signal` on the bus — analogous to VTA dopaminergic projections in biological reward circuits.
-*   **Three-Tier Task Selection:** FrontalExecutive now selects goals via: (1) external tasks from `tasks.json`, (2) intrinsic goals from BasalGanglia, (3) hardcoded epistemic fallback.
-*   **Learned Helplessness:** 5 consecutive failures in a domain trigger a 10-minute cooldown, preventing the system from repeatedly failing at tasks beyond its current capabilities.
+The BasalGanglia maintains a self-model across 14 capability domains and computes a fitness function based on Friston's Free Energy Principle:
 
-### IV. Synaptic Evolution & Meta-Cognition
-*   **Active Learning (REM Engine):** Successful "Reality Collapses" are archived and used for offline LoRA fine-tuning, upgrading the system's "Executive" policy autonomously.
-*   **Meta-Cognition:** A dedicated observer layer monitors homeostatic stress (success/failure rates) and maintains an internal "Thought Stream" diary.
+```
+F(d) = 0.20 * Coverage + 0.15 * Trend + 0.30 * PredictionError + 0.25 * Novelty - 0.10 * Stress
+```
 
-## 3. Physical Node Distribution
-Lobes are location-agnostic. They can be distributed across a local network:
-*   **VRAM Hub:** The `SynapticController` can run on a high-end GPU server.
-*   **Edge Sensors:** `Auditory` and `Visual` lobes can run on devices with microphones/webcams.
-*   **Orchestration:** The `Thalamus` and `Executive` manage the swarm from a central controller.
+- **Self-Model** — `data/self_model.json` tracks success/failure counts, predicted vs actual rates, novelty scores per domain
+- **Dopamine Signalling** — novel capability discovery or high prediction error triggers a `dopamine_signal` on the bus
+- **Drive Hierarchy** — SURVIVAL → HOMEOSTASIS → EXPLORATION → MASTERY → SELF_MODIFY (Maslow-inspired)
+- **Learned Helplessness** — 5 consecutive failures trigger a 10-minute cooldown per domain
 
-## 5. The Self-Modification (Neuro-Surgery)
-NeuroSwarm can extend its own anatomy. By using the `neuro_surgery` execution mode, the system can write new C++ lobes, update the `CMakeLists.txt`, and trigger a recompilation. This allows the system to autonomously add new "organs" (e.g., a Database Lobe or a Web Crawler Lobe) as needed.
+### IV. GOAP Planning
+
+The planner uses backward-chaining search over 400+ learned operators:
+
+- **Postcondition Index** — three-tier lookup (exact → prefix → substring) eliminates linear scan
+- **Wilson Scoring** — lower bound of 95% CI on success rate, balancing performance against evidence
+- **Budget** — 500 nodes max, top-5 candidates per expansion step
+- **Precondition Verification** — runtime filesystem checks before each plan step execution
+- **Stale Fact Sweep** — every 60 seconds, all transient world state facts are re-verified
+
+### V. Causal World Model (CausalLobe)
+
+The CausalLobe maintains a directed graph of action→effect relationships using Pearl's do-calculus:
+
+- **P(Y|do(X))** via backdoor adjustment — stratifies observation windows by confounder presence patterns
+- **Confounder detection** — co-occurring actions with shared effects are flagged; d-separation prevents post-treatment bias
+- **Wilson confidence** — causal strength is the lower bound of a 95% CI on interventional probability
+- **Counterfactual tracking** — records effect-without-action and action-without-effect frequencies
+- **Base rate decay** — recomputed from rolling window; effects that stop appearing see their rate decline
+
+### VI. Memory Consolidation
+
+Three-tier memory hierarchy unified by a circadian sleep cycle:
+
+- **Short-term** — per-CID ledgers in Hippocampus (raw engrams)
+- **Long-term** — memory_index.jsonl (768-dim embeddings, cosine similarity, 50K cap with importance-based eviction)
+- **Procedural** — OperatorRegistry (operators.jsonl, postcondition index, Wilson scoring)
+- **Consolidation** — Homeostasis triggers sleep every 10 min. Hippocampus archives low-importance engrams, compacts the index. REM Engine synthesises knowledge, evolves the genome, exports training data, and fine-tunes the local model.
+
+### VII. Self-Modification
+
+- **Neuro-Surgery** — FrontalExecutive generates source patches, CriticLobe validates, MotorLobe patches/builds in `neuro_surgery` mode, CerebralMatrix restarts affected lobes
+- **Neurogenesis** — BasalGanglia detects chronic domain failure → generates specialist C++ lobe → MotorLobe compiles → CerebralMatrix injects as live process
+- **Apoptosis** — redundant specialists terminated via `lobe_terminate`; lateral inhibition prunes overlapping specialists
+
+## 3. Physical Distribution
+
+Lobes are location-agnostic. The Thalamus relay can bridge between machines:
+
+- **VRAM Hub** — SynapticController on a GPU server
+- **Edge Sensors** — Auditory and Visual lobes on devices with microphones/cameras
+- **Network Expansion** — PrimordialLoop discovers SSH hosts, deploys copies of itself, syncs operators
 
 ---
-*NeuroSwarm: A framework for the exploration of non-reactive, self-sustaining digital intelligence.*
+
+*NeuroSwarm: a framework for non-reactive, self-sustaining digital intelligence.*
