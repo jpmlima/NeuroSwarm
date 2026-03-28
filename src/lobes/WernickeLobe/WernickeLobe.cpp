@@ -58,7 +58,7 @@ private:
 
         // Specialised NLU prompt for intent classification and entity extraction
         std::string nlu_prompt =
-            "<|system|>\n"
+            "<|im_start|>system\n"
             "NeuroSwarm Wernicke Lobe (NLU Core).\n"
             "Extract intent and entities from user input. Respond ONLY with raw JSON:\n"
             "{\n"
@@ -67,9 +67,9 @@ private:
             "  \"urgency\": \"LOW|MEDIUM|HIGH\",\n"
             "  \"summary\": \"Concise semantic summary\"\n"
             "}\n"
-            "<|end|>\n"
-            "<|user|>\n" + text + "<|end|>\n"
-            "<|assistant|>\n";
+            "<|im_end|>\n"
+            "<|im_start|>user\n/no_think\n" + text + "<|im_end|>\n"
+            "<|im_start|>assistant\n";
 
         json req = {
             {"cid", cid},

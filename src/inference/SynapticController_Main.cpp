@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     }
 
     try {
-        // Model priority: Qwen2.5-7B → Phi-4-mini → Qwen2.5-1.5B
+        // Model priority: Qwen3-8B → Qwen2.5-7B → Phi-4-mini → Qwen2.5-1.5B
         auto pick_model = [](const std::vector<std::string>& candidates) {
             for (auto& path : candidates) {
                 if (std::ifstream(path).good()) return path;
@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
             return candidates.back();
         };
         std::string gen_model = pick_model({
+            "/home/xenomai/Documents/NeuroSwarm/models/Qwen3-8B-Q4_K_M.gguf",
             "/home/xenomai/Documents/NeuroSwarm/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
             "/home/xenomai/Documents/NeuroSwarm/models/Phi-4-mini-instruct-Q4_K_M.gguf",
             "/home/xenomai/Documents/NeuroSwarm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
@@ -167,8 +168,9 @@ int main(int argc, char** argv) {
                     // Dynamic Adapter Selection: Use specific adapter if provided
                     std::string adapter = j.value("adapter", "default");
                     std::string grammar = j.value("grammar", "");
-                    
-                    std::string response = brain.fire(adapter, prompt, grammar);
+                    float temperature = j.value("temperature", -1.0f);
+
+                    std::string response = brain.fire(adapter, prompt, grammar, temperature);
                     std::cout << "[BRAIN] Inference completed for CID " << cid << ". Response size: " << response.size() << " chars." << std::endl;
                     
                     json resp = {

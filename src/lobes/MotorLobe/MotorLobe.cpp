@@ -4,6 +4,8 @@
 #include <memory>
 #include <array>
 #include <vector>
+#include <regex>
+#include <fstream>
 #include <csignal>
 #include <nlohmann/json.hpp>
 #include <common/routing.hpp>
@@ -53,10 +55,65 @@ public:
                             }
                         } else if (mode == "neuro_surgery") {
                             std::cout << "[MOTOR] WARNING: NEURO-SURGERY INITIATED. MODIFYING OWN SOURCE CODE." << std::endl;
-                            // Neuro-surgery mode: expects 'cmd' to be a valid shell sequence that patches source files and triggers a full CMake rebuild.
-                            out = execute(cmd + " && cd build && cmake .. && make -j$(nproc) 2>&1", exit_code);
-                            if (exit_code == 0) {
-                                out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
+
+                            // --- Safe Surgery Pipeline: backup → edit → syntax check → build → rollback on failure ---
+                            std::string target_file = extract_sed_target(cmd);
+                            std::string backup_path;
+                            bool has_backup = false;
+
+                            // Step 1: Backup the target file before modification
+                            if (!target_file.empty() && std::filesystem::exists(target_file)) {
+                                backup_path = target_file + ".surgery_backup";
+                                try {
+                                    std::filesystem::copy_file(target_file, backup_path,
+                                        std::filesystem::copy_options::overwrite_existing);
+                                    has_backup = true;
+                                    std::cout << "[MOTOR] Backup created: " << backup_path << std::endl;
+                                } catch (const std::exception& e) {
+                                    std::cout << "[MOTOR] WARNING: Could not backup " << target_file << ": " << e.what() << std::endl;
+                                }
+                            }
+
+                            // Step 2: Execute the sed/patch command (without build)
+                            out = execute(cmd, exit_code);
+                            if (exit_code != 0) {
+                                out += "\n[MOTOR] Surgery FAILED: edit command returned non-zero.";
+                                if (has_backup) rollback_file(target_file, backup_path);
+                            } else if (!target_file.empty()) {
+                                // Step 3: Syntax-check the modified file before full build
+                                int syntax_code = 0;
+                                std::string syntax_out = execute(
+                                    "g++ -std=c++17 -fsyntax-only -I./include -I./src " + target_file + " 2>&1", syntax_code);
+                                if (syntax_code != 0) {
+                                    // Syntax error — rollback immediately, do NOT attempt build
+                                    out += "\n[MOTOR] Surgery REJECTED: syntax check failed:\n" + syntax_out;
+                                    exit_code = 1;
+                                    if (has_backup) rollback_file(target_file, backup_path);
+                                    std::cout << "[MOTOR] Syntax check FAILED. File rolled back." << std::endl;
+                                } else {
+                                    // Step 4: Syntax OK — proceed with full rebuild
+                                    std::cout << "[MOTOR] Syntax check passed. Rebuilding..." << std::endl;
+                                    int build_code = 0;
+                                    std::string build_out = execute(
+                                        "cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1", build_code);
+                                    if (build_code != 0) {
+                                        out += "\n[MOTOR] Surgery REJECTED: build failed:\n" + build_out.substr(0, 500);
+                                        exit_code = 1;
+                                        if (has_backup) rollback_file(target_file, backup_path);
+                                        std::cout << "[MOTOR] Build FAILED. File rolled back." << std::endl;
+                                    } else {
+                                        out += "\n" + build_out + "\n[MOTOR] Surgery successful. Matrix recompiled.";
+                                        exit_code = 0;
+                                        // Clean up backup on success
+                                        if (has_backup) std::filesystem::remove(backup_path);
+                                    }
+                                }
+                            } else {
+                                // No target file extracted — legacy fallback: run cmd + build
+                                out = execute(cmd + " && cd build && cmake .. && make -j$(nproc) 2>&1", exit_code);
+                                if (exit_code == 0) {
+                                    out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
+                                }
                             }
                         } else {
                             if (cmd == "whoami") {
@@ -131,6 +188,34 @@ private:
 
     void dispatch(const json& data) {
         routing::publish(pub, data);
+    }
+
+    // Extract the target file path from a sed -i command
+    // Supports: sed -i 's/.../.../g' file.cpp, sed -i'' 's/.../.../g' file.cpp
+    std::string extract_sed_target(const std::string& cmd) {
+        // Match .cpp or .h file paths in the command
+        std::regex file_re(R"((\S+\.(?:cpp|h|hpp))\b)");
+        std::sregex_iterator it(cmd.begin(), cmd.end(), file_re);
+        std::sregex_iterator end;
+        std::string last_match;
+        // Take the last match — sed puts the file at the end
+        while (it != end) {
+            last_match = (*it)[1].str();
+            ++it;
+        }
+        return last_match;
+    }
+
+    // Restore a file from its backup
+    void rollback_file(const std::string& target, const std::string& backup) {
+        try {
+            std::filesystem::copy_file(backup, target,
+                std::filesystem::copy_options::overwrite_existing);
+            std::filesystem::remove(backup);
+            std::cout << "[MOTOR] ROLLBACK: Restored " << target << " from backup." << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "[MOTOR] ROLLBACK FAILED for " << target << ": " << e.what() << std::endl;
+        }
     }
 
     // SAFETY: block commands that silently destroy files when run via popen

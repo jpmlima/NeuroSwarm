@@ -1,5 +1,6 @@
 #include "ModelManager.hpp"
 #include "llama.h"
+#include "ggml.h"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -33,9 +34,12 @@ ModelManager::ModelManager(const std::string& base_model_path,
     }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx    = 4096;  // Increased to 4096 to prevent JSON truncation in complex prompts
+    cparams.n_ctx    = 8192;  // Doubled from 4096: more source context for surgery, better reasoning
     cparams.n_batch  = 512;
     cparams.n_ubatch = 512;
+    cparams.type_k   = GGML_TYPE_Q8_0;  // KV cache quantization: halves cache VRAM (~2GB → ~1GB)
+    cparams.type_v   = GGML_TYPE_Q8_0;
+    cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;  // Required for quantized KV cache
     ctx_ptr = llama_init_from_model((llama_model*)gray_matter, cparams);
 
     // Load dedicated embedding model if a separate path was given
@@ -166,7 +170,7 @@ bool ModelManager::load_lora(const std::string& name, const std::string& lora_pa
     return true;
 }
 
-std::string ModelManager::fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str) {
+std::string ModelManager::fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str, float temperature) {
     if (!gray_matter || !ctx_ptr) return "ERROR: Brain not initialized.";
 
     // GPU throttle: enforce minimum 150ms between inference calls to prevent
@@ -225,8 +229,8 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     tokens.resize(n_tokens);
 
     // SAFETY: Truncate if prompt is too big for KV cache (reserve space for generation)
-    if (tokens.size() > 3500) {  // Reserve 500+ tokens for generation headroom within n_ctx=4096
-        tokens.erase(tokens.begin(), tokens.end() - 3500);
+    if (tokens.size() > 7500) {  // Reserve 700 tokens for generation headroom within n_ctx=8192
+        tokens.erase(tokens.begin(), tokens.end() - 7500);
     }
 
     // Process prompt in n_batch-sized chunks; 16× faster than the previous stride of 32, safe for any prompt length
@@ -239,7 +243,8 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     }
 
     auto* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+    float temp = (temperature > 0.0f) ? temperature : 0.7f;
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
     llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.2f, 0.2f, 0.2f)); // Elevated repetition penalties to suppress degenerate token loops
     
     if (!grammar_str.empty()) {

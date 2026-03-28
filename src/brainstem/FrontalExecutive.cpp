@@ -516,11 +516,11 @@ private:
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", finetuned_available ? "finetuned" : "default"},
-            {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture that bootstraps from zero knowledge. "
+            {"text", "<|im_start|>system\nYou are NeuroSwarm, an autonomous cognitive architecture that bootstraps from zero knowledge. "
                      "You are a distributed system of C++ lobes communicating via ZeroMQ, with intrinsic motivation, "
                      "neurogenesis, dream sandbox testing, and semantic memory. You run on the user's local machine. "
-                     "Answer conversationally and concisely. Do not output JSON or bash commands.\n<|end|>\n"
-                     "<|user|>\n" + text + "\n<|end|>\n<|assistant|>\n"}
+                     "Answer conversationally and concisely. Do not output JSON or bash commands.\n<|im_end|>\n"
+                     "<|im_start|>user\n/no_think\n" + text + "\n<|im_end|>\n<|im_start|>assistant\n"}
         };
         dispatch_to_all(req);
     }
@@ -752,14 +752,17 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
                 return;
             }
 
-            if (state.retries >= 8) {
-                std::cout << "[EXECUTIVE] Too many retries for CID " << cid << ". Abandoning goal." << std::endl;
+            // Surgery gets 1 attempt — if the edit broke syntax, the file was rolled back.
+            // Retrying with the same LLM on the same file just produces more corruption.
+            int max_retries = (state.domain == "source_modification" || state.last_mode == "neuro_surgery") ? 1 : 8;
+            if (state.retries >= max_retries) {
+                std::cout << "[EXECUTIVE] Too many retries (" << max_retries << ") for CID " << cid << ". Abandoning goal." << std::endl;
                 publish_intrinsic_result(cid, false);
                 active_goals.erase(cid);
                 broadcast_idle_if_empty();
                 return;
             }
-            request_thought(cid, "PREVIOUS ACTION FAILED (attempt " + std::to_string(state.retries) + "/8): " + output.substr(0, 300) + "\nTry a different approach.");
+            request_thought(cid, "PREVIOUS ACTION FAILED (attempt " + std::to_string(state.retries) + "/" + std::to_string(max_retries) + "): " + output.substr(0, 300) + "\nTry a different approach.");
         }
     }
 
@@ -1520,7 +1523,7 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
 
         // Pick a window: for large files, start at a random offset
         int total = lines.size();
-        int window = std::min(40, total);
+        int window = std::min(100, total);  // 100 lines: enough context for the LLM to write correct sed commands
         int start = 0;
         if (total > window) {
             start = (std::time(nullptr) / 60) % (total - window);  // changes each minute
@@ -1562,15 +1565,20 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
         // Falls back to "coder" slot (or base model) if no fine-tuning has completed yet.
         std::string adapter = finetuned_available ? "finetuned" : "coder";
 
+        // Low temperature for source modification: deterministic, precise sed commands
+        // Higher temperature for exploration: creative problem-solving
+        float temp = (state.domain == "source_modification") ? 0.2f : 0.7f;
+
         json req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "inference_request"},
             {"adapter", adapter},
+            {"temperature", temp},
             {"grammar", "root   ::= object\nobject ::= \"{\" ws ( pair ( \",\" ws pair )* )? \"}\"\npair   ::= string \":\" ws value\nvalue  ::= string | number | object | array | \"true\" | \"false\" | \"null\"\nstring ::= \"\\\"\" ( [^\"\\\\\\n\\r] | \"\\\\\" ( [\"\\\\/bfnrt] | \"u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] ) )* \"\\\"\"\nnumber ::= \"-\"? ( [0-9] | [1-9] [0-9]* ) ( \".\" [0-9]+ )? ( [eE] [-+]? [0-9]+ )?\narray  ::= \"[\" ws ( value ( \",\" ws value )* )? \"]\"\nws     ::= [ \\t\\n\\r]*\n"},
-            {"text", "<|system|>\nYou are NeuroSwarm, an autonomous cognitive architecture. Your working directory is /home/xenomai/Documents/NeuroSwarm/.\nReply ONLY with compact JSON: {\"thought\":\"brief\",\"command\":\"bash_cmd\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nRules:\n- command MUST be a real, executable bash command. No placeholders like REAL_BASH_CMD.\n- Only access files within the project directory or /tmp/.\n- Never use sudo. Never reference paths outside the project.\n- Keep commands simple and direct.\nExamples:\n{\"thought\":\"list source files\",\"command\":\"find src/ -name '*.cpp'\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"compile\",\"command\":\"cmake --build build -j$(nproc)\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"check status\",\"command\":\"git status\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
+            {"text", "<|im_start|>system\nYou are NeuroSwarm, an autonomous cognitive architecture. Your working directory is /home/xenomai/Documents/NeuroSwarm/.\nReply ONLY with compact JSON: {\"thought\":\"brief\",\"command\":\"bash_cmd\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\nRules:\n- command MUST be a real, executable bash command. No placeholders like REAL_BASH_CMD.\n- Only access files within the project directory or /tmp/.\n- Never use sudo. Never reference paths outside the project.\n- Keep commands simple and direct.\nExamples:\n{\"thought\":\"list source files\",\"command\":\"find src/ -name '*.cpp'\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"compile\",\"command\":\"cmake --build build -j$(nproc)\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n{\"thought\":\"check status\",\"command\":\"git status\",\"mode\":\"reality\",\"status\":\"IN_PROGRESS\"}\n"
              + (system_knowledge.empty() ? "" : system_knowledge + "\n")
-             + "<|end|>\n<|user|>\n"
+             + "<|im_end|>\n<|im_start|>user\n/no_think\n"
              + (current_timestamp.empty() ? "" : "T:" + current_timestamp + " ")
-             + "GOAL: " + state.goal + state.memory_context + "\n" + (state.history.empty() ? "" : "HISTORY:" + state.history.substr(0, 500) + "\n") + source_ctx + extra_prompt + "<|end|>\n<|assistant|>\n"}
+             + "GOAL: " + state.goal + state.memory_context + "\n" + (state.history.empty() ? "" : "HISTORY:" + state.history.substr(0, 500) + "\n") + source_ctx + extra_prompt + "<|im_end|>\n<|im_start|>assistant\n"}
         };
         dispatch_to_all(req);
     }

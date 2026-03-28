@@ -40,7 +40,8 @@ public:
 
     // Run autoregressive inference with optional GBNF grammar constraint; returns raw token output.
     // If adapter_name matches a loaded slot, that slot's model is used; otherwise falls back to base.
-    std::string fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str = "");
+    // temperature: -1.0 uses default (0.7). Lower values (0.1-0.3) for deterministic code tasks.
+    std::string fire(const std::string& adapter_name, const std::string& prompt, const std::string& grammar_str = "", float temperature = -1.0f);
 
     // Compute L2-normalised dense embedding for the given text using the dedicated embedding context
     std::vector<float> get_embeddings(const std::string& text);
