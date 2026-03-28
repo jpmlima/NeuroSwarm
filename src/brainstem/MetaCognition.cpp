@@ -48,6 +48,27 @@ struct PreconditionLink {
     int evidence_count = 0;                // how many failures support this link
 };
 
+// ─── Evolution Ledger ─────────────────────────────────────────
+// A generational fitness snapshot — one per sleep cycle.
+// Tracks whether the system is improving, degrading, or stagnating.
+
+struct GenerationSnapshot {
+    int generation = 0;
+    long timestamp = 0;
+    // Core fitness metrics
+    int goals_attempted = 0;
+    int goals_completed = 0;
+    int novel_operators = 0;             // new operators learned this generation
+    int surgery_attempts = 0;
+    int surgery_successes = 0;
+    double mean_goal_latency_s = 0.0;    // average seconds to complete a goal
+    int domains_active = 0;              // distinct domains with successes
+    int knowledge_gaps_open = 0;
+    // Derived
+    double fitness = 0.0;                // composite fitness score [0, 1]
+    std::string trend = "unknown";       // "improving", "degrading", "stagnating"
+};
+
 class MetaCognition {
 public:
     MetaCognition(const std::string& pub_addr = "tcp://localhost:5555",
@@ -60,10 +81,12 @@ public:
         routing::subscribe_all(sub);
 
         load_state();
+        load_ledger();
 
         std::cout << "[META-COGNITION] Recursive self-observation active. "
                   << gaps.size() << " knowledge gaps, "
-                  << precondition_chain.size() << " precondition links." << std::endl;
+                  << precondition_chain.size() << " precondition links, "
+                  << ledger.size() << " generations." << std::endl;
         init_diary();
     }
 
@@ -99,6 +122,14 @@ private:
     std::map<std::string, std::string> last_domain_error;    // domain → last error pattern
     int total_failures = 0;
     int total_successes = 0;
+
+    // ─── Evolution Ledger ──────────────────────────────────────
+    std::vector<GenerationSnapshot> ledger;                  // generational history (max 100)
+    GenerationSnapshot current_gen;                          // accumulator for current generation
+    std::set<std::string> gen_domains_seen;                  // domains active this generation
+    std::set<std::string> gen_operators_seen;                // operators learned this generation
+    std::vector<double> gen_goal_latencies;                  // goal latencies this generation
+    std::map<std::string, long> goal_start_times;            // cid → start timestamp
 
     // ─── Repetition Detection (self-awareness of stagnation) ───
     // Track recent commands to detect when the system is stuck in a loop
@@ -182,9 +213,29 @@ private:
         else if (intent == "sleep_cycle_complete") {
             total_sleep_cycles++;
             total_learned_memories += event.value("learned_memories", 0);
+            checkpoint_generation();  // Evolution Ledger: close current generation
             record_reflection("Sleep Cycle Complete. Integrated " +
                               std::to_string(event.value("learned_memories", 0)) +
                               " new success memories into executive policy.");
+        }
+        else if (intent == "intrinsic_goal" || intent == "inference_request") {
+            // Track goal start time for latency measurement
+            std::string cid = event.value("cid", "");
+            if (!cid.empty() && goal_start_times.find(cid) == goal_start_times.end()) {
+                goal_start_times[cid] = std::time(nullptr);
+                // Cap tracked goals to prevent leak
+                if (goal_start_times.size() > 500) {
+                    goal_start_times.erase(goal_start_times.begin());
+                }
+            }
+        }
+        else if (intent == "operator_learned" || intent == "primordial_ready") {
+            // Track new operators learned this generation
+            std::string op_name = event.value("operator", event.value("name", ""));
+            if (!op_name.empty()) {
+                gen_operators_seen.insert(op_name);
+                current_gen.novel_operators = gen_operators_seen.size();
+            }
         }
         else if (intent == "execution_result" && origin == "motor_cortex") {
             handle_execution_result(event);
@@ -283,9 +334,25 @@ private:
         // ─── Repetition detection: notice when we're stuck in a loop ───
         detect_repetition(cmd, domain);
 
+        // ─── Evolution Ledger: track metrics for current generation ───
+        current_gen.goals_attempted++;
+        if (!domain.empty()) gen_domains_seen.insert(domain);
+        if (mode == "neuro_surgery") {
+            current_gen.surgery_attempts++;
+            if (success) current_gen.surgery_successes++;
+        }
+
         if (success) {
             domain_success_counts[domain]++;
             total_successes++;
+            current_gen.goals_completed++;
+            // Track goal latency
+            auto it = goal_start_times.find(cid);
+            if (it != goal_start_times.end()) {
+                double latency = std::difftime(std::time(nullptr), it->second);
+                gen_goal_latencies.push_back(latency);
+                goal_start_times.erase(it);
+            }
             // Success can resolve gaps — check if this domain's last error is now overcome
             check_gap_resolution(domain);
         } else {
@@ -868,6 +935,151 @@ private:
     }
 
     // ─── Periodic Reflection ────────────────────────────────
+
+    // ─── Evolution Ledger: Generation Checkpoint ──────────────
+    // Called at each sleep cycle to close the current generation,
+    // compute fitness, detect trend, and broadcast to the system.
+
+    void checkpoint_generation() {
+        current_gen.generation = total_sleep_cycles;
+        current_gen.timestamp = (long)std::time(nullptr);
+        current_gen.domains_active = gen_domains_seen.size();
+        current_gen.novel_operators = gen_operators_seen.size();
+        current_gen.knowledge_gaps_open = gaps.size();
+
+        // Mean goal latency
+        if (!gen_goal_latencies.empty()) {
+            double sum = 0.0;
+            for (double l : gen_goal_latencies) sum += l;
+            current_gen.mean_goal_latency_s = sum / gen_goal_latencies.size();
+        }
+
+        // Composite fitness: weighted combination of metrics
+        double completion_rate = (current_gen.goals_attempted > 0)
+            ? (double)current_gen.goals_completed / current_gen.goals_attempted
+            : 0.0;
+        double novelty_score = std::min(1.0, current_gen.novel_operators / 10.0);
+        double coverage_score = std::min(1.0, current_gen.domains_active / 8.0);
+        double gap_penalty = std::min(1.0, current_gen.knowledge_gaps_open / 20.0);
+
+        current_gen.fitness = completion_rate * 0.4
+                            + novelty_score * 0.2
+                            + coverage_score * 0.2
+                            + (1.0 - gap_penalty) * 0.2;
+
+        // Trend detection: compare with previous generation
+        if (!ledger.empty()) {
+            double prev_fitness = ledger.back().fitness;
+            double delta = current_gen.fitness - prev_fitness;
+            if (delta > 0.05) {
+                current_gen.trend = "improving";
+            } else if (delta < -0.05) {
+                current_gen.trend = "degrading";
+            } else {
+                current_gen.trend = "stagnating";
+            }
+        } else {
+            current_gen.trend = "baseline";
+        }
+
+        // Store in ledger (cap at 100 generations)
+        ledger.push_back(current_gen);
+        if (ledger.size() > 100) {
+            ledger.erase(ledger.begin());
+        }
+
+        // Persist to disk
+        save_generation(current_gen);
+
+        // Broadcast evolution update to all lobes
+        broadcast_evolution_update(current_gen);
+
+        // Log
+        std::string log = "Generation " + std::to_string(current_gen.generation)
+            + " | fitness=" + std::to_string(current_gen.fitness).substr(0, 4)
+            + " | trend=" + current_gen.trend
+            + " | completed=" + std::to_string(current_gen.goals_completed)
+            + "/" + std::to_string(current_gen.goals_attempted)
+            + " | novel_ops=" + std::to_string(current_gen.novel_operators)
+            + " | domains=" + std::to_string(current_gen.domains_active)
+            + " | gaps=" + std::to_string(current_gen.knowledge_gaps_open);
+        record_reflection("EVOLUTION: " + log);
+        std::cout << "[EVOLUTION] " << log << std::endl;
+
+        // Reset accumulators for next generation
+        current_gen = GenerationSnapshot{};
+        gen_domains_seen.clear();
+        gen_operators_seen.clear();
+        gen_goal_latencies.clear();
+    }
+
+    void save_generation(const GenerationSnapshot& gen) {
+        std::ofstream f("data/evolution_ledger.jsonl", std::ios::app);
+        if (!f.is_open()) return;
+        json j = {
+            {"generation", gen.generation},
+            {"timestamp", gen.timestamp},
+            {"goals_attempted", gen.goals_attempted},
+            {"goals_completed", gen.goals_completed},
+            {"novel_operators", gen.novel_operators},
+            {"surgery_attempts", gen.surgery_attempts},
+            {"surgery_successes", gen.surgery_successes},
+            {"mean_goal_latency_s", gen.mean_goal_latency_s},
+            {"domains_active", gen.domains_active},
+            {"knowledge_gaps_open", gen.knowledge_gaps_open},
+            {"fitness", gen.fitness},
+            {"trend", gen.trend}
+        };
+        f << j.dump() << "\n";
+    }
+
+    void broadcast_evolution_update(const GenerationSnapshot& gen) {
+        json update = {
+            {"origin", "metacognition"},
+            {"intent", "evolution_update"},
+            {"generation", gen.generation},
+            {"fitness", gen.fitness},
+            {"trend", gen.trend},
+            {"goals_completed", gen.goals_completed},
+            {"goals_attempted", gen.goals_attempted},
+            {"novel_operators", gen.novel_operators},
+            {"domains_active", gen.domains_active}
+        };
+        routing::publish(pub, update);
+    }
+
+    void load_ledger() {
+        std::ifstream f("data/evolution_ledger.jsonl");
+        if (!f.is_open()) return;
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            try {
+                json j = json::parse(line);
+                GenerationSnapshot gen;
+                gen.generation = j.value("generation", 0);
+                gen.timestamp = j.value("timestamp", 0L);
+                gen.goals_attempted = j.value("goals_attempted", 0);
+                gen.goals_completed = j.value("goals_completed", 0);
+                gen.novel_operators = j.value("novel_operators", 0);
+                gen.surgery_attempts = j.value("surgery_attempts", 0);
+                gen.surgery_successes = j.value("surgery_successes", 0);
+                gen.mean_goal_latency_s = j.value("mean_goal_latency_s", 0.0);
+                gen.domains_active = j.value("domains_active", 0);
+                gen.knowledge_gaps_open = j.value("knowledge_gaps_open", 0);
+                gen.fitness = j.value("fitness", 0.0);
+                gen.trend = j.value("trend", "unknown");
+                ledger.push_back(gen);
+            } catch (...) {}
+        }
+        // Keep last 100
+        while (ledger.size() > 100) ledger.erase(ledger.begin());
+        if (!ledger.empty()) {
+            std::cout << "[EVOLUTION] Loaded " << ledger.size() << " generations. "
+                      << "Last fitness: " << ledger.back().fitness
+                      << " trend: " << ledger.back().trend << std::endl;
+        }
+    }
 
     void periodic_reflection() {
         // Run self-modification analysis during reflection

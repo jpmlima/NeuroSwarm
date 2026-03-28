@@ -1261,7 +1261,7 @@ private:
                 }
                 save_world_state();
             } else {
-                // ── Failure feedback: invalidate stale facts + strengthen preconditions ──
+    // Failure feedback: invalidate stale facts + strengthen preconditionss
                 handle_plan_step_failure(step, r.output, op);
                 std::cout << "[PRIMORDIAL]     Plan execution failed at step: "
                           << step.operator_name << std::endl;
