@@ -43,6 +43,7 @@ public:
           registry_("data/operators.jsonl") {
 
         pub_.connect("tcp://localhost:5555");
+        routing::set_buffer_limit(sub_, 500);
         sub_.connect("tcp://localhost:5556");
         routing::subscribe(sub_, {"operator_request", "probe_request", "goal_request", "inference_result", "domain_resolve_request", "execution_result", "concept_update", "precondition_discovery"});
 

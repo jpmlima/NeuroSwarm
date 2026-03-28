@@ -19,6 +19,7 @@ public:
     VisualizerLobe(const std::string& thalamus_ip = "localhost")
         : ctx(1), sub(ctx, zmq::socket_type::sub) {
 
+        routing::set_buffer_limit(sub, 200);
         sub.connect("tcp://" + thalamus_ip + ":5556");
         routing::subscribe_all(sub);
 

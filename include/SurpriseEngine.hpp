@@ -40,6 +40,7 @@ public:
             h.last_output_hash = output_hash;
             h.surprise_window.push_back(1.0);
             history[context] = h;
+            evict_if_needed();
             return result;
         }
 
@@ -96,6 +97,27 @@ public:
     }
 
     size_t contexts_known() const { return history.size(); }
+
+    // Evict oldest contexts when history exceeds cap to prevent unbounded growth
+    void evict_if_needed() {
+        static constexpr size_t MAX_CONTEXTS = 5000;
+        if (history.size() <= MAX_CONTEXTS) return;
+        // Remove contexts with lowest surprise (least informative)
+        std::string lowest_key;
+        double lowest_surprise = 2.0;
+        for (const auto& [key, h] : history) {
+            double avg = 0.0;
+            if (!h.surprise_window.empty()) {
+                for (double s : h.surprise_window) avg += s;
+                avg /= h.surprise_window.size();
+            }
+            if (avg < lowest_surprise) {
+                lowest_surprise = avg;
+                lowest_key = key;
+            }
+        }
+        if (!lowest_key.empty()) history.erase(lowest_key);
+    }
 
 private:
     static constexpr size_t WINDOW_SIZE = 20;

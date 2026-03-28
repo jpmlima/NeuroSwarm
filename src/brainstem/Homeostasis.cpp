@@ -21,9 +21,10 @@ public:
         : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
         
         pub.connect(pub_addr);
+        routing::set_buffer_limit(sub, 200);
         sub.connect(sub_addr);
         routing::subscribe_all(sub);
-        
+
         std::cout << "[HOMEOSTASIS] Autonomic nervous system online." << std::endl;
     }
 

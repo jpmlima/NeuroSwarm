@@ -29,6 +29,20 @@ inline void publish(zmq::socket_t& pub, const nlohmann::json& data) {
     pub.send(msg, zmq::send_flags::none);
 }
 
+// Cap ZMQ receive buffer to prevent unbounded memory growth.
+// Default ZMQ HWM is 1000 messages, but large inference results (4KB+)
+// can cause multi-GB accumulation if a subscriber falls behind.
+// IMPORTANT: Must be called BEFORE socket.connect() to take effect.
+inline void set_buffer_limit(zmq::socket_t& sub, int max_messages = 500) {
+    sub.set(zmq::sockopt::rcvhwm, max_messages);
+}
+
+// Connect a subscriber socket with a buffer limit applied first.
+inline void connect_sub(zmq::socket_t& sub, const std::string& addr, int max_messages = 500) {
+    set_buffer_limit(sub, max_messages);
+    sub.connect(addr);
+}
+
 // Subscribe to specific intents only.
 inline void subscribe(zmq::socket_t& sub, const std::vector<std::string>& intents) {
     for (const auto& intent : intents) {

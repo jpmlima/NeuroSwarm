@@ -95,6 +95,12 @@ public:
 
     // Register a new operator learned from experience
     std::string add(Operator op) {
+        // Hard cap: evict lowest-fitness operator if at limit
+        static constexpr size_t MAX_OPERATORS = 2000;
+        if (operators_.size() >= MAX_OPERATORS) {
+            evict_weakest();
+        }
+
         if (op.id.empty()) {
             op.id = "op_" + std::to_string(next_id_++);
         }
@@ -196,6 +202,29 @@ public:
             }
         }
         return frags;
+    }
+
+    // Evict the weakest operator to make room when at capacity
+    void evict_weakest() {
+        if (operators_.empty()) return;
+        std::string worst_id;
+        double worst_fitness = 1e9;
+        for (const auto& [id, op] : operators_) {
+            double fitness = (op.times_used > 0)
+                ? static_cast<double>(op.successes) / op.times_used
+                : 0.0;
+            // Penalize rarely-used operators
+            if (op.times_used < 3) fitness -= 1.0;
+            if (fitness < worst_fitness) {
+                worst_fitness = fitness;
+                worst_id = id;
+            }
+        }
+        if (!worst_id.empty()) {
+            by_name_.erase(operators_[worst_id].name);
+            operators_.erase(worst_id);
+            rebuild_postcond_index();
+        }
     }
 
     // Prune dead operators (apoptosis)

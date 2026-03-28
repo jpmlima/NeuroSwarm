@@ -18,6 +18,7 @@ public:
         : ctx(1), pub(ctx, zmq::socket_type::pub), sub(ctx, zmq::socket_type::sub) {
         
         pub.connect(pub_addr);
+        routing::set_buffer_limit(sub, 200);  // Prevent OOM from subscribe_all
         sub.connect(sub_addr);
         routing::subscribe_all(sub); // Monitors all traffic for threat detection
 

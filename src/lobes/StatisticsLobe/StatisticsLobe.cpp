@@ -40,6 +40,7 @@ public:
         : ctx(1), sub(ctx, zmq::socket_type::sub),
           metrics_dir("./data/metrics/") {
 
+        routing::set_buffer_limit(sub, 200);
         sub.connect("tcp://" + thalamus_ip + ":5556");
         routing::subscribe_all(sub);
 
