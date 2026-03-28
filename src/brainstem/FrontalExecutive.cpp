@@ -1606,9 +1606,6 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
 
         // Placeholder/template patterns that LLMs love to hallucinate
         static const std::vector<std::string> blacklist = {
-    "unknown_error";
-    "unknown_error";
-    "unknown_error";
             "/path/to/", "REAL_BASH_CMD", "your_file", "example_",
             "<file>", "<path>", "<command>", "<url>", "<directory>",
             "INSERT_", "TODO_", "${VARIABLE}", "placeholder",

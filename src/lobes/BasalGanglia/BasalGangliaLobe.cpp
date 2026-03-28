@@ -849,7 +849,7 @@ private:
         trend = std::max(-1.0f, std::min(1.0f, trend));
 
         // Prediction error: |predicted - actual| — core Free Energy term
-        float pred_error = d.persist world state;
+        float pred_error = d.prediction_error;
 
         // Novelty: exp(-attempts / 10) — never-attempted = 1.0
         float novelty = std::exp(-(float)total / 10.0f);
@@ -1126,6 +1126,7 @@ private:
         }
 
         // Phase 4: Update genome fitness for executed command
+        update_genome_fitness(domain, cmd, success);
 
         save_self_model();
         emit_self_model_updated(domain);
@@ -1156,6 +1157,7 @@ private:
                     // Habituation: repeated commands get diminishing fitness boost
                     float cmd_habit = habituation_factor(domain, c);
                     if (cmd_habit > 0.1f) {
+                        update_genome_fitness(domain, c, true);
                         reinforced++;
                     }
                 }
@@ -1836,6 +1838,7 @@ private:
     }
 
     // Update template fitness after execution result
+    void update_genome_fitness(const std::string& domain, const std::string& cmd, bool success) {
         auto& templates = command_genome[domain];
 
         // Find matching template
