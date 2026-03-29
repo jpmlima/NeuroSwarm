@@ -83,7 +83,7 @@ public:
                                 // Step 3: Syntax-check the modified file before full build
                                 int syntax_code = 0;
                                 std::string syntax_out = execute(
-                                    "g++ -std=c++17 -fsyntax-only -I./include -I./src " + target_file + " 2>&1", syntax_code);
+                                    "g++ -std=c++17 -fsyntax-only -I/home/xenomai/Documents/NeuroSwarm/include -I/home/xenomai/Documents/NeuroSwarm/src " + target_file + " 2>&1", syntax_code);
                                 if (syntax_code != 0) {
                                     // Syntax error — rollback immediately, do NOT attempt build
                                     out += "\n[MOTOR] Surgery REJECTED: syntax check failed:\n" + syntax_out;
@@ -95,7 +95,7 @@ public:
                                     std::cout << "[MOTOR] Syntax check passed. Rebuilding..." << std::endl;
                                     int build_code = 0;
                                     std::string build_out = execute(
-                                        "cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1", build_code);
+                                        "cd /home/xenomai/Documents/NeuroSwarm/build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1", build_code);
                                     if (build_code != 0) {
                                         out += "\n[MOTOR] Surgery REJECTED: build failed:\n" + build_out.substr(0, 500);
                                         exit_code = 1;
@@ -110,7 +110,7 @@ public:
                                 }
                             } else {
                                 // No target file extracted — legacy fallback: run cmd + build
-                                out = execute(cmd + " && cd build && cmake .. && make -j$(nproc) 2>&1", exit_code);
+                                out = execute(cmd + " && cd /home/xenomai/Documents/NeuroSwarm/build && cmake .. && make -j$(nproc) 2>&1", exit_code);
                                 if (exit_code == 0) {
                                     out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
                                 }

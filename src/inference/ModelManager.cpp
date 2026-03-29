@@ -34,11 +34,11 @@ ModelManager::ModelManager(const std::string& base_model_path,
     }
 
     llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx    = 8192;  // Doubled from 4096: more source context for surgery, better reasoning
-    cparams.n_batch  = 512;
-    cparams.n_ubatch = 512;
-    cparams.type_k   = GGML_TYPE_Q8_0;  // KV cache quantization: halves cache VRAM (~2GB → ~1GB)
-    cparams.type_v   = GGML_TYPE_Q8_0;
+    cparams.n_ctx    = 4096;  // 4K context — fits GTX 1080 Ti 11GB with headroom for browser
+    cparams.n_batch  = 256;
+    cparams.n_ubatch = 256;
+    cparams.type_k   = GGML_TYPE_Q4_0;  // KV cache Q4: ~500MB vs Q8's ~1GB, frees VRAM
+    cparams.type_v   = GGML_TYPE_Q4_0;
     cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;  // Required for quantized KV cache
     ctx_ptr = llama_init_from_model((llama_model*)gray_matter, cparams);
 
@@ -111,8 +111,11 @@ bool ModelManager::add_model(const std::string& name, const std::string& model_p
 
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx    = n_ctx;
-    cparams.n_batch  = 512;
-    cparams.n_ubatch = 512;
+    cparams.n_batch  = 256;
+    cparams.n_ubatch = 256;
+    cparams.type_k   = GGML_TYPE_Q4_0;  // Quantized KV cache to save VRAM
+    cparams.type_v   = GGML_TYPE_Q4_0;
+    cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
     void* c = llama_init_from_model((llama_model*)m, cparams);
     if (!c) {
@@ -229,17 +232,27 @@ std::string ModelManager::fire(const std::string& adapter_name, const std::strin
     tokens.resize(n_tokens);
 
     // SAFETY: Truncate if prompt is too big for KV cache (reserve space for generation)
-    if (tokens.size() > 7500) {  // Reserve 700 tokens for generation headroom within n_ctx=8192
-        tokens.erase(tokens.begin(), tokens.end() - 7500);
+    if (tokens.size() > 3500) {  // Reserve 596 tokens for generation headroom within n_ctx=4096
+        tokens.erase(tokens.begin(), tokens.end() - 3500);
     }
 
-    // Process prompt in n_batch-sized chunks; 16× faster than the previous stride of 32, safe for any prompt length
+    // Process prompt in n_batch-sized chunks with fallback to smaller batch on failure
     llama_batch batch;
-    const int CHUNK = 512;
-    for (size_t i = 0; i < tokens.size(); i += CHUNK) {
-        size_t n = std::min((size_t)CHUNK, tokens.size() - i);
+    int chunk_size = 256;
+    for (size_t i = 0; i < tokens.size(); ) {
+        size_t n = std::min((size_t)chunk_size, tokens.size() - i);
         batch = llama_batch_get_one(&tokens[i], (int32_t)n);
-        if (llama_decode(ctx, batch) != 0) return "ERROR: Decode failed.";
+        if (llama_decode(ctx, batch) != 0) {
+            if (chunk_size > 32) {
+                // Retry with smaller batch — KV cache fragmentation recovery
+                chunk_size /= 2;
+                llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
+                i = 0;  // Restart from beginning with smaller chunks
+                continue;
+            }
+            return "ERROR: Decode failed.";
+        }
+        i += n;
     }
 
     auto* smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());

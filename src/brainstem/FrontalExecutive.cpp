@@ -405,9 +405,9 @@ private:
             commit_to_dream(cid);
         } else {
             state.critic_rejections++;
-            std::cout << "[EXECUTIVE] Critic rejection (" << state.critic_rejections << "/10): " << feedback << std::endl;
+            std::cout << "[EXECUTIVE] Critic rejection (" << state.critic_rejections << "/3): " << feedback << std::endl;
 
-            if (state.critic_rejections >= 10) {
+            if (state.critic_rejections >= 3) {
                 std::cout << "[EXECUTIVE] NEUROTIC LOOP DETECTED. Forcing consensus abort." << std::endl;
                 json final_resp = {
                     {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "task_complete"},
@@ -464,12 +464,12 @@ private:
         state.last_cmd  = cmd;
         state.last_mode = mode;
 
-        // Neuro-surgery commands must run against real source files, not dream sandbox
-        // Also respect LLM's requested mode when it explicitly says neuro_surgery
+        // Source modification always uses neuro_surgery mode (backup + syntax check + rollback)
+        // Other commands go through dream sandbox first
         std::string exec_mode = "dream";
         if (mode == "neuro_surgery" || cid.find("surgery_") != std::string::npos ||
             state.domain == "source_modification") {
-            exec_mode = "reality";
+            exec_mode = "neuro_surgery";
         }
         dispatch_validated_execution(cid, cmd, exec_mode);
     }
@@ -773,6 +773,16 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
         auto& state = active_goals[cid];
         state.last_raw_thought = data.value("text", "");
         std::cout << "[EXECUTIVE] Thought received for CID " << cid << " size=" << state.last_raw_thought.size() << " first10=[" << state.last_raw_thought.substr(0, 10) << "]" << std::endl;
+
+        // Detect inference engine errors — don't waste critic cycles on broken responses
+        if (state.last_raw_thought.rfind("ERROR:", 0) == 0 || state.last_raw_thought.size() < 5) {
+            std::cout << "[EXECUTIVE] Inference error detected: " << state.last_raw_thought.substr(0, 50) << ". Abandoning goal." << std::endl;
+            publish_intrinsic_result(cid, false);
+            active_goals.erase(cid);
+            broadcast_idle_if_empty();
+            return;
+        }
+
         state.history += "\n[THOUGHT] " + state.last_raw_thought.substr(0, 200);
 
         // Send to CriticLobe for two-tier validation (rule-based + LLM)

@@ -225,6 +225,14 @@ private:
     void handle_thought(const json& data) {
         last_raw_thought = data.value("text", "");
         std::cout << "[SPIKE:" << worker_id << "] Thought received, size=" << last_raw_thought.size() << std::endl;
+
+        // Detect inference engine errors — don't waste critic cycles on broken responses
+        if (last_raw_thought.rfind("ERROR:", 0) == 0 || last_raw_thought.size() < 5) {
+            std::cout << "[SPIKE:" << worker_id << "] Inference error detected: " << last_raw_thought.substr(0, 50) << ". Aborting." << std::endl;
+            publish_done(false);
+            return;
+        }
+
         history += "\n[THOUGHT] " + last_raw_thought.substr(0, 200);
 
         // Send to CriticLobe
@@ -244,10 +252,10 @@ private:
             commit_to_dream();
         } else {
             critic_rejections++;
-            std::cout << "[SPIKE:" << worker_id << "] Critic rejection (" << critic_rejections << "/10): "
+            std::cout << "[SPIKE:" << worker_id << "] Critic rejection (" << critic_rejections << "/3): "
                       << feedback.substr(0, 100) << std::endl;
 
-            if (critic_rejections >= 10) {
+            if (critic_rejections >= 3) {
                 std::cout << "[SPIKE:" << worker_id << "] Neurotic loop. Aborting." << std::endl;
                 publish_done(false);
                 return;
@@ -303,7 +311,7 @@ private:
         std::string exec_mode = "dream";
         if (mode == "neuro_surgery" || cid.find("surgery_") != std::string::npos ||
             domain == "source_modification") {
-            exec_mode = "reality";
+            exec_mode = "neuro_surgery";
         }
 
         json dream_req = {
