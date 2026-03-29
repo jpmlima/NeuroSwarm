@@ -323,9 +323,14 @@ private:
     }
 
     void commit_to_reality() {
+        // Source modification must always use neuro_surgery mode (safe pipeline)
+        std::string mode = last_mode;
+        if (domain == "source_modification" || cid.find("surgery_") != std::string::npos) {
+            mode = "neuro_surgery";
+        }
         json real_req = {
             {"cid", cid}, {"origin", "spike_worker"}, {"intent", "execution_request"},
-            {"command", last_cmd}, {"mode", last_mode},
+            {"command", last_cmd}, {"mode", mode},
             {"domain", domain}
         };
         dispatch(real_req);

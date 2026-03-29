@@ -476,9 +476,14 @@ private:
 
     void commit_to_reality(const std::string& cid) {
         auto& state = active_goals[cid];
+        // Source modification must always use neuro_surgery mode (safe pipeline)
+        std::string mode = state.last_mode;
+        if (state.domain == "source_modification" || cid.find("surgery_") != std::string::npos) {
+            mode = "neuro_surgery";
+        }
         json real_req = {
             {"cid", cid}, {"origin", "frontal_executive"}, {"intent", "execution_request"},
-            {"command", state.last_cmd}, {"mode", state.last_mode},
+            {"command", state.last_cmd}, {"mode", mode},
             {"domain", state.domain}
         };
         dispatch_to_all(real_req);
@@ -696,7 +701,7 @@ request_thought(cid, "Thought analysis triggered by trajectory recall.");
                     std::cout << "[EXECUTIVE] SOURCE MODIFIED — triggering auto-rebuild." << std::endl;
                     // Queue rebuild as next step
                     state.plan.clear();
-                    state.plan.push_back("cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1 | tail -10");
+                    state.plan.push_back("cd /home/xenomai/Documents/NeuroSwarm/build && cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) 2>&1 | tail -10");
                     state.last_cmd = state.plan.front();
                     state.plan.erase(state.plan.begin());
                     state.last_mode = "neuro_surgery";

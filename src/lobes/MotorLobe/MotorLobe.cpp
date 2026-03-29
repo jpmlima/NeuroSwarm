@@ -75,10 +75,13 @@ public:
                             }
 
                             // Step 2: Execute the sed/patch command (without build)
+                            std::cout << "[MOTOR] Surgery target: " << target_file << " cmd: " << cmd.substr(0, 120) << std::endl;
                             out = execute(cmd, exit_code);
+                            std::cout << "[MOTOR] sed exit=" << exit_code << " target=" << target_file << std::endl;
                             if (exit_code != 0) {
                                 out += "\n[MOTOR] Surgery FAILED: edit command returned non-zero.";
                                 if (has_backup) rollback_file(target_file, backup_path);
+                                std::cout << "[MOTOR] Surgery FAILED (sed error). Rolled back=" << has_backup << std::endl;
                             } else if (!target_file.empty()) {
                                 // Step 3: Syntax-check the modified file before full build
                                 int syntax_code = 0;
@@ -109,11 +112,10 @@ public:
                                     }
                                 }
                             } else {
-                                // No target file extracted — legacy fallback: run cmd + build
-                                out = execute(cmd + " && cd /home/xenomai/Documents/NeuroSwarm/build && cmake .. && make -j$(nproc) 2>&1", exit_code);
-                                if (exit_code == 0) {
-                                    out += "\n[MOTOR] Surgery successful. Matrix recompiled.";
-                                }
+                                // No target file extracted — REJECT surgery (no bypass allowed)
+                                out = "ERROR: Surgery REJECTED — could not identify target source file. Command: " + cmd.substr(0, 100);
+                                exit_code = 1;
+                                std::cout << "[MOTOR] Surgery REJECTED: no target file extracted from command." << std::endl;
                             }
                         } else {
                             if (cmd == "whoami") {
@@ -124,6 +126,11 @@ public:
                                 out = "ERROR: blocked destructive write command (bare tee truncates files via popen).";
                                 exit_code = 1;
                                 std::cout << "[MOTOR] SAFETY BLOCK: " << cmd << std::endl;
+                            } else if (cmd.find("sed -i") != std::string::npos && extract_sed_target(cmd).find("src/") != std::string::npos) {
+                                // SAFETY: sed modifying source files MUST go through neuro_surgery pipeline
+                                out = "ERROR: Source file modification intercepted in '" + mode + "' mode. Must use neuro_surgery mode.";
+                                exit_code = 1;
+                                std::cout << "[MOTOR] SAFETY BLOCK: sed on source file in mode=" << mode << " cmd=" << cmd.substr(0, 100) << std::endl;
                             } else {
                                 out = execute(cmd, exit_code);
                             }
